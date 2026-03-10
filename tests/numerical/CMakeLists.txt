@@ -7,7 +7,10 @@
 add_executable(delta_tests_numerical
     main_tests_numerical.cpp    # Test main with OpenMP initialisation
     test_tensor_field.cpp       # Tests for tensor fields (Eigen matrices) on uniform grids
- "test_tensor_arithmetic.cpp" "test_finite_differences.cpp" "test_simplicial_complex.cpp")
+ "test_tensor_arithmetic.cpp" 
+ "test_finite_differences.cpp" 
+ "test_simplicial_complex.cpp"
+test_cotangent_laplacian.cpp)
 
 # 2. Link against required libraries.
 #    delta_core is an INTERFACE library that brings in Boost, Eigen, OpenMP, fmt,
