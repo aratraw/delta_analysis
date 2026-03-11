@@ -3,7 +3,7 @@
 
 #include <complex>
 #include "tensor_field.h"
-
+#include <unsupported/Eigen/MatrixFunctions> 
 
 namespace delta::geometry {
 
@@ -76,6 +76,31 @@ namespace delta::geometry {
                 "adjoint not implemented for complex, use transpose() and conjugate manually");
             return transpose();
         }
+
+        /**
+        * @brief Матричная экспонента каждого элемента поля.
+        * @return Новое поле, где каждая матрица заменена на её экспоненту.
+        */
+        MatrixField exp() const {
+            MatrixField result;
+            for (const auto& [addr, mat] : *this) {
+                result.set(addr, mat.exp());
+            }
+            return result;
+        }
+
+        /**
+         * @brief Матричный логарифм каждого элемента поля.
+         * @return Новое поле, где каждая матрица заменена на её логарифм.
+         * @note Логарифм определён только для матриц, близких к единице (для калибровочных теорий).
+         */
+        MatrixField log() const {
+            MatrixField result;
+            for (const auto& [addr, mat] : *this) {
+                result.set(addr, mat.log());
+            }
+            return result;
+        }
     };
 
     // Фабричная функция для создания MatrixField из TensorField<2>
@@ -86,6 +111,6 @@ namespace delta::geometry {
             mf.set(addr, mat);
         }
         return mf;
-    }
-
+    };
+  
 } // namespace delta::geometry

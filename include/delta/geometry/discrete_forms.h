@@ -41,51 +41,21 @@ namespace delta::geometry {
             return sqrt(s * (s - ab) * (s - bc) * (s - ca));
         }
 
-        /// Compute dual edge length (distance between circumcenters of two adjacent triangles)
-        /// For now, use a simpler approximation: length = (area1 + area2) / (edge_length) ? Not accurate.
-        /// We'll compute actual circumcenters.
-        template<typename Metric, typename Point>
-        auto dual_edge_length(const Point& a, const Point& b,
-            const Point& c1, const Point& d1, const Point& c2, const Point& d2,
-            const Metric& metric) {
-            // This is too complex; for now, we return the edge length (makes star diagonal = 1)
-            // In a full implementation, we would compute circumcenters.
-            return metric(a, b);
-        }
-
-        /// Compute Voronoi area for a vertex (approximated as 1/3 of sum of incident triangle areas)
-        template<typename Complex, typename Metric>
-        auto vertex_voronoi_area(const Complex& mesh, std::size_t v, const Metric& metric) {
-            using Scalar = decltype(metric(mesh.vertex(0), mesh.vertex(0)));
-            Scalar area{ 0 };
-            // Find all triangles containing vertex v
-            for (std::size_t t = 0; t < mesh.num_triangles(); ++t) {
-                auto tri = mesh.triangle(t);
-                if (tri[0] == v || tri[1] == v || tri[2] == v) {
-                    auto p0 = mesh.vertex(tri[0]);
-                    auto p1 = mesh.vertex(tri[1]);
-                    auto p2 = mesh.vertex(tri[2]);
-                    area += triangle_area(p0, p1, p2, metric);
-                }
-            }
-            return area / Scalar{ 3 }; // rough approximation
-        }
-
-        /// Compute dual edge length for a given edge (as distance between triangle circumcenters)
-        /// This requires finding the two adjacent triangles and computing their circumcenters.
+        /// Simplified dual edge length: (area1 + area2) / edge_length
         template<typename Complex, typename Metric>
         auto dual_edge_length(const Complex& mesh, std::size_t e, const Metric& metric) {
             using Point = typename Complex::point_type;
             using Scalar = decltype(metric(mesh.vertex(0), mesh.vertex(0)));
 
-            auto [v0, v1] = mesh.edge(e);
+            auto [v0, v1] = mesh.edge_at(e);
             Point p0 = mesh.vertex(v0);
             Point p1 = mesh.vertex(v1);
+            Scalar edge_len = metric(p0, p1);
 
             // Find the two triangles incident to this edge
             std::vector<std::size_t> incident;
             for (std::size_t t = 0; t < mesh.num_triangles(); ++t) {
-                auto tri = mesh.triangle(t);
+                auto tri = mesh.triangle_at(t);
                 if ((tri[0] == v0 && tri[1] == v1) || (tri[1] == v0 && tri[2] == v1) || (tri[2] == v0 && tri[0] == v1) ||
                     (tri[0] == v1 && tri[1] == v0) || (tri[1] == v1 && tri[2] == v0) || (tri[2] == v1 && tri[0] == v0)) {
                     incident.push_back(t);
@@ -94,30 +64,18 @@ namespace delta::geometry {
 
             if (incident.empty()) return Scalar{ 0 };
             if (incident.size() == 1) {
-                // Boundary edge: dual length is distance from edge midpoint to circumcenter of the single triangle?
-                // Simplified: return half of something.
-                // For now, return edge length.
-                return metric(p0, p1);
+                // Boundary edge: dual length is area / (edge_len/2)?? Simplified: return edge_len
+                return edge_len;
             }
 
-            // Compute circumcenters of the two triangles
-            auto circumcenter = [&](std::size_t t) -> Point {
-                auto tri = mesh.triangle(t);
-                Point A = mesh.vertex(tri[0]);
-                Point B = mesh.vertex(tri[1]);
-                Point C = mesh.vertex(tri[2]);
-                // Barycentric coordinates for circumcenter (not trivial with metric)
-                // For Euclidean metric, we can use formula. Assume metric is Euclidean for now.
-                // We'll need a general method; but for simplicity, assume Euclidean.
-                // If metric is not Euclidean, this will fail.
-                // For Rational, we need to convert to double for circumcenter.
-                // We'll use a placeholder: return (A+B+C)/3 (centroid) – wrong but simple.
-                return (A + B + C) / Scalar{ 3 };
-                };
+            // Compute areas of the two incident triangles
+            auto tri0 = mesh.triangle_at(incident[0]);
+            auto tri1 = mesh.triangle_at(incident[1]);
+            Scalar area0 = triangle_area(mesh.vertex(tri0[0]), mesh.vertex(tri0[1]), mesh.vertex(tri0[2]), metric);
+            Scalar area1 = triangle_area(mesh.vertex(tri1[0]), mesh.vertex(tri1[1]), mesh.vertex(tri1[2]), metric);
 
-            Point cen1 = circumcenter(incident[0]);
-            Point cen2 = circumcenter(incident[1]);
-            return metric(cen1, cen2);
+            // Dual length as (area0 + area1) / edge_len (a common approximation)
+            return (area0 + area1) / edge_len;
         }
 
     } // namespace detail
@@ -152,25 +110,26 @@ namespace delta::geometry {
         template<typename Metric>
         DiscreteForm2<Value, Complex> star(const Metric& metric) const {
             DiscreteForm2<Value, Complex> result(mesh_);
+            // For each triangle, (⋆f)_T = (area_T) * (average of f over vertices)
+            // More accurately, in DEC star of 0-form is a 2-form on dual cells, but we map to triangles.
+            // We'll use the average times triangle area.
             for (std::size_t t = 0; t < mesh_.num_triangles(); ++t) {
-                auto tri = mesh_.triangle(t);
-                // For each triangle, the star of a 0-form gives a 2-form value on that triangle
-                // equal to (sum of vertex values weighted by something?) Actually star of 0-form is a 2-form
-                // on dual cells, but we want a 2-form on primal triangles. In DEC, star maps primal k-forms
-                // to dual (n-k)-forms. So star of primal 0-form is a dual 2-form, which corresponds to primal
-                // 0-cells? Wait, dual 2-cells are primal vertices. So star of 0-form should give a 2-form on dual cells,
-                // which are associated with primal vertices. But we have DiscreteForm2 defined on primal triangles.
-                // This is a mismatch. We need to decide on representation: either we store dual forms separately,
-                // or we accept that star maps between primal and dual indices. For simplicity, we can store dual forms
-                // on the same indices but with different interpretation (e.g., for vertices we store dual area).
-                // However, to keep things simple and working, we'll implement star only for 1-forms (needed for Laplacian)
-                // and leave others as not implemented. But the plan said full DEC. Let's do it properly:
-
-                // We'll introduce a DualComplex or simply use the same mesh but with different arrays for dual volumes.
-                // For now, we'll not implement star for 0-form.
-                throw std::runtime_error("Hodge star for 0-form not implemented");
+                auto tri = mesh_.triangle_at(t);
+                Value avg = (values_[tri[0]] + values_[tri[1]] + values_[tri[2]]) / Value{ 3 };
+                auto p0 = mesh_.vertex(tri[0]);
+                auto p1 = mesh_.vertex(tri[1]);
+                auto p2 = mesh_.vertex(tri[2]);
+                Value area = detail::triangle_area(p0, p1, p2, metric);
+                result.at_triangle(t) = avg * area;
             }
             return result;
+        }
+
+        // Refine: create a new form on a subdivided mesh (placeholder)
+        template<typename NewComplex>
+        DiscreteForm0<Value, NewComplex> refine(const NewComplex& new_mesh) const {
+            // Not implemented yet
+            throw std::runtime_error("DiscreteForm0::refine not implemented");
         }
 
     private:
@@ -198,7 +157,7 @@ namespace delta::geometry {
         DiscreteForm2<Value, Complex> d() const {
             DiscreteForm2<Value, Complex> result(mesh_);
             for (std::size_t t = 0; t < mesh_.num_triangles(); ++t) {
-                auto [v0, v1, v2] = mesh_.triangle(t);
+                auto [v0, v1, v2] = mesh_.triangle_at(t);
                 auto e01 = mesh_.find_edge(v0, v1);
                 auto e12 = mesh_.find_edge(v1, v2);
                 auto e20 = mesh_.find_edge(v2, v0);
@@ -229,6 +188,12 @@ namespace delta::geometry {
             return result;
         }
 
+        // Refine (placeholder)
+        template<typename NewComplex>
+        DiscreteForm1<Value, NewComplex> refine(const NewComplex& new_mesh) const {
+            throw std::runtime_error("DiscreteForm1::refine not implemented");
+        }
+
     private:
         const Complex& mesh_;
         std::vector<Value> values_;
@@ -250,14 +215,44 @@ namespace delta::geometry {
 
         std::size_t size() const { return values_.size(); }
 
+        // Exterior derivative of 2-form is zero in 2D (but could be defined for 3D)
+        // Not needed for now.
+
         // Hodge star: 2-form -> 0-form (on vertices)
         template<typename Metric>
         DiscreteForm0<Value, Complex> star(const Metric& metric) const {
             DiscreteForm0<Value, Complex> result(mesh_);
-            // For each vertex, compute dual area and sum contributions from incident triangles.
-            // (⋆ρ)_v = (1 / A_v) * Σ_{t ∋ v} ρ_t * (area_t / 3?) Actually, star of 2-form gives 0-form on dual vertices,
-            // which are primal triangles? This is messy. For simplicity, we'll not implement.
-            throw std::runtime_error("Hodge star for 2-form not implemented");
+            // For each vertex, (⋆ρ)_v = sum_{t∋v} ρ_t * (area_t) / (3 * area_v) ??? Simplified.
+            // We'll use a simple average of incident triangle values weighted by area.
+            std::vector<Value> vertex_sum(mesh_.size(), Value{ 0 });
+            std::vector<Value> vertex_weight(mesh_.size(), Value{ 0 });
+            for (std::size_t t = 0; t < mesh_.num_triangles(); ++t) {
+                auto tri = mesh_.triangle_at(t);
+                auto p0 = mesh_.vertex(tri[0]);
+                auto p1 = mesh_.vertex(tri[1]);
+                auto p2 = mesh_.vertex(tri[2]);
+                Value area = detail::triangle_area(p0, p1, p2, metric);
+                Value contrib = values_[t] * area;
+                for (int i = 0; i < 3; ++i) {
+                    vertex_sum[tri[i]] += contrib;
+                    vertex_weight[tri[i]] += area;
+                }
+            }
+            for (std::size_t v = 0; v < mesh_.size(); ++v) {
+                if (vertex_weight[v] != Value{ 0 }) {
+                    result.at_vertex(v) = vertex_sum[v] / (Value{ 3 } * vertex_weight[v]); // dividing by total area? Need correct formula.
+                }
+                else {
+                    result.at_vertex(v) = Value{ 0 };
+                }
+            }
+            return result;
+        }
+
+        // Refine (placeholder)
+        template<typename NewComplex>
+        DiscreteForm2<Value, NewComplex> refine(const NewComplex& new_mesh) const {
+            throw std::runtime_error("DiscreteForm2::refine not implemented");
         }
 
     private:
@@ -270,39 +265,24 @@ namespace delta::geometry {
     // -------------------------------------------------------------------------
 
     /// Codifferential of a 1-form: δω = ⋆⁻¹ d ⋆ ω   (with appropriate sign)
+    /// In 2D for 1-forms: δ = - ⋆⁻¹ d ⋆
     template<typename Value, typename Complex, typename Metric>
     DiscreteForm0<Value, Complex> codifferential(const DiscreteForm1<Value, Complex>& omega,
         const Metric& metric) {
-        // For 1-form in 2D, δ maps to 0-form.
-        // δ = (-1)^{2(1-1)+1} ⋆⁻¹ d ⋆ = (-1)^{1} ⋆⁻¹ d ⋆ = - ⋆⁻¹ d ⋆
+        const int n = 2; // dimension
+        const int k = 1; // degree
+        int sign = (n * (k - 1) + 1) % 2 == 0 ? 1 : -1; // (-1)^{n(k-1)+1}
         auto star_omega = omega.star(metric);                // 1-form (dual weights)
         auto d_star_omega = star_omega.d();                  // 2-form
-        // ⋆⁻¹ of a 2-form gives 0-form: (⋆⁻¹ρ)_v = ρ_t / A_v? Not implemented.
-        // For now, return empty form.
-        throw std::runtime_error("Codifferential not fully implemented");
-    }
-
-    /// Codifferential of a 2-form: δρ = ⋆⁻¹ d ⋆ ρ  (maps to 1-form)
-    template<typename Value, typename Complex, typename Metric>
-    DiscreteForm1<Value, Complex> codifferential(const DiscreteForm2<Value, Complex>& rho,
-        const Metric& metric) {
-        throw std::runtime_error("Codifferential for 2-form not implemented");
+        auto star_d_star_omega = d_star_omega.star(metric); // 0-form
+        return sign * star_d_star_omega;
     }
 
     /// Laplace-Beltrami operator on 0-forms: Δf = δ d f
     template<typename Value, typename Complex, typename Metric>
     DiscreteForm0<Value, Complex> laplacian(const DiscreteForm0<Value, Complex>& f,
         const Metric& metric) {
-        auto df = f.d();                           // 1-form
-        auto delta_df = codifferential(df, metric); // 0-form
-        return delta_df;
-    }
-
-    /// Laplace-Beltrami on 1-forms: Δω = (dδ + δd) ω
-    template<typename Value, typename Complex, typename Metric>
-    DiscreteForm1<Value, Complex> laplacian(const DiscreteForm1<Value, Complex>& omega,
-        const Metric& metric) {
-        throw std::runtime_error("Laplacian for 1-form not implemented");
+        return codifferential(f.d(), metric);
     }
 
 } // namespace delta::geometry

@@ -1,19 +1,15 @@
-// include/delta/numerical/pde_solvers.h
+// include/delta/numerical/solvers/poisson_solver.h
 #pragma once
 
 #include "delta/core/grid_concept.h"
 #include "delta/core/regulative_idea.h"
-#include "delta/core/operational_function.h"
-#include "discrete_operators.h"
+#include "delta/geometry/simplicial_complex.h"
+#include "delta/numerical/discrete_operators.h"
+#include "delta/numerical/grid_differences.h"
 #include <Eigen/Sparse>
 #include <vector>
-#include <functional>
 
 namespace delta::numerical {
-
-    // -------------------------------------------------------------------------
-    // Poisson solver on a general grid (using discrete Laplacian)
-    // -------------------------------------------------------------------------
 
     /**
      * @brief Solve the Poisson equation -Δu = f on a simplicial mesh with Dirichlet BC.
@@ -120,67 +116,43 @@ namespace delta::numerical {
     }
 
     // -------------------------------------------------------------------------
-    // Heat equation solver (simple explicit Euler)
+    // Poisson solver for Cartesian (coordinate) grids
     // -------------------------------------------------------------------------
-
-    /**
-     * @brief Solve the heat equation ∂u/∂t = α Δu + f using explicit Euler.
-     *
-     * @tparam Complex  SimplicialComplex.
-     * @tparam Metric   Metric.
-     * @param mesh      The mesh.
-     * @param u0        Initial condition at vertices.
-     * @param f         Source term (function of time and vertex index, or constant).
-     * @param alpha     Thermal diffusivity.
-     * @param dt        Time step.
-     * @param num_steps Number of steps.
-     * @param metric    Metric.
-     * @return std::vector<std::vector<Value>> Solution at each time step.
-     */
-    template<typename Complex, typename Metric>
-    std::vector<std::vector<typename Complex::value_type>>
-        solve_heat_explicit(const Complex& mesh,
-            const std::vector<typename Complex::value_type>& u0,
-            const std::function<typename Complex::value_type(double, std::size_t)>& f,
-            typename Complex::value_type alpha,
-            double dt,
-            std::size_t num_steps,
+    template<typename Grid, typename Metric>
+    std::vector<typename Grid::value_type>
+        solve_poisson_cartesian(const Grid& grid,
+            const std::vector<typename Grid::value_type>& rhs,
+            const std::vector<bool>& dirichlet_mask,
+            const std::vector<typename Grid::value_type>& dirichlet_values,
             const Metric& metric) {
-        using Value = typename Complex::value_type;
-        std::size_t n = mesh.size();
+        using Value = typename Grid::value_type;
+        auto A = build_laplacian_matrix(grid, metric);
+        std::size_t n = grid.size();
 
-        // Precompute Laplacian matrix (cotangent)
-        // We'll use a simpler approach: compute L as sparse matrix
-        // For explicit Euler, we need u_new = u_old + dt * (α L u_old + f)
-
-        // Build L (cotangent Laplacian) - reuse code from discrete_laplacian_cotangent but as matrix
-        std::vector<Eigen::Triplet<Value>> triplets;
-        std::vector<Value> vertex_areas(n, Value{ 0 });
-
-        // Compute areas and cotangents (similar to above)
-        // ... (same as in Poisson)
-        // For brevity, we'll just call discrete_laplacian_cotangent which returns vector, not matrix.
-        // But we need matrix for repeated application. Let's build matrix explicitly.
-
-        // Actually, for explicit Euler we can compute L*u by calling discrete_laplacian_cotangent each step.
-        // That might be simpler. We'll do that.
-
-        std::vector<Value> u = u0;
-        std::vector<std::vector<Value>> result;
-        result.push_back(u);
-
-        for (std::size_t step = 0; step < num_steps; ++step) {
-            double t = step * dt;
-            auto Lu = discrete_laplacian_cotangent(mesh, u, metric);
-            std::vector<Value> u_new(n);
-            for (std::size_t i = 0; i < n; ++i) {
-                Value fi = f(t, i);
-                u_new[i] = u[i] + dt * (alpha * Lu[i] + fi);
+        Eigen::Matrix<Value, Eigen::Dynamic, 1> b(n);
+        for (std::size_t i = 0; i < n; ++i) {
+            b(i) = rhs[i];
+            if (dirichlet_mask[i]) {
+                // Dirichlet: строка заменяется на единичную
+                for (int k = 0; k < A.outerSize(); ++k) {
+                    for (typename Eigen::SparseMatrix<Value>::InnerIterator it(A, k); it; ++it) {
+                        if (it.row() == static_cast<int>(i) || it.col() == static_cast<int>(i)) {
+                            it.valueRef() = 0;
+                        }
+                    }
+                }
+                A.coeffRef(static_cast<int>(i), static_cast<int>(i)) = 1.0;
+                b(i) = dirichlet_values[i];
             }
-            u = u_new;
-            result.push_back(u);
         }
+
+        Eigen::SparseLU<Eigen::SparseMatrix<Value>> solver;
+        solver.compute(A);
+        Eigen::Matrix<Value, Eigen::Dynamic, 1> x = solver.solve(b);
+
+        std::vector<Value> result(n);
+        for (std::size_t i = 0; i < n; ++i) result[i] = x(i);
         return result;
     }
 
-} // namespace delta::numerical 
+} // namespace delta::numerical

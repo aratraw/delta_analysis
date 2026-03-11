@@ -62,17 +62,14 @@ namespace delta::geometry {
 
         TensorField() = default;
 
-        // Доступ для записи (создаёт элемент при необходимости)
         void set(const Addr& addr, const value_type& val) {
             data_[addr] = val;
         }
 
-        // Оператор индексирования для записи (создаёт элемент при необходимости)
         value_type& operator[](const Addr& addr) {
             return data_[addr];
         }
 
-        // Доступ только для чтения (кидает исключение, если нет)
         const value_type& at(const Addr& addr) const {
             auto it = data_.find(addr);
             if (it == data_.end()) {
@@ -81,21 +78,17 @@ namespace delta::geometry {
             return it->second;
         }
 
-        // Проверка наличия
         bool contains(const Addr& addr) const {
             return data_.find(addr) != data_.end();
         }
 
-        // Итераторы для обхода всех точек
         auto begin() const { return data_.begin(); }
         auto end() const { return data_.end(); }
         auto begin() { return data_.begin(); }
         auto end() { return data_.end(); }
 
-        // Количество точек
         std::size_t size() const { return data_.size(); }
 
-        // Операции над всем полем (применить функцию к каждому значению)
         template<typename Func>
         void apply(Func&& f) {
             for (auto& [addr, val] : data_) {
@@ -111,31 +104,26 @@ namespace delta::geometry {
         }
 
     protected:
-        std::map<Addr, value_type> data_;   // для простоты используем map
+        std::map<Addr, value_type> data_;
     };
 
     // -------------------------------------------------------------------------
-    // Свободные функции для алгебраических операций (поточечные)
+    // Свободные функции для алгебраических операций
     // -------------------------------------------------------------------------
 
-    // Сложение двух полей одинакового ранга и размерности
     template<typename Addr, typename Scalar, int Rank, int Dim>
     TensorField<Addr, Scalar, Rank, Dim>
         operator+(const TensorField<Addr, Scalar, Rank, Dim>& a,
             const TensorField<Addr, Scalar, Rank, Dim>& b) {
         TensorField<Addr, Scalar, Rank, Dim> result;
-        // Проходим по всем точкам из a, если есть в b, складываем
         for (const auto& [addr, val_a] : a) {
             if (b.contains(addr)) {
                 result.set(addr, val_a + b.at(addr));
             }
         }
-        // Можно также добавить точки, которые есть только в b, но тогда сумма не определена.
-        // Оставим только пересечение.
         return result;
     }
 
-    // Вычитание
     template<typename Addr, typename Scalar, int Rank, int Dim>
     TensorField<Addr, Scalar, Rank, Dim>
         operator-(const TensorField<Addr, Scalar, Rank, Dim>& a,
@@ -149,7 +137,6 @@ namespace delta::geometry {
         return result;
     }
 
-    // Умножение на скаляр (слева и справа)
     template<typename Addr, typename Scalar, int Rank, int Dim>
     TensorField<Addr, Scalar, Rank, Dim>
         operator*(const TensorField<Addr, Scalar, Rank, Dim>& f, const Scalar& s) {
@@ -166,7 +153,6 @@ namespace delta::geometry {
         return f * s;
     }
 
-    // Умножение на скаляр с присваиванием
     template<typename Addr, typename Scalar, int Rank, int Dim>
     TensorField<Addr, Scalar, Rank, Dim>&
         operator*=(TensorField<Addr, Scalar, Rank, Dim>& f, const Scalar& s) {
@@ -174,34 +160,155 @@ namespace delta::geometry {
         return f;
     }
 
-    // Тензорное произведение двух полей (разных рангов)
+    // -------------------------------------------------------------------------
+    // Тензорное произведение (для всех комбинаций рангов 0,1,2)
+    // -------------------------------------------------------------------------
     template<typename Addr, typename Scalar, int RankA, int RankB, int Dim>
     auto tensor_product(const TensorField<Addr, Scalar, RankA, Dim>& a,
         const TensorField<Addr, Scalar, RankB, Dim>& b) {
         constexpr int RankR = RankA + RankB;
         TensorField<Addr, Scalar, RankR, Dim> result;
-        for (const auto& [addr, val_a] : a) {
+        for (const auto& [addr, valA] : a) {
             if (b.contains(addr)) {
-                const auto& val_b = b.at(addr);   // <-- исправлено: получаем val_b
-                if constexpr (RankA == 1 && RankB == 1) {
-                    // val_a - вектор-столбец, val_b - вектор-столбец, хотим матрицу val_a * val_b^T
-                    result.set(addr, val_a * val_b.transpose());
+                const auto& valB = b.at(addr);
+                if constexpr (RankA == 0 && RankB == 0) {
+                    result.set(addr, valA * valB);
                 }
-                else {
-                    // Для других комбинаций пока не реализовано
-                    static_assert(RankA == 1 && RankB == 1, "tensor_product only implemented for vector-vector");
+                else if constexpr (RankA == 0 && RankB == 1) {
+                    result.set(addr, valA * valB);
+                }
+                else if constexpr (RankA == 0 && RankB == 2) {
+                    result.set(addr, valA * valB);
+                }
+                else if constexpr (RankA == 1 && RankB == 0) {
+                    result.set(addr, valA * valB);
+                }
+                else if constexpr (RankA == 1 && RankB == 1) {
+                    // вектор * вектор -> матрица (внешнее произведение)
+                    result.set(addr, valA * valB.transpose());
+                }
+                else if constexpr (RankA == 1 && RankB == 2) {
+                    // вектор * матрица -> ранг 3, не поддерживаем
+                    static_assert(RankA + RankB <= 2,
+                        "Tensor product of vector and matrix not supported");
+                }
+                else if constexpr (RankA == 2 && RankB == 0) {
+                    result.set(addr, valA * valB);
+                }
+                else if constexpr (RankA == 2 && RankB == 1) {
+                    static_assert(RankA + RankB <= 2,
+                        "Tensor product of matrix and vector not supported");
+                }
+                else if constexpr (RankA == 2 && RankB == 2) {
+                    static_assert(RankA + RankB <= 2,
+                        "Tensor product of matrix and matrix not supported");
                 }
             }
         }
         return result;
     }
 
-    // Свёртка для поля ранга 2 (получаем скалярное поле - след)
+    // -------------------------------------------------------------------------
+    // Свёртка (contract) – обобщение следа
+    // -------------------------------------------------------------------------
+    template<typename Addr, typename Scalar, int Dim>
+    TensorField<Addr, Scalar, 0, Dim> contract(const TensorField<Addr, Scalar, 2, Dim>& t) {
+        return trace(t);  // пока только для матриц
+    }
+
+    // -------------------------------------------------------------------------
+    // Свёртка для матриц (след)
+    // -------------------------------------------------------------------------
     template<typename Addr, typename Scalar, int Dim>
     TensorField<Addr, Scalar, 0, Dim> trace(const TensorField<Addr, Scalar, 2, Dim>& t) {
         TensorField<Addr, Scalar, 0, Dim> result;
         for (const auto& [addr, mat] : t) {
             result.set(addr, mat.trace());
+        }
+        return result;
+    }
+
+    // -------------------------------------------------------------------------
+    // Операции поднятия и опускания индексов с метрикой
+    // -------------------------------------------------------------------------
+
+    /**
+     * @brief Опускание индекса у контравариантного вектора: v_i = g_{ij} v^j
+     * @param v  Векторное поле (ранг 1)
+     * @param g  Метрическое поле (ранг 2, ковариантное)
+     * @return   Ковариантное векторное поле (ранг 1, но в том же классе)
+     */
+    template<typename Addr, typename Scalar, int Dim>
+    TensorField<Addr, Scalar, 1, Dim>
+        lower_index(const TensorField<Addr, Scalar, 1, Dim>& v,
+            const TensorField<Addr, Scalar, 2, Dim>& g) {
+        TensorField<Addr, Scalar, 1, Dim> result;
+        for (const auto& [addr, vec] : v) {
+            if (g.contains(addr)) {
+                const auto& metric = g.at(addr);
+                result.set(addr, metric * vec);
+            }
+        }
+        return result;
+    }
+
+    /**
+     * @brief Поднятие индекса у ковариантного вектора: v^i = g^{ij} v_j
+     * @param cov    Ковариантное векторное поле (ранг 1)
+     * @param g_inv  Обратное метрическое поле (ранг 2, контравариантное)
+     * @return       Контравариантное векторное поле (ранг 1)
+     */
+    template<typename Addr, typename Scalar, int Dim>
+    TensorField<Addr, Scalar, 1, Dim>
+        raise_index(const TensorField<Addr, Scalar, 1, Dim>& cov,
+            const TensorField<Addr, Scalar, 2, Dim>& g_inv) {
+        TensorField<Addr, Scalar, 1, Dim> result;
+        for (const auto& [addr, vec] : cov) {
+            if (g_inv.contains(addr)) {
+                const auto& metric_inv = g_inv.at(addr);
+                result.set(addr, metric_inv * vec);
+            }
+        }
+        return result;
+    }
+
+    /**
+     * @brief Поднятие второго индекса у смешанного тензора (матрицы):
+     *        M^{i}_{j} -> M^{ik} = g^{kj} M^{i}_{j}
+     * @param m       Матричное поле (ранг 2, предполагается смешанное)
+     * @param g_inv   Обратное метрическое поле
+     * @return        Поле с двумя верхними индексами (ранг 2)
+     */
+    template<typename Addr, typename Scalar, int Dim>
+    TensorField<Addr, Scalar, 2, Dim>
+        raise_second_index(const TensorField<Addr, Scalar, 2, Dim>& m,
+            const TensorField<Addr, Scalar, 2, Dim>& g_inv) {
+        TensorField<Addr, Scalar, 2, Dim> result;
+        for (const auto& [addr, mat] : m) {
+            if (g_inv.contains(addr)) {
+                const auto& metric_inv = g_inv.at(addr);
+                result.set(addr, mat * metric_inv);
+            }
+        }
+        return result;
+    }
+
+    /**
+     * @brief Опускание второго индекса у смешанного тензора:
+     *        M^{i}_{j} -> M_{ij} = g_{jk} M^{i}_{k}? На самом деле нужно определить.
+     *        Упростим: опускаем первый индекс или второй в зависимости от конвенции.
+     *        Здесь реализуем опускание первого индекса: M_{ij} = g_{ik} M^{k}_{j}
+     */
+    template<typename Addr, typename Scalar, int Dim>
+    TensorField<Addr, Scalar, 2, Dim>
+        lower_first_index(const TensorField<Addr, Scalar, 2, Dim>& m,
+            const TensorField<Addr, Scalar, 2, Dim>& g) {
+        TensorField<Addr, Scalar, 2, Dim> result;
+        for (const auto& [addr, mat] : m) {
+            if (g.contains(addr)) {
+                const auto& metric = g.at(addr);
+                result.set(addr, metric * mat);  // g * m
+            }
         }
         return result;
     }
