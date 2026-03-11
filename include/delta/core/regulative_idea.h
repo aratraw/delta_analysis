@@ -154,12 +154,11 @@ namespace delta {
      * @struct EuclideanMetric
      * @brief Euclidean (absolute) distance: `|a - b|`.
      *
-     * Uses `std::abs` and works for arithmetic types.
+     * Uses `abs` and works for arithmetic types.
      */
     struct EuclideanMetric {
         template<typename T>
         auto operator()(const T& a, const T& b) const {
-            using std::abs;
             return abs(a - b);
         }
     };
@@ -276,6 +275,15 @@ namespace delta {
         }
     };
 
+    template<typename RI, typename Addr>
+    auto distance(const RI& idea, const Addr& a, const Addr& b) {
+        return idea.metric(a, b);
+    }
+
+    template<typename RI, typename Addr>
+    bool between(const RI& idea, const Addr& x, const Addr& y, const Addr& z) {
+        return idea.betweenness(x, y, z);
+    }
     // Compile‑time checks that the provided types satisfy the required concepts.
     static_assert(Betweenness<TreeBetweenness, std::string>);
     static_assert(Metric<FrobeniusMetric, Eigen::MatrixXd>);

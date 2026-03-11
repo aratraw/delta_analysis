@@ -33,7 +33,7 @@ namespace delta::testing {
     TEST_F(ModulusTest, LogarithmicModulus) {
         LogarithmicModulus<double> mod(1.0, 2.0);
         double delta = 0.1;
-        double expected = 1.0 / std::pow(std::abs(std::log(delta)), 2.0);
+        double expected = 1.0 / std::pow(abs(std::log(delta)), 2.0);
         EXPECT_NEAR(mod(delta), expected, 1e-12);
         EXPECT_TRUE(std::isinf(mod(0.0)));
     }
@@ -204,7 +204,7 @@ namespace delta::testing {
         auto path = make_midpoint_path(grid0);
         auto func = [](const Addr& x) -> Rational {
             double xd = x.convert_to<double>();
-            return Rational(static_cast<int64_t>(std::abs(xd) * 1e12), 1e12);
+            return Rational(static_cast<int64_t>(abs(xd) * 1e12), 1e12);
             };
 
         std::vector<ListGrid<Addr, Compare>> grids;

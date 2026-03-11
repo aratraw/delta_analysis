@@ -45,6 +45,7 @@ namespace delta::calculus {
      * @return The largest gap; if grid.size() < 2, returns a default‑constructed value (zero).
      */
     template<typename Grid>
+        requires SimpleGrid<Grid>&& SubtractableAddress<typename Grid::value_type>
     typename Grid::value_type max_gap(const Grid& grid) {
         using T = typename Grid::value_type;
         if (grid.size() < 2) return T{ 0 };
@@ -151,7 +152,7 @@ namespace delta::calculus {
             if (delta <= 0) return std::numeric_limits<T>::infinity();
             using std::log;
             using std::pow;
-            return C_ / pow(std::abs(log(delta)), p_);
+            return C_ / pow(abs(log(delta)), p_);
         }
 
     private:

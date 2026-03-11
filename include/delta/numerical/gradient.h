@@ -7,69 +7,58 @@
 
 namespace delta::numerical {
 
-    /**
-     * @brief Gradient of a 2D scalar field using central differences.
-     * @tparam Func  Callable with signature double(double x, double y)
-     * @param f      Function to differentiate
-     * @param x,y    Coordinates of the point
-     * @param hx,hy  Step sizes in x and y directions
-     * @return Eigen::Vector2d (df/dx, df/dy)
-     */
-    template<typename Func>
-    Eigen::Vector2d gradient_2d_central(const Func& f, double x, double y, double hx, double hy) {
-        double dfdx = central_diff([&](double x) { return f(x, y); }, x, hx);
-        double dfdy = central_diff([&](double y) { return f(x, y); }, y, hy);
-        return Eigen::Vector2d(dfdx, dfdy);
+    // 2D central
+    template<typename T, typename Func>
+    Eigen::Matrix<T, 2, 1> gradient_2d_central(const Func& f, const T& x, const T& y, const T& hx, const T& hy) {
+        T dfdx = central_diff<T>([&](const T& x) { return f(x, y); }, x, hx);
+        T dfdy = central_diff<T>([&](const T& y) { return f(x, y); }, y, hy);
+        return Eigen::Matrix<T, 2, 1>(dfdx, dfdy);
     }
 
-    /**
-     * @brief Gradient of a 3D scalar field using central differences.
-     */
-    template<typename Func>
-    Eigen::Vector3d gradient_3d_central(const Func& f, double x, double y, double z,
-        double hx, double hy, double hz) {
-        double dfdx = central_diff([&](double x) { return f(x, y, z); }, x, hx);
-        double dfdy = central_diff([&](double y) { return f(x, y, z); }, y, hy);
-        double dfdz = central_diff([&](double z) { return f(x, y, z); }, z, hz);
-        return Eigen::Vector3d(dfdx, dfdy, dfdz);
+    // 2D forward
+    template<typename T, typename Func>
+    Eigen::Matrix<T, 2, 1> gradient_2d_forward(const Func& f, const T& x, const T& y, const T& hx, const T& hy) {
+        T dfdx = forward_diff<T>([&](const T& x) { return f(x, y); }, x, hx);
+        T dfdy = forward_diff<T>([&](const T& y) { return f(x, y); }, y, hy);
+        return Eigen::Matrix<T, 2, 1>(dfdx, dfdy);
     }
 
-    /**
- * @brief Gradient of a 2D scalar field using forward differences.
- */
-    template<typename Func>
-    Eigen::Vector2d gradient_2d_forward(const Func& f, double x, double y, double hx, double hy) {
-        double dfdx = forward_diff([&](double x) { return f(x, y); }, x, hx);
-        double dfdy = forward_diff([&](double y) { return f(x, y); }, y, hy);
-        return Eigen::Vector2d(dfdx, dfdy);
+    // 2D backward
+    template<typename T, typename Func>
+    Eigen::Matrix<T, 2, 1> gradient_2d_backward(const Func& f, const T& x, const T& y, const T& hx, const T& hy) {
+        T dfdx = backward_diff<T>([&](const T& x) { return f(x, y); }, x, hx);
+        T dfdy = backward_diff<T>([&](const T& y) { return f(x, y); }, y, hy);
+        return Eigen::Matrix<T, 2, 1>(dfdx, dfdy);
     }
 
-    /**
-     * @brief Gradient of a 2D scalar field using backward differences.
-     */
-    template<typename Func>
-    Eigen::Vector2d gradient_2d_backward(const Func& f, double x, double y, double hx, double hy) {
-        double dfdx = backward_diff([&](double x) { return f(x, y); }, x, hx);
-        double dfdy = backward_diff([&](double y) { return f(x, y); }, y, hy);
-        return Eigen::Vector2d(dfdx, dfdy);
+    // 3D central
+    template<typename T, typename Func>
+    Eigen::Matrix<T, 3, 1> gradient_3d_central(const Func& f, const T& x, const T& y, const T& z,
+        const T& hx, const T& hy, const T& hz) {
+        T dfdx = central_diff<T>([&](const T& x) { return f(x, y, z); }, x, hx);
+        T dfdy = central_diff<T>([&](const T& y) { return f(x, y, z); }, y, hy);
+        T dfdz = central_diff<T>([&](const T& z) { return f(x, y, z); }, z, hz);
+        return Eigen::Matrix<T, 3, 1>(dfdx, dfdy, dfdz);
     }
 
-    // Аналогично для 3D
-    template<typename Func>
-    Eigen::Vector3d gradient_3d_forward(const Func& f, double x, double y, double z,
-        double hx, double hy, double hz) {
-        double dfdx = forward_diff([&](double x) { return f(x, y, z); }, x, hx);
-        double dfdy = forward_diff([&](double y) { return f(x, y, z); }, y, hy);
-        double dfdz = forward_diff([&](double z) { return f(x, y, z); }, z, hz);
-        return Eigen::Vector3d(dfdx, dfdy, dfdz);
+    // 3D forward
+    template<typename T, typename Func>
+    Eigen::Matrix<T, 3, 1> gradient_3d_forward(const Func& f, const T& x, const T& y, const T& z,
+        const T& hx, const T& hy, const T& hz) {
+        T dfdx = forward_diff<T>([&](const T& x) { return f(x, y, z); }, x, hx);
+        T dfdy = forward_diff<T>([&](const T& y) { return f(x, y, z); }, y, hy);
+        T dfdz = forward_diff<T>([&](const T& z) { return f(x, y, z); }, z, hz);
+        return Eigen::Matrix<T, 3, 1>(dfdx, dfdy, dfdz);
     }
 
-    template<typename Func>
-    Eigen::Vector3d gradient_3d_backward(const Func& f, double x, double y, double z,
-        double hx, double hy, double hz) {
-        double dfdx = backward_diff([&](double x) { return f(x, y, z); }, x, hx);
-        double dfdy = backward_diff([&](double y) { return f(x, y, z); }, y, hy);
-        double dfdz = backward_diff([&](double z) { return f(x, y, z); }, z, hz);
-        return Eigen::Vector3d(dfdx, dfdy, dfdz);
+    // 3D backward
+    template<typename T, typename Func>
+    Eigen::Matrix<T, 3, 1> gradient_3d_backward(const Func& f, const T& x, const T& y, const T& z,
+        const T& hx, const T& hy, const T& hz) {
+        T dfdx = backward_diff<T>([&](const T& x) { return f(x, y, z); }, x, hx);
+        T dfdy = backward_diff<T>([&](const T& y) { return f(x, y, z); }, y, hy);
+        T dfdz = backward_diff<T>([&](const T& z) { return f(x, y, z); }, z, hz);
+        return Eigen::Matrix<T, 3, 1>(dfdx, dfdy, dfdz);
     }
+
 } // namespace delta::numerical

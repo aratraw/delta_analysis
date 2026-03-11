@@ -20,6 +20,7 @@ namespace delta::calculus {
      * @return Index of the address if found, otherwise -1.
      */
     template<typename Grid, typename Addr>
+        requires SimpleGrid<Grid>
     std::ptrdiff_t find_address_index(const Grid& grid, const Addr& addr) {
         for (std::size_t i = 0; i < grid.size(); ++i) {
             if (grid[i] == addr) return static_cast<std::ptrdiff_t>(i);
@@ -42,7 +43,7 @@ namespace delta::calculus {
      * @throws std::invalid_argument if addr is not found or is an endpoint.
      */
     template<typename Grid, typename Func>
-        requires SubtractableAddress<typename Grid::value_type>
+        requires SimpleGrid<Grid>&& SubtractableAddress<typename Grid::value_type>
     auto left_difference_quotient(const Grid& grid, const typename Grid::value_type& addr,
         Func&& func) {
         std::ptrdiff_t idx = find_address_index(grid, addr);
@@ -71,7 +72,7 @@ namespace delta::calculus {
      * @throws std::invalid_argument if addr is not found or is an endpoint.
      */
     template<typename Grid, typename Func>
-        requires SubtractableAddress<typename Grid::value_type>
+        requires SimpleGrid<Grid>&& SubtractableAddress<typename Grid::value_type>
     auto right_difference_quotient(const Grid& grid, const typename Grid::value_type& addr,
         Func&& func) {
         std::ptrdiff_t idx = find_address_index(grid, addr);
@@ -126,8 +127,8 @@ namespace delta::calculus {
             Distance bound = modulus(delta_n);   // modulus must return a Distance
 
             // Convert to double for tolerance comparison
-            double left_error = std::abs((left_dq - D).template convert_to<double>());
-            double right_error = std::abs((right_dq - D).template convert_to<double>());
+            double left_error = abs((left_dq - D).template convert_to<double>());
+            double right_error = abs((right_dq - D).template convert_to<double>());
             double bound_d = bound.template convert_to<double>();
 
             if (left_error > bound_d + tolerance || right_error > bound_d + tolerance) {

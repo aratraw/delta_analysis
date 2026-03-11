@@ -169,7 +169,8 @@ TEST(DiscreteGradientDivergenceTest, DivergenceOfConstantField) {
     Eigen::VectorXd edge_vals = Eigen::VectorXd::Constant(mesh.num_edges(), 1.0);
     auto div_raw = discrete_divergence_raw(mesh, edge_vals);
 
-    double total = div_raw.sum();
+    double total = 0.0;
+    for (const auto& val : div_raw) total += val;
     EXPECT_NEAR(total, 0.0, 1e-12);
 }
 

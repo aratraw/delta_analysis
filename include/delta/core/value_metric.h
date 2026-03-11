@@ -29,7 +29,7 @@ namespace delta {
      * @brief A metric that computes the Euclidean (absolute) distance between two values.
      *
      * This metric works for:
-     * - Arithmetic types (int, double, etc.) via std::abs.
+     * - Arithmetic types (int, double, etc.) via abs.
      * - Rational (boost::multiprecision number) via boost::multiprecision::abs.
      * - Eigen::MatrixXd via the Frobenius norm.
      *
@@ -41,11 +41,10 @@ namespace delta {
          * @tparam T An arithmetic type (int, double, etc.).
          * @param a First value.
          * @param b Second value.
-         * @return |a - b| using std::abs.
+         * @return |a - b| using abs.
          */
         template<typename T>
-        auto operator()(const T& a, const T& b) const -> decltype(std::abs(a - b)) {
-            using std::abs;
+        auto operator()(const T& a, const T& b) const -> decltype(abs(a - b)) {
             return abs(a - b);
         }
 

@@ -161,6 +161,5 @@ namespace delta {
     };
 
     // Verify that TreeGrid satisfies the GridConcept with std::string addresses.
-    static_assert(GridConcept<TreeGrid<>, std::string>);
-
+    static_assert(OrderedGrid<TreeGrid<>>);
 } // namespace delta

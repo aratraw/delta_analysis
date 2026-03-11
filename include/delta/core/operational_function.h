@@ -5,6 +5,7 @@
 #include <functional>
 #include <cassert>
 #include <type_traits>
+#include <concepts>
 #include <Eigen/Dense>
 #include <Eigen/StdVector>
 #include "list_grid.h"
@@ -74,7 +75,7 @@ namespace delta {
              * @param initial Function to compute the value at each address.
              */
             template<typename Func>
-                requires GridConcept<Grid, Addr>
+                requires OrderedGrid<Grid>
             OperationalFunction(const Grid& grid, Func&& initial)
                 : values_(grid.comparator()) // use the grid's comparator for ordering
             {
@@ -96,7 +97,7 @@ namespace delta {
              * @param interpolate Interpolator used to compute values at new addresses.
              */
             template<typename OldGrid>
-                requires GridConcept<OldGrid, Addr>
+                requires OrderedGrid<OldGrid>
             void extend(const OldGrid& old_grid, const Grid& new_grid,
                 Interpolator interpolate) {
                 const std::size_t old_size = old_grid.size();
@@ -268,6 +269,38 @@ namespace delta {
     private:
         Grid grid_;           ///< The current uniform grid.
         StorageType values_;  ///< Values in the same order as grid points.
+    };
+
+    // -------------------------------------------------------------------------
+    // FieldTraits для получения информации о поле
+    // -------------------------------------------------------------------------
+
+    template<typename Field>
+    struct FieldTraits;
+
+    template<typename Addr, typename Value, typename Grid, typename Compare>
+    struct FieldTraits<OperationalFunction<Addr, Value, Grid, Compare>> {
+        using address_type = Addr;
+        using value_type = Value;
+        using grid_type = Grid;
+    };
+
+    template<typename Addr, typename Value, typename Compare>
+    struct FieldTraits<OperationalFunction<Addr, Value, UniformGrid<Addr, Compare>>> {
+        using address_type = Addr;
+        using value_type = Value;
+        using grid_type = UniformGrid<Addr, Compare>;
+    };
+
+    // -------------------------------------------------------------------------
+    // Concept Field для проверки, что тип является полем
+    // -------------------------------------------------------------------------
+
+    template<typename F, typename Addr>
+    concept Field = requires(F f, const F cf, Addr a) {
+        typename F::value_type;
+        { cf(a) } -> std::convertible_to<typename F::value_type>;
+        { cf.contains(a) } -> std::convertible_to<bool>;
     };
 
 } // namespace delta

@@ -150,6 +150,6 @@ namespace delta {
     };
 
     // Ensure ListGrid satisfies the GridConcept.
-    static_assert(GridConcept<ListGrid<int>, int>);
+    static_assert(OrderedGrid<ListGrid<int>>);
 
 } // namespace delta

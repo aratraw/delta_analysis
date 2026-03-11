@@ -38,7 +38,7 @@ namespace delta::testing {
                 double left = grid[i].convert_to<double>();
                 double right = grid[i + 1].convert_to<double>();
                 double dx = right - left;
-                double df = std::abs(std::sqrt(right) - std::sqrt(left));
+                double df = abs(std::sqrt(right) - std::sqrt(left));
                 double bound = mod(dx);
                 EXPECT_LE(df, bound + 1e-12) << "Failed at level " << n << " interval [" << left << "," << right << "]";
             }
