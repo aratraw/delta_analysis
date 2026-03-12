@@ -2,257 +2,188 @@
 #pragma once
 
 #include "simplicial_complex.h"
+#include "dual_complex.h"
+#include "hat_basis.h"
 #include <vector>
-#include <cassert>
-#include <cmath>
-#include <numbers>
 #include <unordered_map>
-#include <utility>
-#include "delta/core/rational.h"
-#include "delta/core/regulative_idea.h"
+#include <type_traits>
+#include <stdexcept>
+#include <cmath>
 
 namespace delta::geometry {
 
-    // Forward declarations
-    template<typename Value, typename Complex> class DiscreteForm0;
-    template<typename Value, typename Complex> class DiscreteForm1;
-    template<typename Value, typename Complex> class DiscreteForm2;
-
     namespace detail {
-        // ---------------------------------------------------------------------
-        // Geometric helpers (using a metric)
-        // ---------------------------------------------------------------------
-
-        /// Compute edge length using metric
-        template<typename Metric, typename Point>
-        auto edge_length(const Point& a, const Point& b, const Metric& metric) {
-            return metric(a, b);
-        }
-
-        /// Compute triangle area using metric (Heron's formula or cross product)
-        template<typename Metric, typename Point>
-        auto triangle_area(const Point& a, const Point& b, const Point& c, const Metric& metric) {
-            using Scalar = decltype(metric(a, a));
-            Scalar ab = metric(a, b);
-            Scalar bc = metric(b, c);
-            Scalar ca = metric(c, a);
-            // Heron's formula
-            Scalar s = (ab + bc + ca) / Scalar{ 2 };
-            return sqrt(s * (s - ab) * (s - bc) * (s - ca));
-        }
-
-        /// Simplified dual edge length: (area1 + area2) / edge_length
-        template<typename Complex, typename Metric>
-        auto dual_edge_length(const Complex& mesh, std::size_t e, const Metric& metric) {
-            using Point = typename Complex::point_type;
-            using Scalar = decltype(metric(mesh.vertex(0), mesh.vertex(0)));
-
-            auto [v0, v1] = mesh.edge_at(e);
-            Point p0 = mesh.vertex(v0);
-            Point p1 = mesh.vertex(v1);
-            Scalar edge_len = metric(p0, p1);
-
-            // Find the two triangles incident to this edge
-            std::vector<std::size_t> incident;
-            for (std::size_t t = 0; t < mesh.num_triangles(); ++t) {
-                auto tri = mesh.triangle_at(t);
-                if ((tri[0] == v0 && tri[1] == v1) || (tri[1] == v0 && tri[2] == v1) || (tri[2] == v0 && tri[0] == v1) ||
-                    (tri[0] == v1 && tri[1] == v0) || (tri[1] == v1 && tri[2] == v0) || (tri[2] == v1 && tri[0] == v0)) {
-                    incident.push_back(t);
-                }
+        // Вспомогательная функция для вычисления объёма k-симплекса
+        template<int k, typename Complex, typename Metric>
+        typename Complex::point_type::Scalar
+            primal_volume(const Complex& mesh, std::size_t idx, const Metric& metric) {
+            const auto& simp = mesh.get_simplex(k, idx);
+            if constexpr (k == 0) {
+                return typename Complex::point_type::Scalar{ 1 };
             }
-
-            if (incident.empty()) return Scalar{ 0 };
-            if (incident.size() == 1) {
-                // Boundary edge: dual length is area / (edge_len/2)?? Simplified: return edge_len
-                return edge_len;
+            else if constexpr (k == 1) {
+                auto a = mesh.vertex(simp[0]);
+                auto b = mesh.vertex(simp[1]);
+                return metric(a, b);
             }
-
-            // Compute areas of the two incident triangles
-            auto tri0 = mesh.triangle_at(incident[0]);
-            auto tri1 = mesh.triangle_at(incident[1]);
-            Scalar area0 = triangle_area(mesh.vertex(tri0[0]), mesh.vertex(tri0[1]), mesh.vertex(tri0[2]), metric);
-            Scalar area1 = triangle_area(mesh.vertex(tri1[0]), mesh.vertex(tri1[1]), mesh.vertex(tri1[2]), metric);
-
-            // Dual length as (area0 + area1) / edge_len (a common approximation)
-            return (area0 + area1) / edge_len;
+            else if constexpr (k == 2) {
+                auto a = mesh.vertex(simp[0]);
+                auto b = mesh.vertex(simp[1]);
+                auto c = mesh.vertex(simp[2]);
+                auto ab = metric(a, b);
+                auto bc = metric(b, c);
+                auto ca = metric(c, a);
+                auto s = (ab + bc + ca) / 2;
+                using std::sqrt;
+                return sqrt(s * (s - ab) * (s - bc) * (s - ca));
+            }
+            else if constexpr (k == 3) {
+                // Объём тетраэдра через формулу Кэли-Менгера (использует только длины рёбер)
+                auto a = mesh.vertex(simp[0]);
+                auto b = mesh.vertex(simp[1]);
+                auto c = mesh.vertex(simp[2]);
+                auto d = mesh.vertex(simp[3]);
+                auto ab = metric(a, b);
+                auto ac = metric(a, c);
+                auto ad = metric(a, d);
+                auto bc = metric(b, c);
+                auto bd = metric(b, d);
+                auto cd = metric(c, d);
+                // Матрица Кэли-Менгера
+                Eigen::Matrix<typename Complex::point_type::Scalar, 5, 5> M;
+                M << 0, 1, 1, 1, 1,
+                    1, 0, ab* ab, ac* ac, ad* ad,
+                    1, ab* ab, 0, bc* bc, bd* bd,
+                    1, ac* ac, bc* bc, 0, cd* cd,
+                    1, ad* ad, bd* bd, cd* cd, 0;
+                auto det = M.determinant();
+                if (det <= 0) return 0;
+                using std::sqrt;
+                return sqrt(det / 288);
+            }
+            else {
+                static_assert(k <= 3, "primal_volume for k>3 not implemented");
+                return 0;
+            }
         }
-
     } // namespace detail
 
-    // -------------------------------------------------------------------------
-    // Discrete 0-form (values on vertices)
-    // -------------------------------------------------------------------------
-    template<typename Value, typename Complex>
-    class DiscreteForm0 {
+    // -----------------------------------------------------------------------------
+    // DiscreteForm: дискретная k-форма на симплициальном комплексе
+    // -----------------------------------------------------------------------------
+    template<int k, typename Value, typename Complex>
+    class DiscreteForm {
+        static_assert(k >= 0, "Form degree must be non-negative");
     public:
         using value_type = Value;
         using complex_type = Complex;
+        using vertex_index = typename Complex::vertex_index;
 
-        explicit DiscreteForm0(const Complex& mesh) : mesh_(mesh), values_(mesh.size()) {}
+        // Конструктор: ассоциирует форму с комплексом, значения инициализируются нулём
+        explicit DiscreteForm(const Complex& mesh)
+            : mesh_(mesh), values_(mesh.num_simplices(k), Value{ 0 }) {
+        }
 
-        Value& at_vertex(std::size_t i) { return values_.at(i); }
-        const Value& at_vertex(std::size_t i) const { return values_.at(i); }
+        // Доступ к значению на симплексе по индексу
+        Value& at(std::size_t idx) { return values_.at(idx); }
+        const Value& at(std::size_t idx) const { return values_.at(idx); }
+
+        void set(std::size_t idx, const Value& val) { values_[idx] = val; }
 
         std::size_t size() const { return values_.size(); }
+        const Complex& mesh() const { return mesh_; }
 
-        // Exterior derivative: 0-form -> 1-form
-        DiscreteForm1<Value, Complex> d() const {
-            DiscreteForm1<Value, Complex> result(mesh_);
-            for (std::size_t e = 0; e < mesh_.num_edges(); ++e) {
-                auto [v0, v1] = mesh_.edge_at(e);
-                result.at_edge(e) = values_[v1] - values_[v0];
-            }
-            return result;
-        }
-
-        // Hodge star: 0-form -> 2-form (on triangles)
-        template<typename Metric>
-        DiscreteForm2<Value, Complex> star(const Metric& metric) const {
-            DiscreteForm2<Value, Complex> result(mesh_);
-            // For each triangle, (⋆f)_T = (area_T) * (average of f over vertices)
-            // More accurately, in DEC star of 0-form is a 2-form on dual cells, but we map to triangles.
-            // We'll use the average times triangle area.
-            for (std::size_t t = 0; t < mesh_.num_triangles(); ++t) {
-                auto tri = mesh_.triangle_at(t);
-                Value avg = (values_[tri[0]] + values_[tri[1]] + values_[tri[2]]) / Value{ 3 };
-                auto p0 = mesh_.vertex(tri[0]);
-                auto p1 = mesh_.vertex(tri[1]);
-                auto p2 = mesh_.vertex(tri[2]);
-                Value area = detail::triangle_area(p0, p1, p2, metric);
-                result.at_triangle(t) = avg * area;
-            }
-            return result;
-        }
-
-        // Refine: create a new form on a subdivided mesh (placeholder)
-        template<typename NewComplex>
-        DiscreteForm0<Value, NewComplex> refine(const NewComplex& new_mesh) const {
-            // Not implemented yet
-            throw std::runtime_error("DiscreteForm0::refine not implemented");
-        }
-
-    private:
-        const Complex& mesh_;
-        std::vector<Value> values_;
-    };
-
-    // -------------------------------------------------------------------------
-    // Discrete 1-form (values on oriented edges)
-    // -------------------------------------------------------------------------
-    template<typename Value, typename Complex>
-    class DiscreteForm1 {
-    public:
-        using value_type = Value;
-        using complex_type = Complex;
-
-        explicit DiscreteForm1(const Complex& mesh) : mesh_(mesh), values_(mesh.num_edges()) {}
-
-        Value& at_edge(std::size_t i) { return values_.at(i); }
-        const Value& at_edge(std::size_t i) const { return values_.at(i); }
-
-        std::size_t size() const { return values_.size(); }
-
-        // Exterior derivative: 1-form -> 2-form
-        DiscreteForm2<Value, Complex> d() const {
-            DiscreteForm2<Value, Complex> result(mesh_);
-            for (std::size_t t = 0; t < mesh_.num_triangles(); ++t) {
-                auto [v0, v1, v2] = mesh_.triangle_at(t);
-                auto e01 = mesh_.find_edge(v0, v1);
-                auto e12 = mesh_.find_edge(v1, v2);
-                auto e20 = mesh_.find_edge(v2, v0);
-                if (e01 < 0 || e12 < 0 || e20 < 0) {
-                    throw std::runtime_error("Edge not found in triangle");
+        // -------------------------------------------------------------------------
+        // Внешняя производная d : k-form -> (k+1)-form
+        // -------------------------------------------------------------------------
+        DiscreteForm<k + 1, Value, Complex> d() const {
+            static_assert(k + 1 <= Complex::dim(), "Cannot apply d: degree exceeds dimension");
+            DiscreteForm<k + 1, Value, Complex> result(mesh_);
+            for (std::size_t i = 0; i < mesh_.num_simplices(k + 1); ++i) {
+                auto faces = mesh_.incident_faces(k + 1, i, k);
+                Value sum{ 0 };
+                for (const auto& [face_idx, sign] : faces) {
+                    sum += static_cast<Value>(sign) * this->at(face_idx);
                 }
-                // Need orientation: assume triangle orientation is (v0,v1,v2)
-                // Then edges are oriented as v0->v1, v1->v2, v2->v0.
-                // If stored edge orientation might be opposite, we need to check sign.
-                // For now, assume edges are stored with orientation low->high, so we may need to flip sign if orientation mismatches.
-                // We'll ignore sign for simplicity (assume consistent orientation).
-                result.at_triangle(t) = values_[e01] + values_[e12] + values_[e20];
+                result.at(i) = sum;
             }
             return result;
         }
 
-        // Hodge star: 1-form -> 1-form (on primal edges, but with weights from dual edges)
+        // -------------------------------------------------------------------------
+        // Звёздочка Ходжа : k-form -> (n-k)-form (возвращает форму на том же комплексе
+        // с использованием дуальных объёмов). Требуется DualComplex.
+        // -------------------------------------------------------------------------
         template<typename Metric>
-        DiscreteForm1<Value, Complex> star(const Metric& metric) const {
-            DiscreteForm1<Value, Complex> result(mesh_);
-            for (std::size_t e = 0; e < mesh_.num_edges(); ++e) {
-                auto [v0, v1] = mesh_.edge_at(e);
-                Value primal_length = metric(mesh_.vertex(v0), mesh_.vertex(v1));
-                Value dual_length = detail::dual_edge_length(mesh_, e, metric);
-                // (⋆ω)_e = (|e*| / |e|) * ω_e
-                result.at_edge(e) = Value(dual_length / primal_length) * values_[e];
-            }
-            return result;
-        }
-
-        // Refine (placeholder)
-        template<typename NewComplex>
-        DiscreteForm1<Value, NewComplex> refine(const NewComplex& new_mesh) const {
-            throw std::runtime_error("DiscreteForm1::refine not implemented");
-        }
-
-    private:
-        const Complex& mesh_;
-        std::vector<Value> values_;
-    };
-
-    // -------------------------------------------------------------------------
-    // Discrete 2-form (values on triangles)
-    // -------------------------------------------------------------------------
-    template<typename Value, typename Complex>
-    class DiscreteForm2 {
-    public:
-        using value_type = Value;
-        using complex_type = Complex;
-
-        explicit DiscreteForm2(const Complex& mesh) : mesh_(mesh), values_(mesh.num_triangles()) {}
-
-        Value& at_triangle(std::size_t i) { return values_.at(i); }
-        const Value& at_triangle(std::size_t i) const { return values_.at(i); }
-
-        std::size_t size() const { return values_.size(); }
-
-        // Exterior derivative of 2-form is zero in 2D (but could be defined for 3D)
-        // Not needed for now.
-
-        // Hodge star: 2-form -> 0-form (on vertices)
-        template<typename Metric>
-        DiscreteForm0<Value, Complex> star(const Metric& metric) const {
-            DiscreteForm0<Value, Complex> result(mesh_);
-            // For each vertex, (⋆ρ)_v = sum_{t∋v} ρ_t * (area_t) / (3 * area_v) ??? Simplified.
-            // We'll use a simple average of incident triangle values weighted by area.
-            std::vector<Value> vertex_sum(mesh_.size(), Value{ 0 });
-            std::vector<Value> vertex_weight(mesh_.size(), Value{ 0 });
-            for (std::size_t t = 0; t < mesh_.num_triangles(); ++t) {
-                auto tri = mesh_.triangle_at(t);
-                auto p0 = mesh_.vertex(tri[0]);
-                auto p1 = mesh_.vertex(tri[1]);
-                auto p2 = mesh_.vertex(tri[2]);
-                Value area = detail::triangle_area(p0, p1, p2, metric);
-                Value contrib = values_[t] * area;
-                for (int i = 0; i < 3; ++i) {
-                    vertex_sum[tri[i]] += contrib;
-                    vertex_weight[tri[i]] += area;
-                }
-            }
-            for (std::size_t v = 0; v < mesh_.size(); ++v) {
-                if (vertex_weight[v] != Value{ 0 }) {
-                    result.at_vertex(v) = vertex_sum[v] / (Value{ 3 } * vertex_weight[v]); // dividing by total area? Need correct formula.
+        DiscreteForm<k, Value, Complex> star(const DualComplex<Complex>& dual, const Metric& metric) const {
+            static_assert(k <= Complex::dim(), "Invalid degree for Hodge star");
+            DiscreteForm<k, Value, Complex> result(mesh_);
+            for (std::size_t i = 0; i < values_.size(); ++i) {
+                Value vol_primal = detail::primal_volume<k>(mesh_, i, metric);
+                Value vol_dual = dual.dual_volume(k, i);
+                if (vol_primal == Value{ 0 }) {
+                    result.at(i) = Value{ 0 };
                 }
                 else {
-                    result.at_vertex(v) = Value{ 0 };
+                    result.at(i) = values_[i] * (vol_dual / vol_primal);
                 }
             }
             return result;
         }
 
-        // Refine (placeholder)
+        // -------------------------------------------------------------------------
+        // Интерполяция при подразделении
+        // -------------------------------------------------------------------------
         template<typename NewComplex>
-        DiscreteForm2<Value, NewComplex> refine(const NewComplex& new_mesh) const {
-            throw std::runtime_error("DiscreteForm2::refine not implemented");
+        DiscreteForm<k, Value, NewComplex> refine(const NewComplex& new_mesh,
+            const SubdivisionMap& subdiv_map,
+            const DualComplex<NewComplex>& /*new_dual*/) const {
+            static_assert(std::is_same_v<typename Complex::point_type,
+                typename NewComplex::point_type>,
+                "Point types must match for interpolation");
+
+            DiscreteForm<k, Value, NewComplex> result(new_mesh);
+
+            if constexpr (k == 0) {
+                // Для 0-форм: используем HatBasis для интерполяции значений в новых вершинах
+                HatBasis<NewComplex> basis(new_mesh);
+                for (std::size_t i = 0; i < new_mesh.num_vertices(); ++i) {
+                    auto p = new_mesh.vertex(i);
+                    Value val{ 0 };
+                    bool found = false;
+                    // Перебираем все исходные симплексы, ищем содержащий точку p
+                    for (int dim = Complex::dim(); dim >= 0 && !found; --dim) {
+                        for (std::size_t j = 0; j < mesh_.num_simplices(dim); ++j) {
+                            auto bary = basis.locate_point_in_simplex(p, mesh_, dim, j);
+                            if (bary.has_value()) {
+                                const auto& simp = mesh_.get_simplex(dim, j);
+                                val = Value{ 0 };
+                                for (std::size_t vi = 0; vi < simp.size(); ++vi) {
+                                    val += (*bary)[vi] * this->at(simp[vi]);
+                                }
+                                found = true;
+                                break;
+                            }
+                        }
+                    }
+                    result.at(i) = found ? val : Value{ 0 };
+                }
+            }
+            else {
+                // Для k>=1: используем карту подразделения – каждый новый симплекс наследует
+                // значение от исходного (простое копирование, не сохраняет внешнюю производную).
+                for (const auto& [old_key, new_keys] : subdiv_map) {
+                    if (old_key.dim == k) {
+                        Value old_val = this->at(old_key.idx);
+                        for (const auto& new_key : new_keys) {
+                            if (new_key.dim == k) {
+                                result.at(new_key.idx) = old_val;
+                            }
+                        }
+                    }
+                }
+            }
+            return result;
         }
 
     private:
@@ -261,28 +192,92 @@ namespace delta::geometry {
     };
 
     // -------------------------------------------------------------------------
-    // Codifferential and Laplacian (free functions)
+    // Внешнее произведение (wedge) – только для 0-форм (p=q=0)
     // -------------------------------------------------------------------------
-
-    /// Codifferential of a 1-form: δω = ⋆⁻¹ d ⋆ ω   (with appropriate sign)
-    /// In 2D for 1-forms: δ = - ⋆⁻¹ d ⋆
-    template<typename Value, typename Complex, typename Metric>
-    DiscreteForm0<Value, Complex> codifferential(const DiscreteForm1<Value, Complex>& omega,
-        const Metric& metric) {
-        const int n = 2; // dimension
-        const int k = 1; // degree
-        int sign = (n * (k - 1) + 1) % 2 == 0 ? 1 : -1; // (-1)^{n(k-1)+1}
-        auto star_omega = omega.star(metric);                // 1-form (dual weights)
-        auto d_star_omega = star_omega.d();                  // 2-form
-        auto star_d_star_omega = d_star_omega.star(metric); // 0-form
-        return sign * star_d_star_omega;
+    template<typename Value, typename Complex>
+    DiscreteForm<0, Value, Complex> wedge(const DiscreteForm<0, Value, Complex>& a,
+        const DiscreteForm<0, Value, Complex>& b) {
+        DiscreteForm<0, Value, Complex> result(a.mesh());
+        for (std::size_t i = 0; i < result.size(); ++i) {
+            result.at(i) = a.at(i) * b.at(i);
+        }
+        return result;
     }
 
-    /// Laplace-Beltrami operator on 0-forms: Δf = δ d f
-    template<typename Value, typename Complex, typename Metric>
-    DiscreteForm0<Value, Complex> laplacian(const DiscreteForm0<Value, Complex>& f,
+    // Для остальных комбинаций выдаём понятную ошибку компиляции
+    template<int p, int q, typename Value, typename Complex>
+    auto wedge(const DiscreteForm<p, Value, Complex>& a, const DiscreteForm<q, Value, Complex>& b) {
+        static_assert(p == 0 && q == 0,
+            "wedge product for these degrees not implemented yet (will be added in future updates)");
+        return DiscreteForm<p + q, Value, Complex>(a.mesh());
+    }
+
+    // -----------------------------------------------------------------------------
+    // Обратная звезда Ходжа (вспомогательная)
+    // -----------------------------------------------------------------------------
+    template<int k, typename Value, typename Complex, typename Metric>
+    DiscreteForm<k, Value, Complex> inverse_star(const DiscreteForm<k, Value, Complex>& omega,
+        const DualComplex<Complex>& dual,
         const Metric& metric) {
-        return codifferential(f.d(), metric);
+        static_assert(k <= Complex::dim(), "Invalid degree for inverse Hodge star");
+        DiscreteForm<k, Value, Complex> result(omega.mesh());
+        for (std::size_t i = 0; i < omega.size(); ++i) {
+            Value vol_primal = detail::primal_volume<k>(omega.mesh(), i, metric);
+            Value vol_dual = dual.dual_volume(k, i);
+            if (vol_dual == Value{ 0 }) {
+                result.at(i) = Value{ 0 };
+            }
+            else {
+                result.at(i) = omega.at(i) * (vol_primal / vol_dual);
+            }
+        }
+        return result;
+    }
+
+    // -----------------------------------------------------------------------------
+    // Кодифференциал δ = (-1)^{n(k-1)+1} * star^{-1} d star
+    // -----------------------------------------------------------------------------
+    template<int k, typename Value, typename Complex, typename Metric>
+    DiscreteForm<k - 1, Value, Complex> codifferential(const DiscreteForm<k, Value, Complex>& omega,
+        const DualComplex<Complex>& dual,
+        const Metric& metric) {
+        static_assert(k >= 1, "Cannot apply codifferential to a 0-form");
+        constexpr int n = Complex::dim();  // размерность пространства
+        // Знак: (-1)^{n(k-1)+1}
+        constexpr int sign = ((n * (k - 1) + 1) % 2 == 0) ? 1 : -1;
+
+        auto star_omega = omega.star(dual, metric);               // (n-k)-форма на примарном
+        auto d_star_omega = star_omega.d();                       // (n-k+1)-форма
+        auto star_d_star_omega = inverse_star(d_star_omega, dual, metric); // (k-1)-форма
+
+        DiscreteForm<k - 1, Value, Complex> result(omega.mesh());
+        for (std::size_t i = 0; i < result.size(); ++i) {
+            result.at(i) = static_cast<Value>(sign) * star_d_star_omega.at(i);
+        }
+        return result;
+    }
+
+    // -----------------------------------------------------------------------------
+    // Лапласиан Δ = dδ + δd
+    // -----------------------------------------------------------------------------
+    template<int k, typename Value, typename Complex, typename Metric>
+    DiscreteForm<k, Value, Complex> laplacian(const DiscreteForm<k, Value, Complex>& omega,
+        const DualComplex<Complex>& dual,
+        const Metric& metric) {
+        auto d_omega = omega.d();                                  // (k+1)-форма
+        auto delta_omega = codifferential(omega, dual, metric);    // (k-1)-форма
+
+        auto d_delta_omega = (k > 0) ? delta_omega.d() : DiscreteForm<0, Value, Complex>(omega.mesh());
+        auto delta_d_omega = codifferential(d_omega, dual, metric);
+
+        DiscreteForm<k, Value, Complex> result(omega.mesh());
+        for (std::size_t i = 0; i < result.size(); ++i) {
+            Value val{ 0 };
+            if (k > 0) val += d_delta_omega.at(i);
+            val += delta_d_omega.at(i);
+            result.at(i) = val;
+        }
+        return result;
     }
 
 } // namespace delta::geometry

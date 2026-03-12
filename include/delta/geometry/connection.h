@@ -6,6 +6,7 @@
 #include <utility>
 #include <Eigen/Core>
 #include "matrix_field.h"
+#include "delta/geometry/simplicial_complex.h" // для SubdivisionMap
 
 namespace delta::geometry {
 
@@ -28,6 +29,11 @@ namespace delta::geometry {
             using edge_type = std::pair<Addr, Addr>;
             using matrix_type = Group;
 
+            // -------------------------------------------------------------------------
+            // Конструкторы и основные методы
+            // -------------------------------------------------------------------------
+            Connection() = default;
+
             // Установить матрицу транспорта для ориентированного ребра (from -> to)
             void set_transport(const Addr& from, const Addr& to, const matrix_type& mat) {
                 transport_[{from, to}] = mat;
@@ -45,8 +51,7 @@ namespace delta::geometry {
                 if (it_rev != transport_.end()) {
                     return it_rev->second.inverse();
                 }
-                // Если ребро не задано, можно вернуть единичную матрицу или кинуть исключение
-                // По умолчанию вернём identity (что соответствует тривиальной связности)
+                // Если ребро не задано, возвращаем единичную матрицу (тривиальная связность)
                 return matrix_type::Identity();
             }
 
@@ -65,9 +70,69 @@ namespace delta::geometry {
                 return result;
             }
 
-            // Проверка согласованности при подразделении:
-            // Для каждого грубого ребра (coarse_edge) задан список составляющих его мелких рёбер (fine_edges).
-            // Произведение транспортов на мелких должно равняться транспорту на грубом (с точностью до tolerance).
+            // -------------------------------------------------------------------------
+            // Создание тривиальной связности
+            // -------------------------------------------------------------------------
+            /**
+             * @brief Создаёт тривиальную связность на заданном наборе рёбер.
+             * @param edges Вектор рёбер (каждое ребро задаётся парой вершин).
+             * @return Connection с единичными матрицами на всех рёбрах.
+             */
+            static Connection trivial(const std::vector<edge_type>& edges) {
+                Connection conn;
+                for (const auto& e : edges) {
+                    conn.set_transport(e.first, e.second, matrix_type::Identity());
+                }
+                return conn;
+            }
+
+            // -------------------------------------------------------------------------
+            // Построение из калибровочного поля
+            // -------------------------------------------------------------------------
+            /**
+             * @brief Создаёт связность из калибровочного поля (поле групповых элементов).
+             * @tparam GaugeField Тип калибровочного поля (должен предоставлять метод matrix()).
+             * @param gf Калибровочное поле.
+             * @param mesh Симплициальный комплекс (нужен для доступа к рёбрам).
+             * @return Connection с матрицами, равными групповым элементам (преобразованным в матрицы).
+             */
+            template<typename GaugeField, typename Complex>
+            static Connection from_gauge_field(const GaugeField& gf, const Complex& mesh) {
+                Connection conn;
+                for (std::size_t e = 0; e < mesh.num_edges(); ++e) {
+                    auto [v0, v1] = mesh.edge_at(e);
+                    conn.set_transport(v0, v1, gf.link(e).matrix());
+                }
+                return conn;
+            }
+
+            /**
+             * @brief Преобразует связность в калибровочное поле.
+             * @tparam GaugeField Тип калибровочного поля (должен иметь конструктор от матрицы).
+             * @param mesh Симплициальный комплекс.
+             * @return GaugeField, заполненное матрицами из связности.
+             */
+            template<typename GaugeField, typename Complex>
+            GaugeField to_gauge_field(const Complex& mesh) const {
+                GaugeField gf(mesh);
+                for (std::size_t e = 0; e < mesh.num_edges(); ++e) {
+                    auto [v0, v1] = mesh.edge_at(e);
+                    auto mat = get_transport(v0, v1);
+                    gf.link(e) = typename GaugeField::group_type(mat);
+                }
+                return gf;
+            }
+
+            // -------------------------------------------------------------------------
+            // Проверка согласованности при подразделении
+            // -------------------------------------------------------------------------
+            /**
+             * @brief Проверяет, что связность на мелкой сетке согласована с грубой.
+             * @param fine Связность на мелкой сетке.
+             * @param coarse_to_fine Отображение: грубое ребро (в виде пары вершин) -> список мелких рёбер (каждое мелкое ребро задаётся парой вершин).
+             * @param tolerance Допуск.
+             * @return true, если для каждого грубого ребра произведение транспортов на мелких рёбрах равно транспорту на грубом.
+             */
             template<typename EdgeList>
             bool is_consistent(const Connection& fine,
                 const std::vector<std::pair<edge_type, EdgeList>>& coarse_to_fine,
@@ -82,10 +147,52 @@ namespace delta::geometry {
                 return true;
             }
 
-            // Количество рёбер
-            std::size_t size() const { return transport_.size(); }
+            /**
+             * @brief Перегрузка для использования SubdivisionMap (карта подразделения симплициального комплекса).
+             * @param fine Связность на мелкой сетке.
+             * @param subdiv_map Карта подразделения (исходный симплекс -> список новых симплексов).
+             * @param coarse_mesh Грубая сетка.
+             * @param fine_mesh Мелкая сетка.
+             * @param tolerance Допуск.
+             * @return true, если для каждого грубого ребра произведение транспортов на мелких рёбрах равно транспорту на грубом.
+             */
+            bool is_consistent(const Connection& fine,
+                const SubdivisionMap& subdiv_map,
+                const SimplicialComplex<Dim, Scalar>& coarse_mesh,
+                const SimplicialComplex<Dim, Scalar>& fine_mesh,
+                double tolerance = 1e-12) const {
+                // Собираем отображение грубое ребро -> список мелких рёбер
+                std::vector<std::pair<edge_type, std::vector<edge_type>>> coarse_to_fine;
 
-            // Итераторы для обхода
+                // Перебираем все грубые рёбра (размерность 1)
+                for (std::size_t idx = 0; idx < coarse_mesh.num_edges(); ++idx) {
+                    auto coarse_edge = coarse_mesh.edge_at(idx);
+                    SimplexKey key{ 1, idx };
+                    auto it = subdiv_map.find(key);
+                    if (it == subdiv_map.end()) continue;
+
+                    std::vector<edge_type> fine_edges;
+                    for (const auto& new_key : it->second) {
+                        if (new_key.dim != 1) continue; // только рёбра
+                        auto fine_edge = fine_mesh.edge_at(new_key.idx);
+                        // Определяем ориентацию: если мелкое ребро совпадает по направлению с грубым, оставляем как есть,
+                        // иначе берём обратный элемент? Пока будем считать, что все мелкие рёбра ориентированы так же,
+                        // как грубое (это требует проверки). Для простоты оставляем как есть.
+                        fine_edges.push_back({ fine_mesh.vertex(fine_edge[0]), fine_mesh.vertex(fine_edge[1]) });
+                    }
+                    coarse_to_fine.emplace_back(
+                        edge_type{ coarse_mesh.vertex(coarse_edge[0]), coarse_mesh.vertex(coarse_edge[1]) },
+                        std::move(fine_edges)
+                    );
+                }
+
+                return is_consistent(fine, coarse_to_fine, tolerance);
+            }
+
+            // -------------------------------------------------------------------------
+            // Итераторы и размер
+            // -------------------------------------------------------------------------
+            std::size_t size() const { return transport_.size(); }
             auto begin() const { return transport_.begin(); }
             auto end() const { return transport_.end(); }
 
@@ -93,7 +200,10 @@ namespace delta::geometry {
             std::map<edge_type, matrix_type> transport_;
     };
 
-    // Вспомогательная функция для создания связности из MatrixField на рёбрах
+    // -------------------------------------------------------------------------
+    // Вспомогательные функции
+    // -------------------------------------------------------------------------
+
     template<typename Addr, typename Scalar, int Dim>
     Connection<Addr, Scalar, Dim>
         make_connection(const MatrixField<std::pair<Addr, Addr>, Scalar, Dim>& field) {

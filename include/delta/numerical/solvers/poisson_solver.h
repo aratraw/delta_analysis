@@ -1,158 +1,139 @@
 // include/delta/numerical/solvers/poisson_solver.h
 #pragma once
 
-#include "delta/core/grid_concept.h"
-#include "delta/core/regulative_idea.h"
 #include "delta/geometry/simplicial_complex.h"
-#include "delta/numerical/discrete_operators.h"
-#include "delta/numerical/grid_differences.h"
+#include "delta/numerical/fem_assemblers.h"
+#include "delta/numerical/boundary_conditions.h"
+#include "delta/core/operational_function.h"
 #include <Eigen/Sparse>
 #include <vector>
+#include <unordered_map>
 
 namespace delta::numerical {
 
-    /**
-     * @brief Solve the Poisson equation -Δu = f on a simplicial mesh with Dirichlet BC.
-     *
-     * @tparam Complex  Type satisfying SimplicialComplex.
-     * @tparam Metric   Address metric.
-     * @param mesh      The mesh.
-     * @param rhs       Right-hand side values at vertices (size = mesh.size()).
-     * @param dirichlet_mask Boolean mask for Dirichlet vertices (true = fixed).
-     * @param dirichlet_values Fixed values at Dirichlet vertices.
-     * @param metric    Metric used for Laplacian.
-     * @return std::vector<typename Complex::value_type> Solution at vertices.
-     */
-    template<typename Complex, typename Metric>
-    std::vector<typename Complex::value_type>
-        solve_poisson(const Complex& mesh,
-            const std::vector<typename Complex::value_type>& rhs,
-            const std::vector<bool>& dirichlet_mask,
-            const std::vector<typename Complex::value_type>& dirichlet_values,
-            const Metric& metric) {
-        using Value = typename Complex::value_type;
-        std::size_t n = mesh.size();
+    // -----------------------------------------------------------------------------
+    // Concept for a finite element grid (reused from heat_solver)
+    // -----------------------------------------------------------------------------
+    template<typename G>
+    concept FiniteElementGrid = requires(G g, std::size_t i) {
+        typename G::point_type;
+        { g.num_vertices() } -> std::convertible_to<std::size_t>;
+        { g.vertex(i) } -> std::same_as<typename G::point_type>;
+        { g.num_triangles() } -> std::convertible_to<std::size_t>;
+        { g.triangle_at(i) } -> std::same_as<typename G::triangle_type>;
+    };
 
-        // Build cotangent Laplacian matrix
-        std::vector<Eigen::Triplet<Value>> triplets;
-        std::vector<Value> vertex_areas(n, Value{ 0 });
-
-        // Compute vertex areas (Voronoi)
-        for (std::size_t t = 0; t < mesh.num_triangles(); ++t) {
-            auto [v0, v1, v2] = mesh.triangle(t);
-            auto p0 = mesh.vertex(v0);
-            auto p1 = mesh.vertex(v1);
-            auto p2 = mesh.vertex(v2);
-            Value area = triangle_area(p0, p1, p2, metric);
-            vertex_areas[v0] += area / Value{ 3 };
-            vertex_areas[v1] += area / Value{ 3 };
-            vertex_areas[v2] += area / Value{ 3 };
+    // -----------------------------------------------------------------------------
+    // Helper: build vertex -> index map (copied from heat_solver)
+    // -----------------------------------------------------------------------------
+    template<typename Complex>
+    std::unordered_map<typename Complex::point_type, std::size_t>
+        build_vertex_to_index_map(const Complex& mesh) {
+        using Point = typename Complex::point_type;
+        std::unordered_map<Point, std::size_t> map;
+        map.reserve(mesh.num_vertices());
+        for (std::size_t i = 0; i < mesh.num_vertices(); ++i) {
+            map[mesh.vertex(i)] = i;
         }
+        return map;
+    }
 
-        // Compute cotangent weights
-        for (std::size_t t = 0; t < mesh.num_triangles(); ++t) {
-            auto [v0, v1, v2] = mesh.triangle(t);
-            auto p0 = mesh.vertex(v0);
-            auto p1 = mesh.vertex(v1);
-            auto p2 = mesh.vertex(v2);
+    // -----------------------------------------------------------------------------
+    // Poisson solver for simplicial meshes (2D/3D) using FEM (Δ‑style)
+    // Solves -Δu = f  with Dirichlet BC.
+    // Returns solution as OperationalFunction on vertices.
+    // -----------------------------------------------------------------------------
+    template<typename Path, typename Value, typename Metric, typename BC>
+        requires FiniteElementGrid<typename Path::GridType>
+    OperationalFunction<typename Path::GridType::point_type, Value, typename Path::GridType>
+        solve_poisson(
+            const Path& path,
+            const OperationalFunction<typename Path::GridType::point_type, Value, typename Path::GridType>& rhs,
+            const BC& bc,
+            const Metric& metric,
+            double time = 0.0)   // time for time-dependent BC (though Poisson is static)
+    {
+        using Complex = typename Path::GridType;
+        using Point = typename Complex::point_type;
+        using Index = int;
+        const Complex& mesh = path.current_grid();
+        std::size_t n = mesh.num_vertices();
 
-            auto cot = [&](const auto& a, const auto& b, const auto& c) -> Value {
-                auto ab = b - a;
-                auto ac = c - a;
-                Value dot = ab.dot(ac);
-                Value cross = abs(ab.x() * ac.y() - ab.y() * ac.x());
-                if (cross == Value{ 0 }) return Value{ 0 };
-                return dot / cross;
-                };
+        // Precompute vertex->index map for final function
+        auto vertex_to_idx = build_vertex_to_index_map(mesh);
 
-            Value cot0 = cot(p1, p2, p0);
-            Value cot1 = cot(p2, p0, p1);
-            Value cot2 = cot(p0, p1, p2);
+        // Assemble stiffness matrix K and mass matrix M
+        auto K = assemble_stiffness_matrix(mesh);   // cotangent Laplacian
+        auto M = assemble_mass_matrix(mesh);
 
-            auto add_edge = [&](std::size_t i, std::size_t j, Value w) {
-                if (dirichlet_mask[i] && dirichlet_mask[j]) return; // both fixed, no equation
-                if (!dirichlet_mask[i] && !dirichlet_mask[j]) {
-                    triplets.emplace_back(i, j, -w / (Value{ 2 } * vertex_areas[i]));
-                    triplets.emplace_back(j, i, -w / (Value{ 2 } * vertex_areas[j]));
-                    triplets.emplace_back(i, i, w / (Value{ 2 } * vertex_areas[i]));
-                    triplets.emplace_back(j, j, w / (Value{ 2 } * vertex_areas[j]));
-                }
-                else if (!dirichlet_mask[i]) {
-                    // j is fixed: move to RHS
-                    triplets.emplace_back(i, i, w / (Value{ 2 } * vertex_areas[i]));
-                    // RHS contribution will be added later
-                }
-                else {
-                    // i is fixed, j free: similar
-                    triplets.emplace_back(j, j, w / (Value{ 2 } * vertex_areas[j]));
-                }
-                };
-
-            add_edge(v0, v1, cot2);
-            add_edge(v1, v2, cot0);
-            add_edge(v2, v0, cot1);
-        }
-
-        Eigen::SparseMatrix<Value> A(n, n);
-        A.setFromTriplets(triplets.begin(), triplets.end());
-
+        // Right-hand side vector: b = M * f (where f is the rhs function)
         Eigen::Matrix<Value, Eigen::Dynamic, 1> b(n);
+        b.setZero();
         for (std::size_t i = 0; i < n; ++i) {
-            b(i) = rhs[i];
-            if (dirichlet_mask[i]) {
-                A.row(i).setZero();
-                A.coeffRef(i, i) = 1.0;
-                b(i) = dirichlet_values[i];
+            Value f_i = rhs(mesh.vertex(i));
+            for (typename Eigen::SparseMatrix<Value>::InnerIterator it(M, i); it; ++it) {
+                b(it.row()) += it.value() * f_i;
             }
         }
 
-        Eigen::SparseLU<Eigen::SparseMatrix<Value>> solver;
-        solver.compute(A);
-        Eigen::Matrix<Value, Eigen::Dynamic, 1> x = solver.solve(b);
+        // System matrix A = K (since we solve K u = M f)
+        Eigen::SparseMatrix<Value> A = K;
 
-        std::vector<Value> result(n);
-        for (std::size_t i = 0; i < n; ++i) result[i] = x(i);
-        return result;
-    }
-
-    // -------------------------------------------------------------------------
-    // Poisson solver for Cartesian (coordinate) grids
-    // -------------------------------------------------------------------------
-    template<typename Grid, typename Metric>
-    std::vector<typename Grid::value_type>
-        solve_poisson_cartesian(const Grid& grid,
-            const std::vector<typename Grid::value_type>& rhs,
-            const std::vector<bool>& dirichlet_mask,
-            const std::vector<typename Grid::value_type>& dirichlet_values,
-            const Metric& metric) {
-        using Value = typename Grid::value_type;
-        auto A = build_laplacian_matrix(grid, metric);
-        std::size_t n = grid.size();
-
-        Eigen::Matrix<Value, Eigen::Dynamic, 1> b(n);
+        // Apply boundary conditions (Dirichlet only)
+        // We modify A and b in place, but we need a copy of A to avoid destroying original.
+        // Since we won't reuse A, we can modify it directly.
         for (std::size_t i = 0; i < n; ++i) {
-            b(i) = rhs[i];
-            if (dirichlet_mask[i]) {
-                // Dirichlet: строка заменяется на единичную
+            BCType type;
+            BCValue<Value> bc_val;
+            if (!bc.get(i, type, bc_val)) continue;
+            if (type == BCType::Dirichlet) {
+                Value g = bc_val(time, i);
+                // Zero out row i
                 for (int k = 0; k < A.outerSize(); ++k) {
                     for (typename Eigen::SparseMatrix<Value>::InnerIterator it(A, k); it; ++it) {
-                        if (it.row() == static_cast<int>(i) || it.col() == static_cast<int>(i)) {
+                        if (it.row() == static_cast<Index>(i)) {
                             it.valueRef() = 0;
                         }
                     }
                 }
-                A.coeffRef(static_cast<int>(i), static_cast<int>(i)) = 1.0;
-                b(i) = dirichlet_values[i];
+                A.coeffRef(static_cast<Index>(i), static_cast<Index>(i)) = 1.0;
+                b(i) = g;
             }
+            // Neumann/Robin not implemented (would require modification)
         }
 
+        // Solve linear system
         Eigen::SparseLU<Eigen::SparseMatrix<Value>> solver;
         solver.compute(A);
+        if (solver.info() != Eigen::Success) {
+            throw std::runtime_error("Poisson solver: matrix factorization failed");
+        }
         Eigen::Matrix<Value, Eigen::Dynamic, 1> x = solver.solve(b);
+        if (solver.info() != Eigen::Success) {
+            throw std::runtime_error("Poisson solver: solution failed");
+        }
 
-        std::vector<Value> result(n);
-        for (std::size_t i = 0; i < n; ++i) result[i] = x(i);
-        return result;
+        // Extract solution vector
+        std::vector<Value> u_vec(n);
+        for (std::size_t i = 0; i < n; ++i) {
+            u_vec[i] = x(static_cast<Index>(i));
+        }
+
+        // Build final OperationalFunction
+        auto vertex_to_idx_copy = vertex_to_idx;
+        auto u_vec_copy = u_vec;
+        OperationalFunction<Point, Value, Complex> u_final(
+            mesh,
+            [vertex_to_idx_copy, u_vec_copy](const Point& addr) -> Value {
+                auto it = vertex_to_idx_copy.find(addr);
+                if (it == vertex_to_idx_copy.end()) {
+                    throw std::out_of_range("Address not found in Poisson solution");
+                }
+                return u_vec_copy[it->second];
+            }
+        );
+
+        return u_final;
     }
 
 } // namespace delta::numerical

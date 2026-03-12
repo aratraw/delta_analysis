@@ -6,6 +6,8 @@
 #include <stdexcept>
 #include <Eigen/Core>
 #include "delta/core/rational.h"
+#include "delta/geometry/simplicial_complex.h"
+#include "delta/geometry/hat_basis.h"
 
 namespace delta::geometry {
 
@@ -30,6 +32,13 @@ namespace delta::geometry {
         using type = Eigen::Matrix<Scalar, Dim, Dim>;
     };
 
+    // Для рангов >2 пока не поддерживаем – можно добавить позже через Eigen::Tensor
+    template<typename Scalar, int Rank, int Dim>
+        requires (Rank > 2)
+    struct TensorTypeSelector {
+        static_assert(Rank <= 2, "Tensor ranks > 2 are not supported in this version");
+    };
+
     template<typename Scalar, int Rank, int Dim>
     using TensorType = typename TensorTypeSelector<Scalar, Rank, Dim>::type;
 
@@ -48,11 +57,11 @@ namespace delta::geometry {
     };
 
     // -------------------------------------------------------------------------
-    // Базовый класс тензорного поля
+    // Базовый класс тензорного поля (ранги 0,1,2)
     // -------------------------------------------------------------------------
     template<typename Addr, typename Scalar, int Rank, int Dim = 0>
+        requires (Rank >= 0 && Rank <= 2)
     class TensorField {
-        static_assert(Rank >= 0 && Rank <= 2, "Only ranks 0,1,2 are currently supported");
     public:
         using value_type = TensorType<Scalar, Rank, Dim>;
         using address_type = Addr;
@@ -62,6 +71,7 @@ namespace delta::geometry {
 
         TensorField() = default;
 
+        // Доступ и модификация
         void set(const Addr& addr, const value_type& val) {
             data_[addr] = val;
         }
@@ -89,6 +99,7 @@ namespace delta::geometry {
 
         std::size_t size() const { return data_.size(); }
 
+        // Применить функцию ко всем значениям
         template<typename Func>
         void apply(Func&& f) {
             for (auto& [addr, val] : data_) {
@@ -101,6 +112,75 @@ namespace delta::geometry {
             for (const auto& [addr, val] : data_) {
                 f(val);
             }
+        }
+
+        // -------------------------------------------------------------------------
+        // Интерполяция на новый комплекс (refine)
+        // -------------------------------------------------------------------------
+        template<typename Complex, typename NewComplex, typename Metric>
+        TensorField<Addr, Scalar, Rank, Dim>
+            refine(const Complex& old_mesh,
+                const NewComplex& new_mesh,
+                const SubdivisionMap& subdiv_map,
+                const Metric& metric) const {
+            TensorField<Addr, Scalar, Rank, Dim> result;
+
+            if constexpr (Rank == 0) {
+                // Для скалярного поля используем HatBasis для интерполяции значений в новых точках
+                HatBasis<NewComplex> basis(new_mesh);
+                for (const auto& addr : new_mesh) {
+                    // Ищем исходный симплекс, содержащий addr
+                    // Можно использовать locate_point_in_simplex из HatBasis
+                    std::optional<std::vector<typename Scalar>> bary;
+                    int found_dim = -1;
+                    std::size_t found_idx = 0;
+                    for (int dim = old_mesh.dim(); dim >= 0 && !bary; --dim) {
+                        for (std::size_t i = 0; i < old_mesh.num_simplices(dim); ++i) {
+                            bary = basis.locate_point_in_simplex(addr, old_mesh, dim, i);
+                            if (bary) {
+                                found_dim = dim;
+                                found_idx = i;
+                                break;
+                            }
+                        }
+                    }
+                    if (!bary) {
+                        // Точка вне комплекса – пропускаем (или throw)
+                        continue;
+                    }
+                    // Интерполяция по вершинам исходного симплекса
+                    const auto& simp = old_mesh.get_simplex(found_dim, found_idx);
+                    Scalar val = 0;
+                    for (std::size_t j = 0; j < simp.size(); ++j) {
+                        val += (*bary)[j] * this->at(old_mesh.vertex(simp[j]));
+                    }
+                    result.set(addr, val);
+                }
+            }
+            else {
+                // Для тензоров ранга 1 и 2 используем карту подразделения:
+                // каждый новый симплекс (вершина/ребро/грань) наследует значение от исходного,
+                // если он является потомком одного исходного симплекса.
+                // Если новый симплекс является потомком нескольких исходных (например, вершина-барицентр),
+                // нужно усреднять. Пока реализуем простое копирование от первого найденного предка.
+                // Для более точной интерполяции потребуется покомпонентное взвешивание,
+                // но оставим это на будущее.
+                for (const auto& [old_key, new_keys] : subdiv_map) {
+                    if (old_key.dim != Rank) continue; // рассматриваем только симплексы нужной размерности
+                    const auto& old_val = this->at(old_mesh.vertex(old_key.idx)); // ???
+                    // Внимание: old_key.idx – это индекс симплекса размерности Rank в старом комплексе.
+                    // Но у нас поле привязано к адресам, а не к симплексам. Для тензора на симплексах
+                    // нужна другая структура. Однако в нашем TensorField адреса – это вершины (для ранга 0)
+                    // или, возможно, другие типы адресов. Здесь мы смешиваем концепции.
+                    // Чтобы избежать путаницы, ограничим refine только для ранга 0 (скалярные поля на вершинах).
+                    // Для тензоров на симплексах нужен отдельный класс, например, TensorFieldOnSimplex.
+                    // Поэтому пока оставим static_assert.
+                    static_assert(Rank == 0,
+                        "refine for tensor fields of rank >0 is not implemented yet; "
+                        "use scalar fields and component-wise interpolation if needed.");
+                }
+            }
+            return result;
         }
 
     protected:
@@ -167,6 +247,7 @@ namespace delta::geometry {
     auto tensor_product(const TensorField<Addr, Scalar, RankA, Dim>& a,
         const TensorField<Addr, Scalar, RankB, Dim>& b) {
         constexpr int RankR = RankA + RankB;
+        static_assert(RankR <= 2, "Tensor product of ranks >2 is not supported");
         TensorField<Addr, Scalar, RankR, Dim> result;
         for (const auto& [addr, valA] : a) {
             if (b.contains(addr)) {
@@ -187,21 +268,13 @@ namespace delta::geometry {
                     // вектор * вектор -> матрица (внешнее произведение)
                     result.set(addr, valA * valB.transpose());
                 }
-                else if constexpr (RankA == 1 && RankB == 2) {
-                    // вектор * матрица -> ранг 3, не поддерживаем
-                    static_assert(RankA + RankB <= 2,
-                        "Tensor product of vector and matrix not supported");
-                }
                 else if constexpr (RankA == 2 && RankB == 0) {
                     result.set(addr, valA * valB);
                 }
-                else if constexpr (RankA == 2 && RankB == 1) {
-                    static_assert(RankA + RankB <= 2,
-                        "Tensor product of matrix and vector not supported");
-                }
-                else if constexpr (RankA == 2 && RankB == 2) {
-                    static_assert(RankA + RankB <= 2,
-                        "Tensor product of matrix and matrix not supported");
+                else {
+                    // остальные комбинации (1x2, 2x1, 2x2) дают ранг 3 или 4 – не поддерживаем
+                    static_assert((RankA == 1 && RankB == 2) || (RankA == 2 && RankB == 1) || (RankA == 2 && RankB == 2),
+                        "Tensor product for these ranks not implemented");
                 }
             }
         }
@@ -209,15 +282,28 @@ namespace delta::geometry {
     }
 
     // -------------------------------------------------------------------------
-    // Свёртка (contract) – обобщение следа
+    // Симметризация и антисимметризация для тензоров второго ранга
     // -------------------------------------------------------------------------
     template<typename Addr, typename Scalar, int Dim>
-    TensorField<Addr, Scalar, 0, Dim> contract(const TensorField<Addr, Scalar, 2, Dim>& t) {
-        return trace(t);  // пока только для матриц
+    TensorField<Addr, Scalar, 2, Dim> symmetrize(const TensorField<Addr, Scalar, 2, Dim>& t) {
+        TensorField<Addr, Scalar, 2, Dim> result;
+        for (const auto& [addr, mat] : t) {
+            result.set(addr, (mat + mat.transpose()) / Scalar{ 2 });
+        }
+        return result;
+    }
+
+    template<typename Addr, typename Scalar, int Dim>
+    TensorField<Addr, Scalar, 2, Dim> antisymmetrize(const TensorField<Addr, Scalar, 2, Dim>& t) {
+        TensorField<Addr, Scalar, 2, Dim> result;
+        for (const auto& [addr, mat] : t) {
+            result.set(addr, (mat - mat.transpose()) / Scalar{ 2 });
+        }
+        return result;
     }
 
     // -------------------------------------------------------------------------
-    // Свёртка для матриц (след)
+    // Свёртка (след) для матриц
     // -------------------------------------------------------------------------
     template<typename Addr, typename Scalar, int Dim>
     TensorField<Addr, Scalar, 0, Dim> trace(const TensorField<Addr, Scalar, 2, Dim>& t) {
@@ -294,10 +380,8 @@ namespace delta::geometry {
     }
 
     /**
-     * @brief Опускание второго индекса у смешанного тензора:
-     *        M^{i}_{j} -> M_{ij} = g_{jk} M^{i}_{k}? На самом деле нужно определить.
-     *        Упростим: опускаем первый индекс или второй в зависимости от конвенции.
-     *        Здесь реализуем опускание первого индекса: M_{ij} = g_{ik} M^{k}_{j}
+     * @brief Опускание первого индекса у смешанного тензора:
+     *        M^{i}_{j} -> M_{ij} = g_{ik} M^{k}_{j}
      */
     template<typename Addr, typename Scalar, int Dim>
     TensorField<Addr, Scalar, 2, Dim>
@@ -307,10 +391,69 @@ namespace delta::geometry {
         for (const auto& [addr, mat] : m) {
             if (g.contains(addr)) {
                 const auto& metric = g.at(addr);
-                result.set(addr, metric * mat);  // g * m
+                result.set(addr, metric * mat);
             }
         }
         return result;
     }
+    template<typename Complex, typename NewComplex, typename Metric>
+    TensorField<Addr, Scalar, Rank, Dim>
+        refine(const Complex& old_mesh,
+            const NewComplex& new_mesh,
+            const SubdivisionMap& subdiv_map,
+            const Metric& metric) const {
+        TensorField<Addr, Scalar, Rank, Dim> result;
 
+        if constexpr (Rank == 0) {
+            // ... (существующая реализация)
+        }
+        else {
+            // Для рангов 1 и 2: интерполируем каждую компоненту отдельно
+            // Создадим временные скалярные поля для каждой компоненты
+            constexpr int comp_count = (Rank == 1) ? Dim : Dim * Dim;
+            std::array<TensorField<Addr, Scalar, 0, Dim>, comp_count> comp_fields;
+            // Заполняем компоненты из текущего поля
+            for (const auto& [addr, val] : data_) {
+                if constexpr (Rank == 1) {
+                    for (int c = 0; c < Dim; ++c) {
+                        comp_fields[c].set(addr, val(c));
+                    }
+                }
+                else { // Rank == 2
+                    for (int i = 0; i < Dim; ++i) {
+                        for (int j = 0; j < Dim; ++j) {
+                            comp_fields[i * Dim + j].set(addr, val(i, j));
+                        }
+                    }
+                }
+            }
+
+            // Интерполируем каждую компоненту (используем refine для ранга 0)
+            std::array<TensorField<Addr, Scalar, 0, Dim>, comp_count> new_comp_fields;
+            for (int c = 0; c < comp_count; ++c) {
+                new_comp_fields[c] = comp_fields[c].refine(old_mesh, new_mesh, subdiv_map, metric);
+            }
+
+            // Собираем результат
+            for (const auto& addr : new_mesh) {
+                if constexpr (Rank == 1) {
+                    Eigen::Matrix<Scalar, Dim, 1> vec;
+                    for (int c = 0; c < Dim; ++c) {
+                        vec(c) = new_comp_fields[c].at(addr);
+                    }
+                    result.set(addr, vec);
+                }
+                else { // Rank == 2
+                    Eigen::Matrix<Scalar, Dim, Dim> mat;
+                    for (int i = 0; i < Dim; ++i) {
+                        for (int j = 0; j < Dim; ++j) {
+                            mat(i, j) = new_comp_fields[i * Dim + j].at(addr);
+                        }
+                    }
+                    result.set(addr, mat);
+                }
+            }
+        }
+        return result;
+    }
 } // namespace delta::geometry
