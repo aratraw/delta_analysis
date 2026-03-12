@@ -4,6 +4,7 @@
 #include "delta/geometry/simplicial_complex.h"
 #include "delta/numerical/fem_assemblers.h"
 #include "delta/numerical/boundary_conditions.h"
+#include "delta/numerical/concepts.h"
 #include "delta/core/operational_function.h"
 #include <Eigen/Sparse>
 #include <vector>
@@ -11,18 +12,6 @@
 #include <cmath>
 
 namespace delta::numerical {
-
-    // -----------------------------------------------------------------------------
-    // Concept for a finite element grid (same as in heat_solver)
-    // -----------------------------------------------------------------------------
-    template<typename G>
-    concept FiniteElementGrid = requires(G g, std::size_t i) {
-        typename G::point_type;
-        { g.num_vertices() } -> std::convertible_to<std::size_t>;
-        { g.vertex(i) } -> std::same_as<typename G::point_type>;
-        { g.num_triangles() } -> std::convertible_to<std::size_t>;
-        { g.triangle_at(i) } -> std::same_as<typename G::triangle_type>;
-    };
 
     // -----------------------------------------------------------------------------
     // Helper: build vertex -> index map (copied from heat_solver)
@@ -44,8 +33,9 @@ namespace delta::numerical {
     // Solves: M * d²u/dt² = -c² K u + M f
     // -----------------------------------------------------------------------------
     template<typename Path, typename Value, typename SourceFunc, typename Metric, typename BC>
-        requires FiniteElementGrid<typename Path::GridType>
-    OperationalFunction<typename Path::GridType::point_type, Value, typename Path::GridType>
+        requires FiniteElementGrid<typename Path::GridType>&&
+    IsMetric<Metric, typename Path::GridType::point_type, typename Path::GridType::scalar_type>
+        OperationalFunction<typename Path::GridType::point_type, Value, typename Path::GridType>
         solve_wave_explicit(
             const Path& path,
             const OperationalFunction<typename Path::GridType::point_type, Value, typename Path::GridType>& u0,
@@ -66,9 +56,9 @@ namespace delta::numerical {
         // Precompute vertex->index map for final function
         auto vertex_to_idx = build_vertex_to_index_map(mesh);
 
-        // Assemble matrices
-        auto K = assemble_stiffness_matrix(mesh);   // stiffness
-        auto M = assemble_mass_matrix(mesh);
+        // Assemble matrices using metric
+        auto K = assemble_stiffness_matrix(mesh, metric);   // stiffness
+        auto M = assemble_mass_matrix(mesh, metric);
         auto lumpedM = lumped_mass_matrix(M);       // diagonal lumped mass
 
         // Extract initial displacement and velocity
@@ -143,8 +133,9 @@ namespace delta::numerical {
     // Parameters: beta, gamma (defaults to average acceleration: beta=0.25, gamma=0.5)
     // -----------------------------------------------------------------------------
     template<typename Path, typename Value, typename SourceFunc, typename Metric, typename BC>
-        requires FiniteElementGrid<typename Path::GridType>
-    OperationalFunction<typename Path::GridType::point_type, Value, typename Path::GridType>
+        requires FiniteElementGrid<typename Path::GridType>&&
+    IsMetric<Metric, typename Path::GridType::point_type, typename Path::GridType::scalar_type>
+        OperationalFunction<typename Path::GridType::point_type, Value, typename Path::GridType>
         solve_wave_newmark(
             const Path& path,
             const OperationalFunction<typename Path::GridType::point_type, Value, typename Path::GridType>& u0,
@@ -166,9 +157,9 @@ namespace delta::numerical {
 
         auto vertex_to_idx = build_vertex_to_index_map(mesh);
 
-        // Assemble matrices
-        auto K = assemble_stiffness_matrix(mesh);
-        auto M = assemble_mass_matrix(mesh);
+        // Assemble matrices using metric
+        auto K = assemble_stiffness_matrix(mesh, metric);
+        auto M = assemble_mass_matrix(mesh, metric);
 
         // Effective stiffness for Newmark: K_eff = M + beta * dt² * c² * K
         Eigen::SparseMatrix<Value> K_eff = M;

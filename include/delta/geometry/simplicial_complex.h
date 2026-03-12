@@ -8,10 +8,12 @@
 #include <cstddef>
 #include <algorithm>
 #include <optional>
+#include <cmath>
 #include <stdexcept>
 #include <Eigen/Dense>
 #include <boost/container_hash/hash.hpp>
 #include "delta/core/rational.h"
+#include "delta/core/regulative_idea.h"   // для LinearAddress
 
 namespace delta::geometry {
 
@@ -31,8 +33,9 @@ namespace delta::geometry {
     class SimplicialComplex {
     public:
         using point_type = Eigen::Matrix<Coord, Dim, 1>;
+        using scalar_type = Coord;
         using vertex_index = std::size_t;
-        using simplex = std::vector<vertex_index>;          // список индексов вершин
+        using simplex = std::vector<vertex_index>;
 
         // Типы для удобства и совместимости с концептами
         using value_type = point_type;
@@ -54,18 +57,17 @@ namespace delta::geometry {
             return idx;
         }
 
-        std::vector<std::pair<std::size_t, int>> incident_faces(int top_dim, std::size_t idx, int low_dim) const;
         const point_type& vertex(vertex_index i) const { return vertices_.at(i); }
         std::size_t num_vertices() const { return vertices_.size(); }
 
-        // Для совместимости с GridConcept (доступ по индексу и итераторы)
+        // Для совместимости с GridConcept
         std::size_t size() const { return vertices_.size(); }
         const point_type& operator[](std::size_t i) const { return vertices_[i]; }
         auto begin() const { return vertices_.begin(); }
         auto end() const { return vertices_.end(); }
 
         // -------------------------------------------------------------------------
-        // Добавление симплексов произвольной размерности
+        // Добавление симплексов
         // -------------------------------------------------------------------------
         bool add_simplex(const std::vector<vertex_index>& indices) {
             if (indices.size() < 2) return false;            // 0-симплексы не храним отдельно
@@ -87,7 +89,6 @@ namespace delta::geometry {
             return true;
         }
 
-        // Удобные обёртки для часто используемых размерностей
         bool add_edge(vertex_index v0, vertex_index v1) {
             return add_simplex({ v0, v1 });
         }
@@ -113,7 +114,6 @@ namespace delta::geometry {
             return it->second[idx];
         }
 
-        // Поиск симплекса по списку вершин (возвращает индекс или -1)
         std::ptrdiff_t find_simplex(int dim, const std::vector<vertex_index>& vertices) const {
             auto it = simplices_map_.find(dim);
             if (it == simplices_map_.end()) return -1;
@@ -123,7 +123,7 @@ namespace delta::geometry {
             return (jt == it->second.end()) ? -1 : static_cast<std::ptrdiff_t>(jt->second);
         }
 
-        // Методы для совместимости с концептами SimplicialComplex
+        // Удобные методы для распространённых размерностей
         std::size_t num_edges()      const { return num_simplices(1); }
         std::size_t num_triangles()  const { return num_simplices(2); }
         std::size_t num_tetrahedra() const { return num_simplices(3); }
@@ -151,16 +151,191 @@ namespace delta::geometry {
         // -------------------------------------------------------------------------
         const std::vector<point_type>& points() const { return vertices_; }
 
+        // -------------------------------------------------------------------------
+        // НОВЫЕ МЕТОДЫ для конечно-объёмных расчётов (Этап 3)
+        // -------------------------------------------------------------------------
+
+        // Длина ребра через метрику
+        template<typename Metric>
+        auto edge_length(std::size_t edge_idx, const Metric& metric) const {
+            auto [v0, v1] = edge_at(edge_idx);
+            return metric(vertex(v0), vertex(v1));
+        }
+
+        // Центр ребра (требует LinearAddress)
+        template<typename T = point_type>
+        auto edge_center(std::size_t edge_idx) const
+            -> std::enable_if_t<LinearAddress<T, scalar_type>, T> {
+            auto [v0, v1] = edge_at(edge_idx);
+            return (vertex(v0) + vertex(v1)) / scalar_type{ 2 };
+        }
+
+        // Центр треугольника (требует LinearAddress)
+        template<typename T = point_type>
+        auto cell_center(std::size_t tri_idx) const
+            -> std::enable_if_t<LinearAddress<T, scalar_type>, T> {
+            auto tri = triangle_at(tri_idx);
+            return (vertex(tri[0]) + vertex(tri[1]) + vertex(tri[2])) / scalar_type{ 3 };
+        }
+
+        // Площадь треугольника (2D) или объём тетраэдра (3D) через метрику
+        template<typename Metric>
+        auto cell_volume(std::size_t cell_idx, const Metric& metric) const {
+            if constexpr (Dim == 2) {
+                auto tri = triangle_at(cell_idx);
+                return triangle_volume_impl(vertex(tri[0]), vertex(tri[1]), vertex(tri[2]), metric);
+            }
+            else if constexpr (Dim == 3) {
+                auto tet = tetrahedron_at(cell_idx);
+                return tetrahedron_volume_impl(vertex(tet[0]), vertex(tet[1]), vertex(tet[2]), vertex(tet[3]), metric);
+            }
+            else {
+                static_assert(Dim == 2 || Dim == 3, "cell_volume only implemented for 2D and 3D");
+                return scalar_type{ 0 };
+            }
+        }
+
+        // Нормаль к ребру в 2D (вектор, длина равна длине ребра, направление выбрано так,
+        // что для левого треугольника (с положительной ориентацией) указывает наружу)
+        template<typename Metric>
+        auto edge_normal(std::size_t edge_idx, const Metric& metric) const
+            -> std::enable_if_t<Dim == 2, point_type> {
+            auto [v0, v1] = edge_at(edge_idx);
+            const point_type& p0 = vertex(v0);
+            const point_type& p1 = vertex(v1);
+            // Вектор ребра от v0 к v1 (v0 < v1)
+            point_type e = p1 - p0;
+            // Поворот на -90 градусов: (dx, dy) -> (dy, -dx)
+            point_type normal(e.y(), -e.x());
+            // Масштабируем, чтобы длина normal равнялась метрической длине ребра
+            scalar_type euclidean_len = e.norm();
+            if (euclidean_len > 0) {
+                scalar_type metric_len = metric(p0, p1);
+                normal *= (metric_len / euclidean_len);
+            }
+            return normal;
+        }
+
+        // Соседи ребра: (левый треугольник, правый треугольник)
+        // Левый треугольник – тот, в котором ребро ориентировано от v0 к v1 (где v0<v1)
+        // Правый – противоположная ориентация.
+        std::pair<std::size_t, std::optional<std::size_t>> edge_neighbors(std::size_t edge_idx) const {
+            ensure_edge_to_triangles();
+            const auto& entry = (*edge_to_triangles_)[edge_idx];
+            return { entry.first, entry.second };
+        }
+
+        // -------------------------------------------------------------------------
+        // Методы incident_faces (уже были)
+        // -------------------------------------------------------------------------
+        std::vector<std::pair<std::size_t, int>> incident_faces(int top_dim, std::size_t idx, int low_dim) const;
+
     private:
+        // -------------------------------------------------------------------------
+        // Поля
+        // -------------------------------------------------------------------------
         std::vector<point_type> vertices_;
-        // simplices_[dim] – вектор симплексов данной размерности (каждый симплекс – вектор индексов)
         std::unordered_map<int, std::vector<simplex>> simplices_;
-        // simplices_map_[dim] – отображение отсортированного вектора вершин -> индекс
         std::unordered_map<int, std::unordered_map<simplex, std::size_t, SimplexHasher>> simplices_map_;
 
-        // Проверка невырожденности через определитель матрицы Грама (евклидов случай)
+        // -------------------------------------------------------------------------
+        // НОВЫЕ ПОЛЯ для кэширования информации о соседях рёбер
+        // -------------------------------------------------------------------------
+        mutable std::optional<std::vector<std::pair<std::size_t, std::optional<std::size_t>>>> edge_to_triangles_;
+
+        // -------------------------------------------------------------------------
+        // Вспомогательные функции для объёмов
+        // -------------------------------------------------------------------------
+        template<typename Metric>
+        static auto triangle_volume_impl(const point_type& a, const point_type& b, const point_type& c, const Metric& metric) {
+            using std::sqrt;
+            auto ab = metric(a, b);
+            auto bc = metric(b, c);
+            auto ca = metric(c, a);
+            auto s = (ab + bc + ca) / 2;
+            return sqrt(s * (s - ab) * (s - bc) * (s - ca));
+        }
+
+        template<typename Metric>
+        static auto tetrahedron_volume_impl(const point_type& a, const point_type& b, const point_type& c, const point_type& d, const Metric& metric) {
+            auto ab = metric(a, b);
+            auto ac = metric(a, c);
+            auto ad = metric(a, d);
+            auto bc = metric(b, c);
+            auto bd = metric(b, d);
+            auto cd = metric(c, d);
+
+            Eigen::Matrix<scalar_type, 5, 5> M;
+            M << 0, 1, 1, 1, 1,
+                1, 0, ab* ab, ac* ac, ad* ad,
+                1, ab* ab, 0, bc* bc, bd* bd,
+                1, ac* ac, bc* bc, 0, cd* cd,
+                1, ad* ad, bd* bd, cd* cd, 0;
+            scalar_type det = M.determinant();
+            using std::sqrt;
+            return sqrt(det / 288);
+        }
+
+        // Построение кэша edge_to_triangles_
+        void ensure_edge_to_triangles() const {
+            if (edge_to_triangles_.has_value()) return;
+
+            std::size_t n_edges = num_edges();
+            // Временное хранилище: для каждого ребра храним два опциональных индекса треугольников
+            std::vector<std::pair<std::optional<std::size_t>, std::optional<std::size_t>>> storage(
+                n_edges, { std::nullopt, std::nullopt });
+
+            for (std::size_t t = 0; t < num_triangles(); ++t) {
+                auto tri = triangle_at(t);
+                std::array<std::pair<std::size_t, std::size_t>, 3> edges = {
+                    std::make_pair(tri[0], tri[1]),
+                    std::make_pair(tri[1], tri[2]),
+                    std::make_pair(tri[2], tri[0])
+                };
+                for (const auto& e : edges) {
+                    std::size_t v0 = e.first, v1 = e.second;
+                    bool reversed = (v0 > v1);
+                    if (reversed) std::swap(v0, v1);
+                    std::ptrdiff_t eidx = find_simplex(1, { v0, v1 });
+                    if (eidx == -1) continue; // должно быть всегда найдено
+                    std::size_t ueidx = static_cast<std::size_t>(eidx);
+                    bool positive = !reversed; // ориентация совпадает с (v0,v1)
+                    if (positive) {
+                        if (!storage[ueidx].first.has_value()) {
+                            storage[ueidx].first = t;
+                        }
+                        // else: уже есть – не должно быть, но игнорируем
+                    }
+                    else {
+                        if (!storage[ueidx].second.has_value()) {
+                            storage[ueidx].second = t;
+                        }
+                    }
+                }
+            }
+
+            // Преобразуем в итоговый формат: первый элемент всегда существует
+            std::vector<std::pair<std::size_t, std::optional<std::size_t>>> result(n_edges);
+            for (std::size_t i = 0; i < n_edges; ++i) {
+                const auto& [left_opt, right_opt] = storage[i];
+                if (left_opt.has_value()) {
+                    result[i] = { *left_opt, right_opt };
+                }
+                else if (right_opt.has_value()) {
+                    // Если нет левого, но есть правый – меняем местами (правый становится левым)
+                    result[i] = { *right_opt, std::nullopt };
+                }
+                else {
+                    // Ребро без треугольников (не должно быть в триангуляции)
+                    result[i] = { 0, std::nullopt }; // fallback
+                }
+            }
+            edge_to_triangles_ = std::move(result);
+        }
+
+        // Проверка невырожденности (без изменений)
         bool is_non_degenerate(const std::vector<vertex_index>& indices) const {
-            int k = static_cast<int>(indices.size()) - 1; // размерность симплекса
+            int k = static_cast<int>(indices.size()) - 1;
             if (k == 0) return true;
             if (k > Dim) return false;
 
@@ -178,11 +353,45 @@ namespace delta::geometry {
     };
 
     // -----------------------------------------------------------------------------
+    // Реализация incident_faces
+    // -----------------------------------------------------------------------------
+    template<int Dim, typename Coord>
+    std::vector<std::pair<std::size_t, int>> SimplicialComplex<Dim, Coord>::incident_faces(
+        int top_dim, std::size_t idx, int low_dim) const
+    {
+        if (low_dim != top_dim - 1) {
+            throw std::invalid_argument("incident_faces: only codimension 1 supported");
+        }
+        const auto& top_simp = get_simplex(top_dim, idx);
+        std::vector<std::pair<std::size_t, int>> result;
+        for (std::size_t i = 0; i < top_simp.size(); ++i) {
+            std::vector<vertex_index> face_vertices;
+            for (std::size_t j = 0; j < top_simp.size(); ++j) {
+                if (j != i) face_vertices.push_back(top_simp[j]);
+            }
+            std::ptrdiff_t face_idx = find_simplex(low_dim, face_vertices);
+            if (face_idx == -1) {
+                throw std::logic_error("incident_faces: face not found in complex");
+            }
+            int sign = (i % 2 == 0) ? 1 : -1; // ориентация
+            result.emplace_back(static_cast<std::size_t>(face_idx), sign);
+        }
+        return result;
+    }
+
+    // -----------------------------------------------------------------------------
+    // Вспомогательная функция ориентации (была раньше)
+    // -----------------------------------------------------------------------------
+    inline int orientation_sign(const std::vector<std::size_t>& parent, std::size_t removed_idx) {
+        return (removed_idx % 2 == 0) ? 1 : -1;
+    }
+
+    // -----------------------------------------------------------------------------
     // Структуры для карты подразделения
     // -----------------------------------------------------------------------------
     struct SimplexKey {
-        int dim;          // размерность симплекса
-        std::size_t idx;  // индекс в исходном комплексе
+        int dim;
+        std::size_t idx;
 
         bool operator==(const SimplexKey& other) const {
             return dim == other.dim && idx == other.idx;
@@ -197,7 +406,6 @@ namespace delta::geometry {
         }
     };
 
-    // Карта подразделения: исходный симплекс -> список новых симплексов (каждый представлен ключом)
     using SubdivisionMap = std::unordered_map<SimplexKey, std::vector<SimplexKey>, SimplexKeyHash>;
 
     // -----------------------------------------------------------------------------
@@ -217,17 +425,14 @@ namespace delta::geometry {
             // Рекурсивное разбиение симплекса, заданного списком индексов вершин (уже в новом комплексе)
             std::vector<simplex> subdivide_simplex(const std::vector<vertex_index>& vertices, int dim) {
                 if (dim == 0) {
-                    // 0-симплекс (вершина) не разбивается
                     return { vertices };
                 }
-                // Вычисляем барицентр
                 point_type bary = point_type::Zero();
                 for (auto vi : vertices) {
                     bary += result.vertex(vi);
                 }
                 bary /= static_cast<typename point_type::Scalar>(vertices.size());
 
-                // Ищем или создаём вершину для барицентра
                 auto it = vertex_cache.find(bary);
                 vertex_index bary_idx;
                 if (it == vertex_cache.end()) {
@@ -239,14 +444,12 @@ namespace delta::geometry {
                 }
 
                 std::vector<simplex> new_simplices;
-                // Для каждой грани (все вершины кроме одной)
                 for (std::size_t i = 0; i < vertices.size(); ++i) {
                     std::vector<vertex_index> face_vertices;
                     for (std::size_t j = 0; j < vertices.size(); ++j) {
                         if (j != i) face_vertices.push_back(vertices[j]);
                     }
                     auto face_simplices = subdivide_simplex(face_vertices, dim - 1);
-                    // Каждый симплекс грани соединяем с барицентром
                     for (auto& face_simplex : face_simplices) {
                         simplex new_simplex = face_simplex;
                         new_simplex.push_back(bary_idx);
@@ -278,7 +481,6 @@ namespace delta::geometry {
             vertex_cache[p] = result.add_vertex(p);
         }
 
-        // Определяем максимальную размерность симплексов в исходном комплексе
         int max_dim = 0;
         for (const auto& kv : primal.simplices_) {
             if (kv.first > max_dim) max_dim = kv.first;
@@ -286,24 +488,19 @@ namespace delta::geometry {
 
         detail::SubdivHelper<Complex> helper{ subdiv_map, vertex_cache, result };
 
-        // Обрабатываем симплексы в порядке возрастания размерности
         for (int dim = 1; dim <= max_dim; ++dim) {
             std::size_t num = primal.num_simplices(dim);
             for (std::size_t idx = 0; idx < num; ++idx) {
                 const auto& orig_simp = primal.get_simplex(dim, idx);
-                // Получаем индексы вершин в новом комплексе
                 std::vector<vertex_index> new_vertices;
                 for (auto vi : orig_simp) {
                     new_vertices.push_back(vertex_cache[primal.vertex(vi)]);
                 }
 
-                // Разбиваем симплекс
                 auto new_simplices = helper.subdivide_simplex(new_vertices, dim);
 
-                // Добавляем каждый новый симплекс в результат и запоминаем его индекс
                 std::vector<SimplexKey> new_keys;
                 for (const auto& ns : new_simplices) {
-                    // Пытаемся найти, возможно уже добавлен ранее (из соседнего симплекса)
                     std::ptrdiff_t ns_idx = result.find_simplex(dim, ns);
                     if (ns_idx == -1) {
                         result.add_simplex(ns);
@@ -318,35 +515,5 @@ namespace delta::geometry {
 
         return { std::move(result), std::move(subdiv_map) };
     }
-    // Вспомогательная функция для вычисления знака ориентации грани.
-// Для симплекса, заданного списком вершин в порядке (v0, v1, ..., vk),
-// грань, полученная удалением вершины на позиции i, имеет знак (-1)^i.
-// Предполагается, что список вершин исходного симплекса упорядочен (канонический порядок).
-    inline int orientation_sign(const std::vector<std::size_t>& parent, std::size_t removed_idx) {
-        return (removed_idx % 2 == 0) ? 1 : -1;
-    }
 
-    template<int Dim, typename Coord>
-    std::vector<std::pair<std::size_t, int>> SimplicialComplex<Dim, Coord>::incident_faces(
-        int top_dim, std::size_t idx, int low_dim) const
-    {
-        if (low_dim != top_dim - 1) {
-            throw std::invalid_argument("incident_faces: only codimension 1 supported");
-        }
-        const auto& top_simp = get_simplex(top_dim, idx);
-        std::vector<std::pair<std::size_t, int>> result;
-        for (std::size_t i = 0; i < top_simp.size(); ++i) {
-            std::vector<vertex_index> face_vertices;
-            for (std::size_t j = 0; j < top_simp.size(); ++j) {
-                if (j != i) face_vertices.push_back(top_simp[j]);
-            }
-            std::ptrdiff_t face_idx = find_simplex(low_dim, face_vertices);
-            if (face_idx == -1) {
-                throw std::logic_error("incident_faces: face not found in complex");
-            }
-            int sign = orientation_sign(top_simp, i);
-            result.emplace_back(static_cast<std::size_t>(face_idx), sign);
-        }
-        return result;
-    }
 } // namespace delta::geometry

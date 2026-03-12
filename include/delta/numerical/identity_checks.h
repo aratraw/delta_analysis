@@ -1,8 +1,11 @@
 // include/delta/numerical/identity_checks.h
 #pragma once
 
-#include "grid_differences.h"
 #include "delta/geometry/tensor_field.h"
+#include "delta/numerical/cartesian_grid.h"
+#include "delta/numerical/grid_curl.h"
+#include "delta/numerical/integrals_3d.h"
+#include "delta/numerical/concepts.h"
 #include <cmath>
 
 namespace delta::numerical {
@@ -11,18 +14,15 @@ namespace delta::numerical {
     // Проверка curl grad f = 0 для 3D декартовой сетки
     // -----------------------------------------------------------------------------
     template<typename Grid, typename ScalarField, typename Metric>
-        requires CartesianGrid3D<Grid>
-    bool check_curl_grad_zero(const Grid& grid,
-        const ScalarField& f,
-        const Metric& metric,
-        double tolerance = 1e-12) {
-        // Вычисляем градиент f (как векторное поле)
-        auto grad_f = discrete_gradient_1d(grid, f, metric); // но это одномерный градиент, не подходит.
-        // Нужна функция градиента для 3D декартовой сетки.
-        // Реализуем её здесь же, используя центральные разности.
-
+        requires CartesianGrid3D<Grid>&&
+    IsMetric<Metric, typename Grid::value_type, typename Grid::scalar_type>
+        bool check_curl_grad_zero(const Grid& grid,
+            const ScalarField& f,
+            const Metric& metric,
+            double tolerance = 1e-12) {
         using Scalar = typename ScalarField::value_type;
-        geometry::TensorField<typename Grid::value_type, Scalar, 1, 3> grad;
+        using Point = typename Grid::value_type;
+        geometry::TensorField<Point, Scalar, 1, 3> grad;
 
         const auto& xg = grid.x_grid();
         const auto& yg = grid.y_grid();
@@ -38,9 +38,9 @@ namespace delta::numerical {
                     if (i > 0 && i + 1 < nx)
                         dfdx = (f(grid.point_at(i + 1, j, k)) - f(grid.point_at(i - 1, j, k))) / (2 * hx);
                     else if (i == 0 && i + 1 < nx)
-                        dfdx = (f(grid.point_at(i + 1, j, k)) - f(p)) / hx; // forward
+                        dfdx = (f(grid.point_at(i + 1, j, k)) - f(p)) / hx;
                     else if (i == nx - 1 && i > 0)
-                        dfdx = (f(p) - f(grid.point_at(i - 1, j, k))) / hx; // backward
+                        dfdx = (f(p) - f(grid.point_at(i - 1, j, k))) / hx;
 
                     if (j > 0 && j + 1 < ny)
                         dfdy = (f(grid.point_at(i, j + 1, k)) - f(grid.point_at(i, j - 1, k))) / (2 * hy);
@@ -63,10 +63,9 @@ namespace delta::numerical {
 
         auto curl_grad = discrete_curl(grid, grad, metric);
 
-        // Вычисляем максимальное отклонение от нуля
         double max_error = 0.0;
         for (const auto& [p, vec] : curl_grad) {
-            double err = std::sqrt(vec.squaredNorm()); // или покомпонентно
+            double err = std::sqrt(vec.squaredNorm());
             if (err > max_error) max_error = err;
         }
         return max_error <= tolerance;
@@ -76,15 +75,15 @@ namespace delta::numerical {
     // Проверка div curl v = 0 для 3D декартовой сетки
     // -----------------------------------------------------------------------------
     template<typename Grid, typename VecField, typename Metric>
-        requires CartesianGrid3D<Grid>
-    bool check_div_curl_zero(const Grid& grid,
-        const VecField& v,
-        const Metric& metric,
-        double tolerance = 1e-12) {
+        requires CartesianGrid3D<Grid>&&
+    IsMetric<Metric, typename Grid::value_type, typename Grid::scalar_type>
+        bool check_div_curl_zero(const Grid& grid,
+            const VecField& v,
+            const Metric& metric,
+            double tolerance = 1e-12) {
+        using Scalar = typename VecField::scalar_type;
         auto curl_v = discrete_curl(grid, v, metric);
 
-        // Вычисляем дивергенцию curl_v. Для декартовой сетки дивергенция считается как сумма частных производных.
-        using Scalar = typename VecField::scalar_type;
         const auto& xg = grid.x_grid();
         const auto& yg = grid.y_grid();
         const auto& zg = grid.z_grid();
@@ -96,7 +95,7 @@ namespace delta::numerical {
             for (std::size_t j = 0; j < ny; ++j) {
                 for (std::size_t k = 0; k < nz; ++k) {
                     auto p = grid.point_at(i, j, k);
-                    const auto& w = curl_v.at(p); // (wx, wy, wz)
+                    const auto& w = curl_v.at(p);
 
                     Scalar dwx_dx = 0, dwy_dy = 0, dwz_dz = 0;
                     if (i > 0 && i + 1 < nx)

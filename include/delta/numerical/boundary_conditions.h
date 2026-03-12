@@ -6,6 +6,7 @@
 #include <cstddef>
 #include <unordered_map>
 #include <variant>
+#include <optional>
 
 namespace delta::numerical {
 
@@ -14,23 +15,23 @@ namespace delta::numerical {
     // -----------------------------------------------------------------------------
     enum class BCType {
         Dirichlet,      // u = g
-        Neumann,        // ∂u/∂n = g
+        Neumann,        // ∂u/∂n = g  (для потока: задан поток)
         Robin,          // α u + β ∂u/∂n = g
         Periodic        // u(left) = u(right) (связь степеней свободы)
     };
 
     // -----------------------------------------------------------------------------
-    // Значение граничного условия (может быть константой или функцией времени/координат)
+    // Значение граничного условия (может быть константой или функцией времени/индекса)
     // -----------------------------------------------------------------------------
     template<typename Scalar>
     class BCValue {
     public:
         // Константа
         BCValue(Scalar constant) : value_(constant) {}
-        // Функция от времени и индекса узла (или от координат)
+        // Функция от времени и индекса узла (или ребра)
         BCValue(std::function<Scalar(double, std::size_t)> func) : value_(func) {}
 
-        // Получить значение для заданного времени t и индекса узла i
+        // Получить значение для заданного времени t и индекса i
         Scalar operator()(double t, std::size_t i) const {
             if (std::holds_alternative<Scalar>(value_)) {
                 return std::get<Scalar>(value_);
@@ -45,40 +46,111 @@ namespace delta::numerical {
     };
 
     // -----------------------------------------------------------------------------
-    // Граничные условия для всей сетки
+    // Граничные условия для всей сетки (поддержка вершин и рёбер)
     // -----------------------------------------------------------------------------
     template<typename Scalar>
     class BoundaryConditions {
     public:
         using size_type = std::size_t;
 
-        // Установка условия на одном узле (по индексу)
+        // ----- Условия на вершинах (по индексу вершины) -----
         void set(size_type idx, BCType type, const BCValue<Scalar>& value) {
-            conditions_[idx] = { type, value };
+            vertex_conditions_[idx] = { type, value };
         }
 
-        // Установка условия на группе узлов (например, все узлы на границе)
         void set(const std::vector<size_type>& indices, BCType type, const BCValue<Scalar>& value) {
             for (auto idx : indices) {
                 set(idx, type, value);
             }
         }
 
-        // Проверка, является ли узел граничным (т.е. для него задано условие)
-        bool is_boundary(size_type idx) const {
-            return conditions_.find(idx) != conditions_.end();
+        bool is_boundary_vertex(size_type idx) const {
+            return vertex_conditions_.find(idx) != vertex_conditions_.end();
         }
 
-        // Получить тип и значение для узла (если не граничный, возвращает false)
-        bool get(size_type idx, BCType& type, BCValue<Scalar>& value) const {
-            auto it = conditions_.find(idx);
-            if (it == conditions_.end()) return false;
+        bool get_vertex_condition(size_type idx, BCType& type, BCValue<Scalar>& value) const {
+            auto it = vertex_conditions_.find(idx);
+            if (it == vertex_conditions_.end()) return false;
             type = it->second.first;
             value = it->second.second;
             return true;
         }
 
-        // Для периодических условий нужно хранить пары связей
+        // ----- Условия на рёбрах (для конечно-объёмных схем) -----
+        void set_edge_condition(size_type edge_idx, BCType type, const BCValue<Scalar>& value) {
+            edge_conditions_[edge_idx] = { type, value };
+        }
+
+        void set_edge_conditions(const std::vector<size_type>& edge_indices, BCType type, const BCValue<Scalar>& value) {
+            for (auto idx : edge_indices) {
+                set_edge_condition(idx, type, value);
+            }
+        }
+
+        bool is_boundary_edge(size_type edge_idx) const {
+            return edge_conditions_.find(edge_idx) != edge_conditions_.end();
+        }
+
+        bool get_edge_condition(size_type edge_idx, BCType& type, BCValue<Scalar>& value) const {
+            auto it = edge_conditions_.find(edge_idx);
+            if (it == edge_conditions_.end()) return false;
+            type = it->second.first;
+            value = it->second.second;
+            return true;
+        }
+
+        // -------------------------------------------------------------------------
+        // Вычисление потока на граничном ребре для конечно-объёмной схемы
+        // согласно upwind-правилу.
+        // Параметры:
+        //   cell_idx  - индекс ячейки (не используется, но может пригодиться)
+        //   edge_idx  - индекс граничного ребра
+        //   u_cell    - значение в прилегающей ячейке
+        //   vn        - проекция скорости на нормаль (уже содержит знак, длина учтена)
+        //   t         - текущее время (для зависящих от времени ГУ)
+        // Возвращает поток (знаковая величина), который будет вычтен из ячейки.
+        // -------------------------------------------------------------------------
+        template<typename Value, typename Scalar2>
+        Value boundary_flux(size_type /*cell_idx*/, size_type edge_idx,
+            Value u_cell, Scalar2 vn, double t = 0.0) const {
+            // Проверяем, есть ли условие для этого ребра
+            auto it = edge_conditions_.find(edge_idx);
+            if (it == edge_conditions_.end()) {
+                // Нет заданного условия – считаем, что это открытая граница (outflow)
+                // Поток определяется только состоянием ячейки.
+                return Value(vn) * u_cell;
+            }
+
+            BCType type = it->second.first;
+            const BCValue<Scalar>& bc_val = it->second.second;
+
+            if (type == BCType::Dirichlet) {
+                // Для границы Дирихле применяем upwind:
+                // если поток направлен из ячейки (vn >= 0), используем u_cell,
+                // иначе используем заданное граничное значение.
+                if (vn >= Scalar2(0)) {
+                    return Value(vn) * u_cell;
+                }
+                else {
+                    Scalar u_boundary = bc_val(t, edge_idx);
+                    return Value(vn) * Value(u_boundary);
+                }
+            }
+            else if (type == BCType::Neumann) {
+                // Для Неймана задан непосредственно поток (предполагается, что значение bc_val уже есть поток).
+                // Возвращаем его как есть, игнорируя vn (поток уже задан).
+                return Value(bc_val(t, edge_idx));
+            }
+            else {
+                // Другие типы (Robin, Periodic) не реализованы для граничных рёбер.
+                // В простейшем случае возвращаем нулевой поток.
+                return Value(0);
+            }
+        }
+
+        // -------------------------------------------------------------------------
+        // Поддержка периодических граничных условий (для вершин)
+        // -------------------------------------------------------------------------
         void set_periodic_pair(size_type left, size_type right) {
             periodic_pairs_.push_back({ left, right });
         }
@@ -88,8 +160,9 @@ namespace delta::numerical {
         }
 
     private:
-        std::unordered_map<size_type, std::pair<BCType, BCValue<Scalar>>> conditions_;
-        std::vector<std::pair<size_type, size_type>> periodic_pairs_; // для периодических условий
+        std::unordered_map<size_type, std::pair<BCType, BCValue<Scalar>>> vertex_conditions_;
+        std::unordered_map<size_type, std::pair<BCType, BCValue<Scalar>>> edge_conditions_;
+        std::vector<std::pair<size_type, size_type>> periodic_pairs_;
     };
 
 } // namespace delta::numerical

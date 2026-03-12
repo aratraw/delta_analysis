@@ -70,6 +70,13 @@ namespace delta {
         }
     };
 
+
+    template<typename T>
+    auto operator()(const std::complex<T>& a, const std::complex<T>& b) const {
+        using std::abs;
+        return abs(a - b);
+    }
+
     // Verify that EuclideanValueMetric satisfies the ValueMetric concept for double.
     static_assert(ValueMetric<EuclideanValueMetric, double, double>);
 

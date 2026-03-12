@@ -4,24 +4,13 @@
 #include "delta/geometry/simplicial_complex.h"
 #include "delta/numerical/fem_assemblers.h"
 #include "delta/numerical/boundary_conditions.h"
+#include "delta/numerical/concepts.h"
 #include "delta/core/operational_function.h"
 #include <Eigen/Sparse>
 #include <vector>
 #include <unordered_map>
 
 namespace delta::numerical {
-
-    // -----------------------------------------------------------------------------
-    // Concept for a finite element grid (reused from heat_solver)
-    // -----------------------------------------------------------------------------
-    template<typename G>
-    concept FiniteElementGrid = requires(G g, std::size_t i) {
-        typename G::point_type;
-        { g.num_vertices() } -> std::convertible_to<std::size_t>;
-        { g.vertex(i) } -> std::same_as<typename G::point_type>;
-        { g.num_triangles() } -> std::convertible_to<std::size_t>;
-        { g.triangle_at(i) } -> std::same_as<typename G::triangle_type>;
-    };
 
     // -----------------------------------------------------------------------------
     // Helper: build vertex -> index map (copied from heat_solver)
@@ -44,8 +33,9 @@ namespace delta::numerical {
     // Returns solution as OperationalFunction on vertices.
     // -----------------------------------------------------------------------------
     template<typename Path, typename Value, typename Metric, typename BC>
-        requires FiniteElementGrid<typename Path::GridType>
-    OperationalFunction<typename Path::GridType::point_type, Value, typename Path::GridType>
+        requires FiniteElementGrid<typename Path::GridType>&&
+    IsMetric<Metric, typename Path::GridType::point_type, typename Path::GridType::scalar_type>
+        OperationalFunction<typename Path::GridType::point_type, Value, typename Path::GridType>
         solve_poisson(
             const Path& path,
             const OperationalFunction<typename Path::GridType::point_type, Value, typename Path::GridType>& rhs,
@@ -62,9 +52,9 @@ namespace delta::numerical {
         // Precompute vertex->index map for final function
         auto vertex_to_idx = build_vertex_to_index_map(mesh);
 
-        // Assemble stiffness matrix K and mass matrix M
-        auto K = assemble_stiffness_matrix(mesh);   // cotangent Laplacian
-        auto M = assemble_mass_matrix(mesh);
+        // Assemble stiffness matrix K and mass matrix M using metric
+        auto K = assemble_stiffness_matrix(mesh, metric);   // cotangent Laplacian
+        auto M = assemble_mass_matrix(mesh, metric);
 
         // Right-hand side vector: b = M * f (where f is the rhs function)
         Eigen::Matrix<Value, Eigen::Dynamic, 1> b(n);

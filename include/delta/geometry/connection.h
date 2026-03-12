@@ -175,9 +175,7 @@ namespace delta::geometry {
                     for (const auto& new_key : it->second) {
                         if (new_key.dim != 1) continue; // только рёбра
                         auto fine_edge = fine_mesh.edge_at(new_key.idx);
-                        // Определяем ориентацию: если мелкое ребро совпадает по направлению с грубым, оставляем как есть,
-                        // иначе берём обратный элемент? Пока будем считать, что все мелкие рёбра ориентированы так же,
-                        // как грубое (это требует проверки). Для простоты оставляем как есть.
+                        // Ориентация: предполагаем, что все мелкие рёбра ориентированы так же, как грубое.
                         fine_edges.push_back({ fine_mesh.vertex(fine_edge[0]), fine_mesh.vertex(fine_edge[1]) });
                     }
                     coarse_to_fine.emplace_back(

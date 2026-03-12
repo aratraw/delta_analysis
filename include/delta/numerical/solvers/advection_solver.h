@@ -4,6 +4,7 @@
 #include "delta/core/path_concept.h"
 #include "delta/geometry/simplicial_complex.h"
 #include "delta/numerical/boundary_conditions.h"
+#include "delta/numerical/concepts.h"           // содержит FiniteVolumeGrid2D
 #include "delta/core/operational_function.h"
 #include <vector>
 #include <functional>
@@ -11,36 +12,6 @@
 #include <unordered_map>
 
 namespace delta::numerical {
-
-    // -----------------------------------------------------------------------------
-    // Concept for a 2D finite volume grid (triangular mesh)
-    // -----------------------------------------------------------------------------
-    template<typename G, typename Metric, typename Scalar>
-    concept FiniteVolumeGrid2D = requires(G g, std::size_t i, const Metric & m) {
-        // Basic mesh queries
-        { g.num_triangles() } -> std::convertible_to<std::size_t>;
-        { g.num_edges() } -> std::convertible_to<std::size_t>;
-        { g.vertex(i) } -> std::same_as<typename G::point_type>;
-
-        // Triangle access
-        { g.triangle_at(i) } -> std::same_as<typename G::triangle_type>;
-
-        // Edge access
-        { g.edge_at(i) } -> std::same_as<typename G::edge_type>;
-        { g.find_simplex(1, std::vector<std::size_t>{}) } -> std::convertible_to<std::ptrdiff_t>;
-
-        // Geometric quantities with metric
-        { g.edge_length(i, m) } -> std::convertible_to<Scalar>;
-        { g.edge_center(i) } -> std::same_as<typename G::point_type>;
-        { g.cell_center(i) } -> std::same_as<typename G::point_type>;
-        { g.cell_volume(i, m) } -> std::convertible_to<Scalar>;
-
-        // For upwind we need the oriented area vector (normal * length)
-        { g.edge_normal(i, m) } -> std::same_as<typename G::point_type>;
-
-        // Neighborhood: left triangle always exists, right may be nullopt
-        { g.edge_neighbors(i) } -> std::same_as<std::pair<std::size_t, std::optional<std::size_t>>>;
-    };
 
     // -----------------------------------------------------------------------------
     // Helper to build center->index map for triangles
@@ -91,7 +62,7 @@ namespace delta::numerical {
         // Build center -> index map for fast lookup (used at the end)
         auto center_to_idx = build_center_to_index_map(mesh);
 
-        // Precompute geometric data per triangle
+        // Precompute geometric data per triangle using metric
         std::vector<Scalar> cell_volume(n_tri);
         std::vector<Point> cell_center(n_tri);
         for (std::size_t t = 0; t < n_tri; ++t) {
@@ -111,7 +82,7 @@ namespace delta::numerical {
 
             // Loop over all edges
             for (std::size_t e = 0; e < mesh.num_edges(); ++e) {
-                // Geometric data from mesh
+                // Geometric data from mesh using metric
                 Scalar edge_len = mesh.edge_length(e, metric);
                 if (edge_len == 0) continue;
 
@@ -147,7 +118,6 @@ namespace delta::numerical {
         }
 
         // Construct final OperationalFunction using center->index map
-        // IMPORTANT: capture copies of center_to_idx and u_vec, not references!
         auto center_to_idx_copy = center_to_idx;
         auto u_vec_copy = u_vec;
         OperationalFunction<Point, Value, Complex> u_final(

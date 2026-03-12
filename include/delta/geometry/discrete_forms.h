@@ -9,17 +9,19 @@
 #include <type_traits>
 #include <stdexcept>
 #include <cmath>
+#include <optional>
 
 namespace delta::geometry {
 
     namespace detail {
-        // Вспомогательная функция для вычисления объёма k-симплекса
+        // Вспомогательная функция для вычисления объёма k-симплекса (использует метрику)
         template<int k, typename Complex, typename Metric>
         typename Complex::point_type::Scalar
             primal_volume(const Complex& mesh, std::size_t idx, const Metric& metric) {
+            using Scalar = typename Complex::point_type::Scalar;
             const auto& simp = mesh.get_simplex(k, idx);
             if constexpr (k == 0) {
-                return typename Complex::point_type::Scalar{ 1 };
+                return Scalar{ 1 };
             }
             else if constexpr (k == 1) {
                 auto a = mesh.vertex(simp[0]);
@@ -30,40 +32,39 @@ namespace delta::geometry {
                 auto a = mesh.vertex(simp[0]);
                 auto b = mesh.vertex(simp[1]);
                 auto c = mesh.vertex(simp[2]);
-                auto ab = metric(a, b);
-                auto bc = metric(b, c);
-                auto ca = metric(c, a);
-                auto s = (ab + bc + ca) / 2;
+                // формула Герона
+                Scalar ab = metric(a, b);
+                Scalar bc = metric(b, c);
+                Scalar ca = metric(c, a);
+                Scalar s = (ab + bc + ca) / Scalar{ 2 };
                 using std::sqrt;
                 return sqrt(s * (s - ab) * (s - bc) * (s - ca));
             }
             else if constexpr (k == 3) {
-                // Объём тетраэдра через формулу Кэли-Менгера (использует только длины рёбер)
+                // объём тетраэдра через формулу Кэли-Менгера
                 auto a = mesh.vertex(simp[0]);
                 auto b = mesh.vertex(simp[1]);
                 auto c = mesh.vertex(simp[2]);
                 auto d = mesh.vertex(simp[3]);
-                auto ab = metric(a, b);
-                auto ac = metric(a, c);
-                auto ad = metric(a, d);
-                auto bc = metric(b, c);
-                auto bd = metric(b, d);
-                auto cd = metric(c, d);
-                // Матрица Кэли-Менгера
-                Eigen::Matrix<typename Complex::point_type::Scalar, 5, 5> M;
+                Scalar ab = metric(a, b);
+                Scalar ac = metric(a, c);
+                Scalar ad = metric(a, d);
+                Scalar bc = metric(b, c);
+                Scalar bd = metric(b, d);
+                Scalar cd = metric(c, d);
+                Eigen::Matrix<Scalar, 5, 5> M;
                 M << 0, 1, 1, 1, 1,
                     1, 0, ab* ab, ac* ac, ad* ad,
                     1, ab* ab, 0, bc* bc, bd* bd,
                     1, ac* ac, bc* bc, 0, cd* cd,
                     1, ad* ad, bd* bd, cd* cd, 0;
-                auto det = M.determinant();
-                if (det <= 0) return 0;
+                Scalar det = M.determinant();
                 using std::sqrt;
                 return sqrt(det / 288);
             }
             else {
                 static_assert(k <= 3, "primal_volume for k>3 not implemented");
-                return 0;
+                return Scalar{ 0 };
             }
         }
     } // namespace detail
@@ -112,10 +113,10 @@ namespace delta::geometry {
 
         // -------------------------------------------------------------------------
         // Звёздочка Ходжа : k-form -> (n-k)-form (возвращает форму на том же комплексе
-        // с использованием дуальных объёмов). Требуется DualComplex.
+        // с использованием двойственных объёмов). Требуется DualComplex.
         // -------------------------------------------------------------------------
         template<typename Metric>
-        DiscreteForm<k, Value, Complex> star(const DualComplex<Complex>& dual, const Metric& metric) const {
+        DiscreteForm<k, Value, Complex> star(const DualComplex<Complex, Metric>& dual, const Metric& metric) const {
             static_assert(k <= Complex::dim(), "Invalid degree for Hodge star");
             DiscreteForm<k, Value, Complex> result(mesh_);
             for (std::size_t i = 0; i < values_.size(); ++i) {
@@ -134,13 +135,11 @@ namespace delta::geometry {
         // -------------------------------------------------------------------------
         // Интерполяция при подразделении
         // -------------------------------------------------------------------------
-        template<typename NewComplex>
-        DiscreteForm<k, Value, NewComplex> refine(const NewComplex& new_mesh,
+        template<typename NewComplex, typename Metric>
+        DiscreteForm<k, Value, NewComplex> refine(
+            const NewComplex& new_mesh,
             const SubdivisionMap& subdiv_map,
-            const DualComplex<NewComplex>& /*new_dual*/) const {
-            static_assert(std::is_same_v<typename Complex::point_type,
-                typename NewComplex::point_type>,
-                "Point types must match for interpolation");
+            const Metric& metric) const {
 
             DiscreteForm<k, Value, NewComplex> result(new_mesh);
 
@@ -169,9 +168,50 @@ namespace delta::geometry {
                     result.at(i) = found ? val : Value{ 0 };
                 }
             }
+            else if constexpr (k == 1) {
+                // Для 1-форм: распределяем значение родительского ребра между рёбрами-потомками
+                // пропорционально их длинам (вычисленным через метрику).
+                for (const auto& [old_key, new_keys] : subdiv_map) {
+                    if (old_key.dim == 1) {  // только рёбра
+                        Value old_val = this->at(old_key.idx);
+                        // Собираем все рёбра-потомки размерности 1
+                        std::vector<std::size_t> edge_descendants;
+                        for (const auto& new_key : new_keys) {
+                            if (new_key.dim == 1) {
+                                edge_descendants.push_back(new_key.idx);
+                            }
+                        }
+                        if (edge_descendants.empty()) continue;
+
+                        // Вычисляем сумму длин потомков (для нормализации)
+                        Value total_len = Value{ 0 };
+                        std::vector<Value> lengths;
+                        lengths.reserve(edge_descendants.size());
+                        for (std::size_t eidx : edge_descendants) {
+                            auto edge = new_mesh.edge_at(eidx);
+                            Value len = metric(new_mesh.vertex(edge[0]), new_mesh.vertex(edge[1]));
+                            lengths.push_back(len);
+                            total_len += len;
+                        }
+                        // Распределяем значение пропорционально длинам
+                        if (total_len != Value{ 0 }) {
+                            for (std::size_t j = 0; j < edge_descendants.size(); ++j) {
+                                result.at(edge_descendants[j]) = old_val * (lengths[j] / total_len);
+                            }
+                        }
+                        else {
+                            // Все длины нулевые – распределяем поровну
+                            Value each = old_val / static_cast<Value>(edge_descendants.size());
+                            for (std::size_t eidx : edge_descendants) {
+                                result.at(eidx) = each;
+                            }
+                        }
+                    }
+                }
+                // Для остальных рёбер (не являющихся потомками) значения остаются нулевыми (по умолчанию)
+            }
             else {
-                // Для k>=1: используем карту подразделения – каждый новый симплекс наследует
-                // значение от исходного (простое копирование, не сохраняет внешнюю производную).
+                // Для k>=2: простое копирование (значение родительского симплекса копируется во все потомки той же размерности)
                 for (const auto& [old_key, new_keys] : subdiv_map) {
                     if (old_key.dim == k) {
                         Value old_val = this->at(old_key.idx);
@@ -192,32 +232,32 @@ namespace delta::geometry {
     };
 
     // -------------------------------------------------------------------------
-    // Внешнее произведение (wedge) – только для 0-форм (p=q=0)
+    // Внешнее произведение (wedge) – реализовано только для 0-форм
     // -------------------------------------------------------------------------
-    template<typename Value, typename Complex>
-    DiscreteForm<0, Value, Complex> wedge(const DiscreteForm<0, Value, Complex>& a,
-        const DiscreteForm<0, Value, Complex>& b) {
-        DiscreteForm<0, Value, Complex> result(a.mesh());
-        for (std::size_t i = 0; i < result.size(); ++i) {
-            result.at(i) = a.at(i) * b.at(i);
-        }
-        return result;
-    }
-
-    // Для остальных комбинаций выдаём понятную ошибку компиляции
     template<int p, int q, typename Value, typename Complex>
-    auto wedge(const DiscreteForm<p, Value, Complex>& a, const DiscreteForm<q, Value, Complex>& b) {
-        static_assert(p == 0 && q == 0,
-            "wedge product for these degrees not implemented yet (will be added in future updates)");
-        return DiscreteForm<p + q, Value, Complex>(a.mesh());
+    DiscreteForm<p + q, Value, Complex> wedge(const DiscreteForm<p, Value, Complex>& a,
+        const DiscreteForm<q, Value, Complex>& b) {
+        if constexpr (p == 0 && q == 0) {
+            // 0-формы: поточечное умножение
+            DiscreteForm<0, Value, Complex> result(a.mesh());
+            for (std::size_t i = 0; i < result.size(); ++i) {
+                result.at(i) = a.at(i) * b.at(i);
+            }
+            return result;
+        }
+        else {
+            static_assert(p == 0 && q == 0,
+                "wedge product for these degrees is not implemented (only 0-forms are supported)");
+            return DiscreteForm<p + q, Value, Complex>(a.mesh()); // never reached
+        }
     }
 
-    // -----------------------------------------------------------------------------
+    // -------------------------------------------------------------------------
     // Обратная звезда Ходжа (вспомогательная)
-    // -----------------------------------------------------------------------------
+    // -------------------------------------------------------------------------
     template<int k, typename Value, typename Complex, typename Metric>
     DiscreteForm<k, Value, Complex> inverse_star(const DiscreteForm<k, Value, Complex>& omega,
-        const DualComplex<Complex>& dual,
+        const DualComplex<Complex, Metric>& dual,
         const Metric& metric) {
         static_assert(k <= Complex::dim(), "Invalid degree for inverse Hodge star");
         DiscreteForm<k, Value, Complex> result(omega.mesh());
@@ -234,19 +274,18 @@ namespace delta::geometry {
         return result;
     }
 
-    // -----------------------------------------------------------------------------
+    // -------------------------------------------------------------------------
     // Кодифференциал δ = (-1)^{n(k-1)+1} * star^{-1} d star
-    // -----------------------------------------------------------------------------
+    // -------------------------------------------------------------------------
     template<int k, typename Value, typename Complex, typename Metric>
     DiscreteForm<k - 1, Value, Complex> codifferential(const DiscreteForm<k, Value, Complex>& omega,
-        const DualComplex<Complex>& dual,
+        const DualComplex<Complex, Metric>& dual,
         const Metric& metric) {
         static_assert(k >= 1, "Cannot apply codifferential to a 0-form");
-        constexpr int n = Complex::dim();  // размерность пространства
-        // Знак: (-1)^{n(k-1)+1}
+        constexpr int n = Complex::dim();
         constexpr int sign = ((n * (k - 1) + 1) % 2 == 0) ? 1 : -1;
 
-        auto star_omega = omega.star(dual, metric);               // (n-k)-форма на примарном
+        auto star_omega = omega.star(dual, metric);               // (n-k)-форма на примальном
         auto d_star_omega = star_omega.d();                       // (n-k+1)-форма
         auto star_d_star_omega = inverse_star(d_star_omega, dual, metric); // (k-1)-форма
 
@@ -257,12 +296,12 @@ namespace delta::geometry {
         return result;
     }
 
-    // -----------------------------------------------------------------------------
+    // -------------------------------------------------------------------------
     // Лапласиан Δ = dδ + δd
-    // -----------------------------------------------------------------------------
+    // -------------------------------------------------------------------------
     template<int k, typename Value, typename Complex, typename Metric>
     DiscreteForm<k, Value, Complex> laplacian(const DiscreteForm<k, Value, Complex>& omega,
-        const DualComplex<Complex>& dual,
+        const DualComplex<Complex, Metric>& dual,
         const Metric& metric) {
         auto d_omega = omega.d();                                  // (k+1)-форма
         auto delta_omega = codifferential(omega, dual, metric);    // (k-1)-форма
@@ -278,6 +317,20 @@ namespace delta::geometry {
             result.at(i) = val;
         }
         return result;
+    }
+
+    // -------------------------------------------------------------------------
+    // Ротор (curl) для 1-форм в 3D
+    // -------------------------------------------------------------------------
+    template<typename Value, typename Complex, typename Metric>
+    DiscreteForm<1, Value, Complex> curl(const DiscreteForm<1, Value, Complex>& omega,
+        const DualComplex<Complex, Metric>& dual,
+        const Metric& metric) {
+        static_assert(Complex::dim() == 3, "curl only defined in 3D");
+        // curl ω = ⋆ d ω
+        auto d_omega = omega.d();                         // 2-форма
+        auto star_d_omega = d_omega.star(dual, metric);   // 1-форма
+        return star_d_omega;
     }
 
 } // namespace delta::geometry

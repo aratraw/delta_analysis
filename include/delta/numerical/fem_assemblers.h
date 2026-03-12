@@ -1,42 +1,44 @@
+// include/delta/numerical/fem_assemblers.h
 #pragma once
 
 #include "delta/geometry/simplicial_complex.h"
 #include "delta/numerical/cotangent_laplacian.h"
+#include "delta/numerical/concepts.h"
 #include <Eigen/Sparse>
 #include <vector>
+#include <cmath>
 
 namespace delta::numerical {
 
     /**
-     * @brief Собрать массовую матрицу для линейных элементов на симплициальном комплексе.
+     * @brief Собрать массовую матрицу для линейных элементов на симплициальном комплексе (2D).
      *
      * Для треугольников в 2D используется формула:
      *   M_ii = area / 6
-     *   M_ij = area / 12   для i ≠ j (соседние вершины в треугольнике)
+     *   M_ij = area / 12   для i ≠ j (смежные вершины в треугольнике)
      *
-     * @tparam Complex Тип, удовлетворяющий SimplicialComplex (точки должны иметь оператор сложения и умножения на скаляр).
+     * @tparam Complex Тип, удовлетворяющий FiniteElementGrid (точки должны иметь операторы + и *).
+     * @tparam Metric  Тип метрики.
      * @param mesh Сетка.
+     * @param metric Метрика для вычисления площадей треугольников.
      * @return Разрежённая матрица размера num_vertices() x num_vertices().
      */
-    template<typename Complex>
-    Eigen::SparseMatrix<typename Complex::point_type::Scalar>
-        assemble_mass_matrix(const Complex& mesh) {
+    template<typename Complex, typename Metric>
+        requires FiniteElementGrid<Complex>&& IsMetric<Metric, typename Complex::point_type, typename Complex::scalar_type>
+    Eigen::SparseMatrix<typename Complex::scalar_type>
+        assemble_mass_matrix(const Complex& mesh, const Metric& metric)
+    {
         using Scalar = typename Complex::point_type::Scalar;
         using Index = int;
         std::size_t n = mesh.num_vertices();
         std::vector<Eigen::Triplet<Scalar>> triplets;
 
-        // Для каждого треугольника вычисляем его площадь и вклады в масс-матрицу
+        // Для каждого треугольника вычисляем его площадь через метрику и вклады в масс-матрицу
         for (std::size_t t = 0; t < mesh.num_triangles(); ++t) {
             auto tri = mesh.triangle_at(t);
-            auto p0 = mesh.vertex(tri[0]);
-            auto p1 = mesh.vertex(tri[1]);
-            auto p2 = mesh.vertex(tri[2]);
-
-            // Площадь треугольника (для евклидовой метрики)
-            auto ab = p1 - p0;
-            auto ac = p2 - p0;
-            Scalar area = std::abs(ab.x() * ac.y() - ab.y() * ac.x()) / Scalar{ 2 };
+            // Площадь треугольника через метрику (используем метод cell_volume)
+            Scalar area = mesh.cell_volume(t, metric);
+            if (area <= Scalar{ 0 }) continue; // защита от вырожденных
 
             Scalar diag_contrib = area / Scalar{ 6 };
             Scalar off_contrib = area / Scalar{ 12 };
@@ -62,17 +64,21 @@ namespace delta::numerical {
     /**
      * @brief Собрать матрицу жёсткости (stiffness matrix) для линейных элементов.
      *
-     * Для треугольников в 2D это cotangent Laplacian. Используем готовую функцию
+     * Для треугольников в 2D это котангенсный лапласиан. Используем готовую функцию
      * build_cotangent_laplacian из numerical/cotangent_laplacian.h.
      *
-     * @tparam Complex Тип, удовлетворяющий SimplicialComplex (точки должны иметь координаты типа double или Rational).
+     * @tparam Complex Тип, удовлетворяющий FiniteElementGrid.
+     * @tparam Metric  Тип метрики.
      * @param mesh Сетка.
+     * @param metric Метрика для вычисления длин и площадей.
      * @return Разрежённая матрица жёсткости.
      */
-    template<typename Complex>
-    Eigen::SparseMatrix<typename Complex::point_type::Scalar>
-        assemble_stiffness_matrix(const Complex& mesh) {
-        return build_cotangent_laplacian(mesh);
+    template<typename Complex, typename Metric>
+        requires FiniteElementGrid<Complex>&& IsMetric<Metric, typename Complex::point_type, typename Complex::scalar_type>
+    Eigen::SparseMatrix<typename Complex::scalar_type>
+        assemble_stiffness_matrix(const Complex& mesh, const Metric& metric)
+    {
+        return build_cotangent_laplacian(mesh, metric);
     }
 
     /**

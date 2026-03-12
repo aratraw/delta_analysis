@@ -4,6 +4,7 @@
 #include "delta/geometry/simplicial_complex.h"
 #include "delta/numerical/fem_assemblers.h"
 #include "delta/numerical/boundary_conditions.h"
+#include "delta/numerical/concepts.h"
 #include "delta/core/operational_function.h"
 #include <Eigen/Sparse>
 #include <functional>
@@ -11,18 +12,6 @@
 #include <unordered_map>
 
 namespace delta::numerical {
-
-    // -----------------------------------------------------------------------------
-    // Concept for a finite element grid (simplicial complex with vertices)
-    // -----------------------------------------------------------------------------
-    template<typename G>
-    concept FiniteElementGrid = requires(G g, std::size_t i) {
-        typename G::point_type;
-        { g.num_vertices() } -> std::convertible_to<std::size_t>;
-        { g.vertex(i) } -> std::same_as<typename G::point_type>;
-        { g.num_triangles() } -> std::convertible_to<std::size_t>;
-        { g.triangle_at(i) } -> std::same_as<typename G::triangle_type>;
-    };
 
     // -----------------------------------------------------------------------------
     // Helper: build vertex -> index map for fast lookup
@@ -76,8 +65,9 @@ namespace delta::numerical {
     // Explicit Euler for heat equation (Δ‑style)
     // -----------------------------------------------------------------------------
     template<typename Path, typename Value, typename SourceFunc, typename Metric, typename BC>
-        requires FiniteElementGrid<typename Path::GridType>
-    OperationalFunction<typename Path::GridType::point_type, Value, typename Path::GridType>
+        requires FiniteElementGrid<typename Path::GridType>&&
+    IsMetric<Metric, typename Path::GridType::point_type, typename Path::GridType::scalar_type>
+        OperationalFunction<typename Path::GridType::point_type, Value, typename Path::GridType>
         solve_heat_explicit(
             const Path& path,
             const OperationalFunction<typename Path::GridType::point_type, Value, typename Path::GridType>& u0,
@@ -96,9 +86,9 @@ namespace delta::numerical {
         // Precompute vertex->index map for the final function
         auto vertex_to_idx = build_vertex_to_index_map(mesh);
 
-        // Assemble mass and stiffness matrices (once)
-        auto M = assemble_mass_matrix(mesh);
-        auto K = assemble_stiffness_matrix(mesh);
+        // Assemble mass and stiffness matrices (once) using metric
+        auto M = assemble_mass_matrix(mesh, metric);
+        auto K = assemble_stiffness_matrix(mesh, metric);
         auto lumpedM = lumped_mass_matrix(M); // diagonal lumped mass
 
         // Extract initial values into vector indexed by vertex
@@ -166,8 +156,9 @@ namespace delta::numerical {
     // Implicit Euler for heat equation (Δ‑style)
     // -----------------------------------------------------------------------------
     template<typename Path, typename Value, typename SourceFunc, typename Metric, typename BC>
-        requires FiniteElementGrid<typename Path::GridType>
-    OperationalFunction<typename Path::GridType::point_type, Value, typename Path::GridType>
+        requires FiniteElementGrid<typename Path::GridType>&&
+    IsMetric<Metric, typename Path::GridType::point_type, typename Path::GridType::scalar_type>
+        OperationalFunction<typename Path::GridType::point_type, Value, typename Path::GridType>
         solve_heat_implicit(
             const Path& path,
             const OperationalFunction<typename Path::GridType::point_type, Value, typename Path::GridType>& u0,
@@ -186,9 +177,9 @@ namespace delta::numerical {
 
         auto vertex_to_idx = build_vertex_to_index_map(mesh);
 
-        // Precompute matrices (constant for this grid)
-        auto K = assemble_stiffness_matrix(mesh);
-        auto M = assemble_mass_matrix(mesh);
+        // Precompute matrices (constant for this grid) using metric
+        auto K = assemble_stiffness_matrix(mesh, metric);
+        auto M = assemble_mass_matrix(mesh, metric);
         // System matrix A = M + αΔt K
         Eigen::SparseMatrix<Value> A = M;
         if (alpha != 0 && dt != 0) {
@@ -260,8 +251,9 @@ namespace delta::numerical {
     // Crank-Nicolson for heat equation (Δ‑style)
     // -----------------------------------------------------------------------------
     template<typename Path, typename Value, typename SourceFunc, typename Metric, typename BC>
-        requires FiniteElementGrid<typename Path::GridType>
-    OperationalFunction<typename Path::GridType::point_type, Value, typename Path::GridType>
+        requires FiniteElementGrid<typename Path::GridType>&&
+    IsMetric<Metric, typename Path::GridType::point_type, typename Path::GridType::scalar_type>
+        OperationalFunction<typename Path::GridType::point_type, Value, typename Path::GridType>
         solve_heat_crank_nicolson(
             const Path& path,
             const OperationalFunction<typename Path::GridType::point_type, Value, typename Path::GridType>& u0,
@@ -280,8 +272,8 @@ namespace delta::numerical {
 
         auto vertex_to_idx = build_vertex_to_index_map(mesh);
 
-        auto K = assemble_stiffness_matrix(mesh);
-        auto M = assemble_mass_matrix(mesh);
+        auto K = assemble_stiffness_matrix(mesh, metric);
+        auto M = assemble_mass_matrix(mesh, metric);
 
         // Left matrix: L = M + (αΔt/2) K
         Eigen::SparseMatrix<Value> L = M;
