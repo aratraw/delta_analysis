@@ -7,6 +7,8 @@
 #include <unordered_map>
 #include <variant>
 #include <optional>
+#include <Eigen/Sparse>
+#include <Eigen/Dense>
 
 namespace delta::numerical {
 
@@ -164,5 +166,62 @@ namespace delta::numerical {
         std::unordered_map<size_type, std::pair<BCType, BCValue<Scalar>>> edge_conditions_;
         std::vector<std::pair<size_type, size_type>> periodic_pairs_;
     };
+
+    // -----------------------------------------------------------------------------
+    // Общая функция применения граничных условий для FEM-решателей
+    // Поддерживает Dirichlet и Neumann. Robin и Periodic требуют доработки.
+    // -----------------------------------------------------------------------------
+    template<typename Value, typename BC>
+    void apply_boundary_conditions(Eigen::SparseMatrix<Value>& A,
+        Eigen::Matrix<Value, Eigen::Dynamic, 1>& b,
+        const Eigen::Matrix<Value, Eigen::Dynamic, 1>& lumpedM,
+        std::size_t n,
+        const BC& bc,
+        double t,
+        const std::vector<std::size_t>& dof_map = {}) {
+        using Index = int;
+
+        // Обработка Dirichlet и Neumann
+        for (std::size_t i = 0; i < n; ++i) {
+            std::size_t global_i = dof_map.empty() ? i : dof_map[i];
+            BCType type;
+            BCValue<Value> bc_val;
+            if (!bc.get_vertex_condition(global_i, type, bc_val)) continue;
+
+            switch (type) {
+            case BCType::Dirichlet: {
+                Value g = bc_val(t, global_i);
+                // Обнуляем строку i
+                for (int k = 0; k < A.outerSize(); ++k) {
+                    for (typename Eigen::SparseMatrix<Value>::InnerIterator it(A, k); it; ++it) {
+                        if (it.row() == static_cast<Index>(i)) {
+                            it.valueRef() = 0;
+                        }
+                    }
+                }
+                A.coeffRef(static_cast<Index>(i), static_cast<Index>(i)) = 1.0;
+                b(i) = g;
+                break;
+            }
+            case BCType::Neumann: {
+                Value g = bc_val(t, global_i);
+                b(i) += lumpedM(i) * g;  // вклад в правую часть
+                // Матрица не изменяется
+                break;
+            }
+            case BCType::Robin:
+            case BCType::Periodic:
+                // TODO: implement
+                break;
+            }
+        }
+
+        // Периодические условия (упрощённо, пока не реализованы)
+        const auto& pairs = bc.periodic_pairs();
+        if (!pairs.empty()) {
+            // TODO: Implement periodic conditions by linking degrees of freedom
+            // For now, ignore or throw.
+        }
+    }
 
 } // namespace delta::numerical

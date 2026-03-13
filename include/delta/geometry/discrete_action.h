@@ -132,10 +132,7 @@ namespace delta::geometry {
      * The field is defined on a 1D grid. The action uses a left‑point Riemann
      * sum for the potential term.
      *
-     * @note The derivative of the potential V'(φ) is currently not implemented;
-     *       the variation() method returns zero. To use this class in actual
-     *       computations, override variation() in a derived class or provide
-     *       a mechanism for V'(φ).
+     * The variation includes both the gradient term and the potential derivative.
      */
     template<typename Field, typename Path>
     class ScalarFieldAction : public DiscreteAction<Field, Path> {
@@ -145,13 +142,16 @@ namespace delta::geometry {
 
         /// Type of the potential function: V(φ) → value
         using Potential = std::function<value_type(const value_type&)>;
+        /// Type of the potential derivative: V'(φ) → value
+        using Derivative = std::function<value_type(const value_type&)>;
 
         /**
          * @param V         Potential function.
+         * @param dV        Derivative of the potential.
          * @param stiffness Coefficient in front of the gradient term (default 1).
          */
-        ScalarFieldAction(Potential V, value_type stiffness = value_type{ 1 })
-            : V_(V), stiffness_(stiffness) {
+        ScalarFieldAction(Potential V, Derivative dV, value_type stiffness = value_type{ 1 })
+            : V_(V), dV_(dV), stiffness_(stiffness) {
         }
 
         value_type evaluate(const Field& field, const Path& path) const override {
@@ -170,13 +170,41 @@ namespace delta::geometry {
 
         value_type variation(const Field& field, const Path& path,
             const address_type& addr) const override {
-            // Currently returns zero because V'(φ) is not available.
-            // Override in a derived class to include the potential derivative.
-            return value_type{ 0 };
+            const auto& grid = path.current_grid();
+            std::ptrdiff_t idx = find_address_index(grid, addr);
+
+            // Boundary points (Dirichlet) have zero variation
+            if (idx <= 0 || idx >= static_cast<std::ptrdiff_t>(grid.size()) - 1)
+                return value_type{ 0 };
+
+            const auto& x_prev = grid[idx - 1];
+            const auto& x_curr = addr;
+            const auto& x_next = grid[idx + 1];
+
+            value_type phi_prev = field(x_prev);
+            value_type phi_curr = field(x_curr);
+            value_type phi_next = field(x_next);
+
+            // Grid spacings
+            value_type h_left = path.metric()(x_curr, x_prev);   // from x_prev to x_curr
+            value_type h_right = path.metric()(x_next, x_curr);  // from x_curr to x_next
+
+            // Left and right difference quotients
+            value_type left_diff = (phi_curr - phi_prev) / h_left;
+            value_type right_diff = (phi_next - phi_curr) / h_right;
+
+            // Gradient contribution
+            value_type grad_contrib = stiffness_ * (left_diff - right_diff);
+
+            // Potential contribution: V'(φ_curr) * h_right  (since in the action V(φ_i) is multiplied by h_i = h_right)
+            value_type potential_contrib = dV_(phi_curr) * h_right;
+
+            return grad_contrib + potential_contrib;
         }
 
     private:
         Potential V_;
+        Derivative dV_;
         value_type stiffness_;
     };
 

@@ -97,11 +97,11 @@ namespace delta::numerical {
                     + Value(dt * dt) * (-c * c * Ku(i) / lumpedM(i) + rhs(i) / lumpedM(i));
             }
 
-            // Apply Dirichlet BC (overwrite)
+            // Apply Dirichlet BC (overwrite). Neumann BC are not supported in explicit scheme.
             for (std::size_t i = 0; i < n; ++i) {
                 BCType type;
                 BCValue<Value> bc_val;
-                if (bc.get(i, type, bc_val) && type == BCType::Dirichlet) {
+                if (bc.get_vertex_condition(i, type, bc_val) && type == BCType::Dirichlet) {
                     u_next[i] = bc_val(t_next, i);
                 }
             }
@@ -160,6 +160,7 @@ namespace delta::numerical {
         // Assemble matrices using metric
         auto K = assemble_stiffness_matrix(mesh, metric);
         auto M = assemble_mass_matrix(mesh, metric);
+        auto lumpedM = lumped_mass_matrix(M);
 
         // Effective stiffness for Newmark: K_eff = M + beta * dt² * c² * K
         Eigen::SparseMatrix<Value> K_eff = M;
@@ -190,20 +191,13 @@ namespace delta::numerical {
                 rhs0(it.row()) += it.value() * fi;
             }
         }
-        // Apply Dirichlet BC to initial acceleration (set a=0 at Dirichlet nodes)
-        for (std::size_t i = 0; i < n; ++i) {
-            BCType type;
-            BCValue<Value> bc_val;
-            if (bc.get(i, type, bc_val) && type == BCType::Dirichlet) {
-                // Modify rhs0 and later ensure a_i = 0
-                // Simplest: zero out row of M for i? But M is not modified.
-                // We'll enforce by setting a_i = 0 after solve.
-                // For now, keep rhs0 as is, but after solve we set a_i = 0.
-            }
-        }
+        // Apply boundary conditions to initial acceleration system
+        // We solve M a0 = rhs0. Use lumpedM as placeholder (Neumann not used here)
+        Eigen::SparseMatrix<Value> M_mod = M;
+        apply_boundary_conditions(M_mod, rhs0, lumpedM, n, bc, 0.0);
         // Solve M a0 = rhs0
         Eigen::SparseLU<Eigen::SparseMatrix<Value>> solver_init;
-        solver_init.compute(M);
+        solver_init.compute(M_mod);
         if (solver_init.info() != Eigen::Success)
             throw std::runtime_error("Newmark wave solver: initial acceleration factorization failed");
         Eigen::Matrix<Value, Eigen::Dynamic, 1> a0 = solver_init.solve(rhs0);
@@ -211,12 +205,6 @@ namespace delta::numerical {
             throw std::runtime_error("Newmark wave solver: initial acceleration solve failed");
         for (std::size_t i = 0; i < n; ++i) {
             a[i] = a0(i);
-            // Enforce Dirichlet: a[i] = 0 at fixed nodes
-            BCType type;
-            BCValue<Value> bc_val;
-            if (bc.get(i, type, bc_val) && type == BCType::Dirichlet) {
-                a[i] = Value(0);
-            }
         }
 
         // Time stepping
@@ -247,28 +235,11 @@ namespace delta::numerical {
             Eigen::Matrix<Value, Eigen::Dynamic, 1> Ku_pred = K * u_pred_eig;
             rhs -= c * c * Ku_pred;
 
-            // Apply Dirichlet BC to system: for Dirichlet nodes, we want a_{n+1} = 0
-            // So modify K_eff and rhs accordingly.
+            // Apply boundary conditions (Dirichlet and Neumann) to the system for acceleration
             Eigen::SparseMatrix<Value> K_eff_mod = K_eff;
-            for (std::size_t i = 0; i < n; ++i) {
-                BCType type;
-                BCValue<Value> bc_val;
-                if (bc.get(i, type, bc_val) && type == BCType::Dirichlet) {
-                    // Zero out row i
-                    for (int k = 0; k < K_eff_mod.outerSize(); ++k) {
-                        for (typename Eigen::SparseMatrix<Value>::InnerIterator it(K_eff_mod, k); it; ++it) {
-                            if (it.row() == static_cast<Index>(i)) {
-                                it.valueRef() = 0;
-                            }
-                        }
-                    }
-                    K_eff_mod.coeffRef(static_cast<Index>(i), static_cast<Index>(i)) = 1.0;
-                    rhs(i) = Value(0);
-                }
-            }
+            apply_boundary_conditions(K_eff_mod, rhs, lumpedM, n, bc, t_next);
 
-            // Solve for acceleration increment? Actually we solve for a_{n+1}
-            // The system is: K_eff * a_{n+1} = rhs
+            // Solve for a_{n+1}: K_eff * a_{n+1} = rhs
             Eigen::SparseLU<Eigen::SparseMatrix<Value>> solver;
             solver.compute(K_eff_mod);
             if (solver.info() != Eigen::Success)
@@ -285,11 +256,11 @@ namespace delta::numerical {
                 v_next[i] = v_pred[i] + Value(gamma * dt) * a[i];
             }
 
-            // Apply Dirichlet BC directly to displacement and velocity (overwrite)
+            // Overwrite Dirichlet values for displacement and velocity (as before)
             for (std::size_t i = 0; i < n; ++i) {
                 BCType type;
                 BCValue<Value> bc_val;
-                if (bc.get(i, type, bc_val) && type == BCType::Dirichlet) {
+                if (bc.get_vertex_condition(i, type, bc_val) && type == BCType::Dirichlet) {
                     u_next[i] = bc_val(t_next, i);
                     v_next[i] = Value(0);   // velocity zero at fixed nodes (could also be given)
                     a[i] = Value(0);         // acceleration zero

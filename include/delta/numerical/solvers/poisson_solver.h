@@ -29,7 +29,7 @@ namespace delta::numerical {
 
     // -----------------------------------------------------------------------------
     // Poisson solver for simplicial meshes (2D/3D) using FEM (Δ‑style)
-    // Solves -Δu = f  with Dirichlet BC.
+    // Solves -Δu = f with Dirichlet or Neumann BC.
     // Returns solution as OperationalFunction on vertices.
     // -----------------------------------------------------------------------------
     template<typename Path, typename Value, typename Metric, typename BC>
@@ -55,6 +55,7 @@ namespace delta::numerical {
         // Assemble stiffness matrix K and mass matrix M using metric
         auto K = assemble_stiffness_matrix(mesh, metric);   // cotangent Laplacian
         auto M = assemble_mass_matrix(mesh, metric);
+        auto lumpedM = lumped_mass_matrix(M);               // diagonal lumped mass
 
         // Right-hand side vector: b = M * f (where f is the rhs function)
         Eigen::Matrix<Value, Eigen::Dynamic, 1> b(n);
@@ -69,28 +70,9 @@ namespace delta::numerical {
         // System matrix A = K (since we solve K u = M f)
         Eigen::SparseMatrix<Value> A = K;
 
-        // Apply boundary conditions (Dirichlet only)
-        // We modify A and b in place, but we need a copy of A to avoid destroying original.
-        // Since we won't reuse A, we can modify it directly.
-        for (std::size_t i = 0; i < n; ++i) {
-            BCType type;
-            BCValue<Value> bc_val;
-            if (!bc.get(i, type, bc_val)) continue;
-            if (type == BCType::Dirichlet) {
-                Value g = bc_val(time, i);
-                // Zero out row i
-                for (int k = 0; k < A.outerSize(); ++k) {
-                    for (typename Eigen::SparseMatrix<Value>::InnerIterator it(A, k); it; ++it) {
-                        if (it.row() == static_cast<Index>(i)) {
-                            it.valueRef() = 0;
-                        }
-                    }
-                }
-                A.coeffRef(static_cast<Index>(i), static_cast<Index>(i)) = 1.0;
-                b(i) = g;
-            }
-            // Neumann/Robin not implemented (would require modification)
-        }
+        // Apply boundary conditions (Dirichlet and Neumann)
+        // Note: apply_boundary_conditions modifies A and b in place using lumpedM for Neumann contributions.
+        apply_boundary_conditions(A, b, lumpedM, n, bc, time);
 
         // Solve linear system
         Eigen::SparseLU<Eigen::SparseMatrix<Value>> solver;

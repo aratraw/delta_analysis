@@ -48,27 +48,45 @@ namespace delta::numerical {
 
     // -------------------------------------------------------------------------
     // Дискретная дивергенция (одномерная) – возвращает скалярное поле
-    // ВНИМАНИЕ: текущая реализация использует заглушку, так как требует
-    // доступа к компонентам векторного поля как к отдельным скалярным полям.
+    // Вычисляет производную единственной компоненты векторного поля.
     // -------------------------------------------------------------------------
     template<typename Grid, typename VecField, typename Metric>
-    auto discrete_divergence_1d(const Grid& grid,
-        const VecField& vec_field,
-        const Metric& metric,
-        DifferenceScheme scheme = DifferenceScheme::BACKWARD) {
+        requires IsMetric<Metric, typename Grid::value_type, typename VecField::scalar_type> &&
+    (VecField::rank == 1) && (VecField::dim == 1)
+        auto discrete_divergence_1d(const Grid& grid,
+            const VecField& vec_field,
+            const Metric& metric,
+            DifferenceScheme scheme = DifferenceScheme::BACKWARD) {
         using Point = typename Grid::value_type;
         using Scalar = typename VecField::scalar_type;
 
+        // Результирующее скалярное поле (ранг 0)
         geometry::TensorField<Point, Scalar, 0, 0> result;
 
         for (std::size_t i = 0; i < grid.size(); ++i) {
             const auto& point = grid[i];
-            const auto& vec = vec_field.at(point);
-            Scalar comp = vec(0); // предполагаем размерность 1
 
-            // Заглушка: для корректной работы нужно передавать поле компоненты,
-            // а не одно значение. Здесь просто возвращаем 0.
-            result.set(point, Scalar{ 0 });
+            // Создаём функтор, возвращающий компоненту векторного поля в заданной точке
+            auto component_field = [&](const Point& x) -> Scalar {
+                return vec_field.at(x)(0);
+                };
+
+            Scalar div_val;
+            switch (scheme) {
+            case DifferenceScheme::FORWARD:
+                div_val = forward_difference(grid, component_field, metric, point);
+                break;
+            case DifferenceScheme::BACKWARD:
+                div_val = backward_difference(grid, component_field, metric, point);
+                break;
+            case DifferenceScheme::CENTRAL:
+                div_val = central_difference(grid, component_field, metric, point);
+                break;
+            default:
+                div_val = 0;
+            }
+
+            result.set(point, div_val);
         }
         return result;
     }

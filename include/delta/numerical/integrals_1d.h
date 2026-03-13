@@ -5,7 +5,8 @@
 #include <cmath>
 #include "delta/core/grid_concept.h"
 #include "delta/core/regulative_idea.h"
-#include "delta/numerical/grid_ops_1d.h"  // для neighbor_indices, laplacian_general
+#include "delta/numerical/grid_ops_1d.h"  // для neighbor_indices, forward_difference и др.
+#include "delta/numerical/concepts.h"     // для IsMetric
 
 namespace delta::numerical {
 
@@ -39,6 +40,7 @@ namespace delta::numerical {
      * @brief Вычислить объём ячейки, ассоциированной с точкой в координатной сетке (1D).
      */
     template<typename Grid, typename Metric>
+        requires OrderedGrid<Grid>&& IsMetric<Metric, typename Grid::value_type, typename Grid::value_type>
     auto cell_volume(const Grid& grid, std::size_t idx, const Metric& metric) {
         using Value = typename Grid::value_type;
         std::ptrdiff_t i = static_cast<std::ptrdiff_t>(idx);
@@ -67,6 +69,7 @@ namespace delta::numerical {
      * @brief Вычислить дискретный интеграл функции по области, покрытой сеткой (1D).
      */
     template<typename Grid, typename Field, typename Metric>
+        requires OrderedGrid<Grid>&& IsMetric<Metric, typename Grid::value_type, typename Grid::value_type>
     auto integral(const Grid& grid, const Field& field, const Metric& metric) {
         using Value = decltype(field(grid[0]));
         Value sum{ 0 };
@@ -81,6 +84,7 @@ namespace delta::numerical {
      * @brief Проверить тождество суммирования по частям для двух функций f и g (1D).
      */
     template<typename Grid, typename Field, typename Metric>
+        requires OrderedGrid<Grid>&& IsMetric<Metric, typename Grid::value_type, typename Grid::value_type>
     bool check_summation_by_parts(const Grid& grid,
         const Field& f,
         const Field& g,
@@ -106,23 +110,85 @@ namespace delta::numerical {
      * @brief Проверить первое тождество Грина: ∫ f Δg dV = -∫ f' g' dV + f g'|_boundary (1D).
      */
     template<typename Grid, typename Field, typename Metric>
+        requires OrderedGrid<Grid>&& IsMetric<Metric, typename Grid::value_type, typename Grid::value_type>
     bool check_green_first(const Grid& grid,
         const Field& f,
         const Field& g,
         const Metric& metric,
-        double tol = 1e-12) {
+        double tol = 1e-12,
+        DifferenceScheme scheme = DifferenceScheme::CENTRAL) {
         using Value = typename Field::value_type;
+        using Point = typename Grid::value_type;
 
-        Value lhs{ 0 };
-        for (std::size_t i = 0; i < grid.size(); ++i) {
-            Value lap_g = laplacian_general(grid, g, metric, grid[i]);
-            Value vol = cell_volume(grid, i, metric);
-            lhs += f(grid[i]) * lap_g * vol;
-        }
+        // Левая часть: ∫ f Δg dV
+        Value lhs = integral(grid,
+            [&](const Point& p) { return f(p) * laplacian_general(grid, g, metric, p); },
+            metric);
 
-        // Правая часть (не реализована) – заглушка
-        (void)lhs;
-        return false;
+        // Правая часть: -∫ f' g' dV + граничные члены
+        // Сначала вычислим интеграл от произведения градиентов
+        Value rhs_integral = integral(grid,
+            [&](const Point& p) {
+                // Вычисляем производные f и g в точке p с использованием заданной схемы
+                Value fp, gp;
+                // Для граничных точек используем односторонние разности, для внутренних – центральную
+                std::ptrdiff_t idx = find_index(grid, p);
+                if (idx < 0) return Value{ 0 }; // не должно случиться
+
+                auto [left, right] = neighbor_indices(grid, idx);
+                bool internal = (left >= 0 && right >= 0);
+
+                if (internal && scheme == DifferenceScheme::CENTRAL) {
+                    fp = central_difference(grid, f, metric, p);
+                    gp = central_difference(grid, g, metric, p);
+                }
+                else {
+                    // На границах или если выбрана не центральная схема, используем односторонние
+                    if (right < 0) { // правая граница
+                        fp = backward_difference(grid, f, metric, p);
+                        gp = backward_difference(grid, g, metric, p);
+                    }
+                    else if (left < 0) { // левая граница
+                        fp = forward_difference(grid, f, metric, p);
+                        gp = forward_difference(grid, g, metric, p);
+                    }
+                    else {
+                        // Внутренняя, но выбрана не центральная схема
+                        switch (scheme) {
+                        case DifferenceScheme::FORWARD:
+                            fp = forward_difference(grid, f, metric, p);
+                            gp = forward_difference(grid, g, metric, p);
+                            break;
+                        case DifferenceScheme::BACKWARD:
+                            fp = backward_difference(grid, f, metric, p);
+                            gp = backward_difference(grid, g, metric, p);
+                            break;
+                        default:
+                            fp = gp = Value{ 0 };
+                        }
+                    }
+                }
+                return fp * gp;
+            },
+            metric);
+
+        // Граничные члены: f * g' на концах (с учётом направления внешней нормали)
+        // На левой границе внешняя нормаль направлена влево, поэтому вклад = -f(left) * g'(left)
+        // На правой границе: +f(right) * g'(right)
+        Value f_left = f(grid[0]);
+        Value f_right = f(grid[grid.size() - 1]);
+
+        Value g_left, g_right;
+        // Вычисляем производную на левой границе (forward разность)
+        g_left = forward_difference(grid, g, metric, grid[0]);
+        // На правой границе (backward разность)
+        g_right = backward_difference(grid, g, metric, grid[grid.size() - 1]);
+
+        Value boundary = f_right * g_right - f_left * g_left;
+
+        // Проверка тождества: lhs == -rhs_integral + boundary
+        Value error = std::abs(lhs + rhs_integral - boundary);
+        return error < tol;
     }
 
 } // namespace delta::numerical

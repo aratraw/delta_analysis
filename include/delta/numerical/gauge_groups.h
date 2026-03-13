@@ -29,13 +29,10 @@ namespace delta::numerical {
         double trace() const { return std::real(phase_); }
         double real_tr() const { return std::real(phase_); }
 
-        // Преобразование в матрицу 1x1 (для единообразия с SU(N))
         matrix_type matrix() const { return phase_; }
 
-        // Экспонента от мнимого числа (алгебра u(1))
         static U1 exp(double theta) { return U1(theta); }
 
-        // Логарифм (возвращает мнимую часть), предполагается, что фаза близка к 1
         double log() const { return std::imag(std::log(phase_)); }
 
     private:
@@ -81,36 +78,29 @@ namespace delta::numerical {
             double s = std::sin(half_theta);
             // Матрица Паули: n·σ = n1*σ1 + n2*σ2 + n3*σ3
             std::complex<double> i(0, 1);
-            Eigen::Matrix2cd sigma_n = n(0) * Eigen::Matrix2cd::Zero() +
-                n(1) * (Eigen::Matrix2cd() << 0, -i, i, 0).finished() +
-                n(2) * (Eigen::Matrix2cd() << i, 0, 0, -i).finished();
+            Eigen::Matrix2cd sigma_n = n(0) * (Eigen::Matrix2cd() << 0, 1, 1, 0).finished()
+                + n(1) * (Eigen::Matrix2cd() << 0, -i, i, 0).finished()
+                + n(2) * (Eigen::Matrix2cd() << i, 0, 0, -i).finished();
             // exp(i * theta/2 * n·σ) = cos(theta/2) * I + i sin(theta/2) * (n·σ)
-            Eigen::Matrix2cd result = c * Eigen::Matrix2cd::Identity() + std::complex<double>(0, 1) * s * sigma_n;
+            Eigen::Matrix2cd result = c * Eigen::Matrix2cd::Identity() + i * s * sigma_n;
             return SU2(result);
         }
 
-        // Логарифм (приближённый), возвращает вектор в алгебре (ось * угол)
+        // Логарифм: возвращает вектор в алгебре (ось * угол)
         Eigen::Vector3d log() const {
-            // Для матрицы, близкой к единице, логарифм: theta = arccos(tr/2), ось из антисимметричной части
             double tr = mat_.trace().real();
             double theta = std::acos(tr / 2.0); // tr = 2 cos(theta)
-            if (theta < 1e-12) return Eigen::Vector3d::Zero();
-            // Антисимметричная часть: (U - U†)/2 даёт i sin(theta) (n·σ)
+            if (theta < 1e-12) {
+                return Eigen::Vector3d::Zero();
+            }
+            double sin_theta = std::sin(theta);
+            // Антиэрмитова часть: (U - U†)/2
             Eigen::Matrix2cd diff = (mat_ - mat_.adjoint()) / 2.0;
-            // Извлекаем компоненты: diff = i sin(theta) (n1 σ1 + n2 σ2 + n3 σ3)
-            // σ1 = [[0,1],[1,0]], σ2 = [[0,-i],[i,0]], σ3 = [[1,0],[0,-1]]
-            double s = std::sin(theta);
-            if (std::abs(s) < 1e-12) return Eigen::Vector3d::Zero();
-            double n1 = diff(0, 1).real() / s;        // σ1 даёт реальную часть вне диагонали
-            double n2 = diff(0, 1).imag() / s;        // σ2 даёт мнимую часть вне диагонали (с минусом? нужно уточнить)
-            double n3 = diff(0, 0).imag() / s;        // σ3 даёт мнимую часть диагонали
-            // Для σ2: элемент (0,1) = -i, поэтому imag(diff(0,1)) = sin(theta)*n2
-            // Проверим знак: в формуле exp(i θ/2 n·σ) = cos(θ/2)I + i sin(θ/2)(n·σ)
-            // Тогда антиэрмитова часть = i sin(θ/2)(n·σ). При θ малом, diff ≈ i θ/2 (n·σ)
-            // Тогда imag(diff(0,1)) = θ/2 n2, real(diff(0,1)) = θ/2 n1.
-            // Мы имеем theta = 2 * asin(...). Уточним.
-            // Упростим: оставим приближённую формулу для малых углов.
-            return Eigen::Vector3d(n1, n2, n3) * theta; // грубо
+            // Извлекаем компоненты (см. анализ в документации)
+            double n1 = diff(0, 1).imag() / sin_theta;
+            double n2 = diff(0, 1).real() / sin_theta;
+            double n3 = diff(0, 0).imag() / sin_theta; // поскольку diff(0,0) = i sin(theta) n3
+            return Eigen::Vector3d(n1, n2, n3) * theta;
         }
 
     private:
@@ -146,7 +136,7 @@ namespace delta::numerical {
 
         const matrix_type& matrix() const { return mat_; }
 
-        // Экспонента от алгебры su(3) – через Eigen::Matrix::exp (требует <unsupported/Eigen/MatrixFunctions>)
+        // Экспонента от алгебры su(3) – через Eigen::Matrix::exp
         static SU3 exp(const Eigen::Matrix3cd& alg) {
             // alg должна быть антиэрмитовой и бесследовой
             Eigen::Matrix3cd m = alg;

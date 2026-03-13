@@ -29,39 +29,6 @@ namespace delta::numerical {
     }
 
     // -----------------------------------------------------------------------------
-    // Apply Dirichlet boundary conditions to matrix and RHS
-    // -----------------------------------------------------------------------------
-    template<typename Value, typename BC>
-    void apply_dirichlet_to_system(Eigen::SparseMatrix<Value>& A,
-        Eigen::Matrix<Value, Eigen::Dynamic, 1>& b,
-        std::size_t n,
-        const BC& bc,
-        double t,
-        const std::vector<std::size_t>& dof_map = {}) {
-        using Index = int;
-        for (std::size_t i = 0; i < n; ++i) {
-            std::size_t global_i = dof_map.empty() ? i : dof_map[i];
-            BCType type;
-            BCValue<Value> bc_val;
-            if (!bc.get(global_i, type, bc_val)) continue;
-            if (type == BCType::Dirichlet) {
-                Value g = bc_val(t, global_i);
-                // Zero out row i
-                for (int k = 0; k < A.outerSize(); ++k) {
-                    for (typename Eigen::SparseMatrix<Value>::InnerIterator it(A, k); it; ++it) {
-                        if (it.row() == static_cast<Index>(i)) {
-                            it.valueRef() = 0;
-                        }
-                    }
-                }
-                A.coeffRef(static_cast<Index>(i), static_cast<Index>(i)) = 1.0;
-                b(i) = g;
-            }
-            // Neumann, Robin, Periodic not implemented here
-        }
-    }
-
-    // -----------------------------------------------------------------------------
     // Explicit Euler for heat equation (Δ‑style)
     // -----------------------------------------------------------------------------
     template<typename Path, typename Value, typename SourceFunc, typename Metric, typename BC>
@@ -123,11 +90,11 @@ namespace delta::numerical {
                 u_new_vec[i] = u_vec[i] + Value(dt) * (-alpha * Ku(i) / lumpedM(i) + rhs(i) / lumpedM(i));
             }
 
-            // Apply Dirichlet BC (overwrite)
+            // Apply Dirichlet BC (overwrite). Neumann BC are not handled in explicit scheme.
             for (std::size_t i = 0; i < n; ++i) {
                 BCType type;
                 BCValue<Value> bc_val;
-                if (bc.get(i, type, bc_val) && type == BCType::Dirichlet) {
+                if (bc.get_vertex_condition(i, type, bc_val) && type == BCType::Dirichlet) {
                     u_new_vec[i] = bc_val(t_next, i);
                 }
             }
@@ -180,6 +147,8 @@ namespace delta::numerical {
         // Precompute matrices (constant for this grid) using metric
         auto K = assemble_stiffness_matrix(mesh, metric);
         auto M = assemble_mass_matrix(mesh, metric);
+        auto lumpedM = lumped_mass_matrix(M); // diagonal lumped mass
+
         // System matrix A = M + αΔt K
         Eigen::SparseMatrix<Value> A = M;
         if (alpha != 0 && dt != 0) {
@@ -213,9 +182,9 @@ namespace delta::numerical {
                 }
             }
 
-            // Apply Dirichlet BC (modifies a copy of A)
+            // Apply boundary conditions (Dirichlet and Neumann)
             Eigen::SparseMatrix<Value> A_mod = A;
-            apply_dirichlet_to_system(A_mod, rhs, n, bc, t_next);
+            apply_boundary_conditions(A_mod, rhs, lumpedM, n, bc, t_next);
 
             // Solve
             Eigen::SparseLU<Eigen::SparseMatrix<Value>> solver;
@@ -274,6 +243,7 @@ namespace delta::numerical {
 
         auto K = assemble_stiffness_matrix(mesh, metric);
         auto M = assemble_mass_matrix(mesh, metric);
+        auto lumpedM = lumped_mass_matrix(M);
 
         // Left matrix: L = M + (αΔt/2) K
         Eigen::SparseMatrix<Value> L = M;
@@ -315,9 +285,9 @@ namespace delta::numerical {
                 }
             }
 
-            // Apply Dirichlet BC
+            // Apply boundary conditions (Dirichlet and Neumann)
             Eigen::SparseMatrix<Value> L_mod = L;
-            apply_dirichlet_to_system(L_mod, rhs, n, bc, t_next);
+            apply_boundary_conditions(L_mod, rhs, lumpedM, n, bc, t_next);
 
             // Solve
             Eigen::SparseLU<Eigen::SparseMatrix<Value>> solver;

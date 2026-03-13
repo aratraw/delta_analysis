@@ -32,7 +32,6 @@ namespace delta::geometry {
                 auto a = mesh.vertex(simp[0]);
                 auto b = mesh.vertex(simp[1]);
                 auto c = mesh.vertex(simp[2]);
-                // формула Герона
                 Scalar ab = metric(a, b);
                 Scalar bc = metric(b, c);
                 Scalar ca = metric(c, a);
@@ -41,7 +40,6 @@ namespace delta::geometry {
                 return sqrt(s * (s - ab) * (s - bc) * (s - ca));
             }
             else if constexpr (k == 3) {
-                // объём тетраэдра через формулу Кэли-Менгера
                 auto a = mesh.vertex(simp[0]);
                 auto b = mesh.vertex(simp[1]);
                 auto c = mesh.vertex(simp[2]);
@@ -66,6 +64,16 @@ namespace delta::geometry {
                 static_assert(k <= 3, "primal_volume for k>3 not implemented");
                 return Scalar{ 0 };
             }
+        }
+
+        // Вспомогательная функция для интерполяции 0-формы на ребре (среднее арифметическое значений на концах)
+        template<typename Value, typename Complex>
+        Value interpolate_0form_on_edge(std::size_t edge_idx,
+            const DiscreteForm<0, Value, Complex>& f,
+            const Complex& mesh) {
+            auto [v0, v1] = mesh.edge_at(edge_idx);
+            // Предполагается, что форма f определена на вершинах, и мы можем получить значение по индексу вершины.
+            return (f.at(v0) + f.at(v1)) / Value{ 2 };
         }
     } // namespace detail
 
@@ -232,7 +240,7 @@ namespace delta::geometry {
     };
 
     // -------------------------------------------------------------------------
-    // Внешнее произведение (wedge) – реализовано только для 0-форм
+    // Внешнее произведение (wedge) – реализовано для p,q ≤ 1
     // -------------------------------------------------------------------------
     template<int p, int q, typename Value, typename Complex>
     DiscreteForm<p + q, Value, Complex> wedge(const DiscreteForm<p, Value, Complex>& a,
@@ -245,9 +253,51 @@ namespace delta::geometry {
             }
             return result;
         }
+        else if constexpr (p == 1 && q == 0) {
+            // 1-форма ∧ 0-форма = 1-форма, умноженная на интерполированное значение 0-формы на ребре
+            DiscreteForm<1, Value, Complex> result(a.mesh());
+            for (std::size_t e = 0; e < a.mesh().num_edges(); ++e) {
+                Value f_edge = detail::interpolate_0form_on_edge(e, b, a.mesh());
+                result.at(e) = a.at(e) * f_edge;
+            }
+            return result;
+        }
+        else if constexpr (p == 0 && q == 1) {
+            // 0-форма ∧ 1-форма = 1-форма, умноженная на интерполированное значение 0-формы на ребре
+            DiscreteForm<1, Value, Complex> result(b.mesh());
+            for (std::size_t e = 0; e < b.mesh().num_edges(); ++e) {
+                Value f_edge = detail::interpolate_0form_on_edge(e, a, b.mesh());
+                result.at(e) = b.at(e) * f_edge;
+            }
+            return result;
+        }
+        else if constexpr (p == 1 && q == 1) {
+            // 1-форма ∧ 1-форма = 2-форма (значение на треугольнике)
+            // Используем приближённую формулу, основанную на значениях на рёбрах треугольника.
+            DiscreteForm<2, Value, Complex> result(a.mesh());
+            const auto& mesh = a.mesh();
+            for (std::size_t t = 0; t < mesh.num_triangles(); ++t) {
+                auto tri = mesh.triangle_at(t);
+                // Получаем индексы трёх рёбер треугольника
+                std::size_t e01 = static_cast<std::size_t>(mesh.find_simplex(1, { tri[0], tri[1] }));
+                std::size_t e12 = static_cast<std::size_t>(mesh.find_simplex(1, { tri[1], tri[2] }));
+                std::size_t e20 = static_cast<std::size_t>(mesh.find_simplex(1, { tri[2], tri[0] }));
+
+                Value w01 = a.at(e01), w12 = a.at(e12), w20 = a.at(e20);
+                Value h01 = b.at(e01), h12 = b.at(e12), h20 = b.at(e20);
+
+                // Приближённое значение клина как сумма произведений с чередованием знаков
+                // Эта формула получена из соображений антисимметричности и соответствия размерности.
+                Value val = (w01 * h12 + w12 * h20 + w20 * h01 - w01 * h20 - w12 * h01 - w20 * h12) / Value{ 6 };
+
+                result.at(t) = val;
+            }
+            return result;
+        }
         else {
             static_assert(p == 0 && q == 0,
-                "wedge product for these degrees is not implemented (only 0-forms are supported)");
+                "Wedge product for these degrees is not implemented. "
+                "Only p,q ≤ 1 are supported. For higher degrees, use other methods.");
             return DiscreteForm<p + q, Value, Complex>(a.mesh()); // never reached
         }
     }
