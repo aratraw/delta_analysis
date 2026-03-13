@@ -14,7 +14,7 @@ namespace delta::numerical {
         { g.y_grid() } -> std::same_as<const UniformGrid<typename G::scalar_type>&>;
         { g.z_grid() } -> std::same_as<const UniformGrid<typename G::scalar_type>&>;
         { g.size() } -> std::convertible_to<std::size_t>;
-        { g.point_at(std::size_t i, std::size_t j, std::size_t k) } -> std::convertible_to<typename G::value_type>;
+        { g.point_at(std::size_t{}, std::size_t{}, std::size_t{}) } -> std::convertible_to<typename G::value_type>;
     };
 
     // Простая реализация для равномерной сетки
@@ -42,6 +42,7 @@ namespace delta::numerical {
         std::tuple<std::size_t, std::size_t, std::size_t> unindex(std::size_t idx) const {
             std::size_t nx = x_.size();
             std::size_t ny = y_.size();
+            std::size_t nz = z_.size();
             std::size_t i = idx / (ny * nz);
             std::size_t j = (idx % (ny * nz)) / nz;
             std::size_t k = idx % nz;

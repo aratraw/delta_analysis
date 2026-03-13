@@ -22,7 +22,7 @@ namespace delta {
      *         Defaults to std::less<T>.
      */
     template<typename T, typename Compare = std::less<T>>
-        requires LinearAddress<T>
+        requires LinearAddress<T, T>
     class UniformGrid {
     public:
         using value_type = T;

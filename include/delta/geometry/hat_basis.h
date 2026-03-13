@@ -6,6 +6,7 @@
 #include <vector>
 #include <unordered_map>
 #include <stdexcept>
+#include <optional>
 
 namespace delta::geometry {
 
@@ -91,6 +92,17 @@ namespace delta::geometry {
                 return point_type::Zero();
             }
             return git->second;
+        }
+
+        // Метод для проверки принадлежности точки симплексу и получения барицентрических координат
+        template<typename OtherComplex>
+        std::optional<std::vector<scalar_type>>
+            locate_point_in_simplex(const point_type& p,
+                const OtherComplex& mesh,
+                int dim,
+                std::size_t idx) const {
+            const auto& simp = mesh.get_simplex(dim, idx);
+            return compute_barycentric(p, simp, dim);
         }
 
     private:
@@ -281,15 +293,4 @@ namespace delta::geometry {
             return std::nullopt;
         }
     };
-    // Метод для проверки принадлежности точки симплексу и получения барицентрических координат
-    template<typename OtherComplex>
-    std::optional<std::vector<scalar_type>>
-        locate_point_in_simplex(const point_type& p,
-            const OtherComplex& mesh,
-            int dim,
-            std::size_t idx) const {
-        const auto& simp = mesh.get_simplex(dim, idx);
-        return compute_barycentric(p, simp, dim);
-    }
-
 } // namespace delta::geometry

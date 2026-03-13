@@ -1,4 +1,4 @@
-//tests/numerical/main_tests_numerical.cpp
+//tests/numerical/main_tests_geometry.cpp
 #include <gtest/gtest.h>
 #include <omp.h>
 #include <iostream>

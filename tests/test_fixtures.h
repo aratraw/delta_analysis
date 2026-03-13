@@ -1,9 +1,10 @@
-// tests/basic/test_fixtures.h
+// tests/test_fixtures.h
 #pragma once
 
 #include <gtest/gtest.h>
 #include <vector>
 #include <set>
+#include <random>
 #include "delta/core/rational.h"
 #include "delta/core/regulative_idea.h"
 #include "delta/core/value_metric.h"
@@ -19,10 +20,17 @@
 #include "delta/calculus/modulus.h"
 #include "delta/calculus/continuity.h"
 #include "delta/calculus/differentiability.h"
+#include "delta/geometry/simplicial_complex.h"
+#include "delta/geometry/dual_complex.h"
+#include "delta/geometry/hat_basis.h"
+#include "delta/numerical/cartesian_grid.h"
+#include "delta/numerical/boundary_conditions.h"
 
 namespace delta::testing {
     using namespace delta;
     using namespace delta::calculus;
+    using namespace delta::geometry;
+    using namespace delta::numerical;
     using Addr = Rational;
     using Val = Rational;
     using Dist = Rational;
@@ -209,5 +217,164 @@ namespace delta::testing {
     // -------------------------------------------------------------------------
 #define EXPECT_RATIONAL_NEAR(val, expected, eps) \
         EXPECT_PRED3((::delta::testing::DeltaTest::near), val, expected, eps)
+
+    // -------------------------------------------------------------------------
+    // Additional fixtures for geometry and numerical tests
+    // -------------------------------------------------------------------------
+
+    /**
+     * @brief Fixture providing standard simplicial complexes of various dimensions.
+     * @tparam Dim Dimension of the complex (2 or 3).
+     * @tparam Coord Scalar type for coordinates (default double).
+     */
+    template<int Dim, typename Coord = double>
+    class SimplicialComplexFixture : public DeltaTest {
+    protected:
+        using Complex = geometry::SimplicialComplex<Dim, Coord>;
+        using Point = typename Complex::point_type;
+
+        Complex triangle2D;      // правильный треугольник (2D)
+        Complex square2D;        // квадрат из двух треугольников (2D)
+        Complex tetrahedron3D;   // тетраэдр (3D)
+        // Можно добавить другие комплексы по необходимости
+
+        void SetUp() override {
+            DeltaTest::SetUp();
+            if constexpr (Dim == 2) {
+                build_triangle2D();
+                build_square2D();
+            }
+            else if constexpr (Dim == 3) {
+                build_tetrahedron3D();
+            }
+        }
+
+        void build_triangle2D() {
+            auto v0 = triangle2D.add_vertex({ 0,0 });
+            auto v1 = triangle2D.add_vertex({ 1,0 });
+            auto v2 = triangle2D.add_vertex({ 0.5, std::sqrt(3) / 2 });
+            triangle2D.add_triangle(v0, v1, v2);
+        }
+
+        void build_square2D() {
+            auto v0 = square2D.add_vertex({ 0,0 });
+            auto v1 = square2D.add_vertex({ 1,0 });
+            auto v2 = square2D.add_vertex({ 1,1 });
+            auto v3 = square2D.add_vertex({ 0,1 });
+            square2D.add_triangle(v0, v1, v2);
+            square2D.add_triangle(v0, v2, v3);
+        }
+
+        void build_tetrahedron3D() {
+            auto v0 = tetrahedron3D.add_vertex({ 0,0,0 });
+            auto v1 = tetrahedron3D.add_vertex({ 1,0,0 });
+            auto v2 = tetrahedron3D.add_vertex({ 0.5, std::sqrt(3) / 2, 0 });
+            auto v3 = tetrahedron3D.add_vertex({ 0.5, std::sqrt(3) / 6, std::sqrt(2.0 / 3.0) });
+            tetrahedron3D.add_tetrahedron(v0, v1, v2, v3);
+        }
+    };
+
+    /**
+     * @brief Fixture providing uniform Cartesian grids in 1D, 2D, and 3D.
+     */
+    class CartesianGridFixture : public DeltaTest {
+    protected:
+        using Scalar = double;
+        using Grid1D = UniformGrid<Scalar, std::less<Scalar>>;
+        using Grid2D = numerical::UniformCartesianGrid3D<Scalar>; // использует три Grid1D
+        using Grid3D = numerical::UniformCartesianGrid3D<Scalar>;
+
+        Grid1D grid1D{ Grid1D(0.0, 0.1, 11) };                  // явный вызов конструктора
+        Grid2D grid2D{
+            Grid1D(0.0, 0.1, 11),
+            Grid1D(0.0, 0.1, 11),
+            Grid1D(0.0, 0.1, 1)
+        };
+        Grid3D grid3D{
+            Grid1D(0.0, 0.1, 11),
+            Grid1D(0.0, 0.1, 11),
+            Grid1D(0.0, 0.1, 11)
+        };
+    };
+
+    /**
+     * @brief Fixture providing instances of various metrics.
+     */
+    class MetricFixture : public DeltaTest {
+    protected:
+        EuclideanMetric euclidean;
+        DiscreteMetric discrete;
+        StringUltrametric stringUltra;
+        PAdicMetric<2> pAdic2;
+        PAdicMetric<3> pAdic3;
+    };
+
+    /**
+     * @brief Generator for fields on a grid.
+     * @tparam Grid Type of grid (must provide value_type as point type).
+     * @tparam Value Type of field values (e.g., double, Eigen::VectorXd).
+     */
+    template<typename Grid, typename Value>
+    class FieldGenerator {
+    public:
+        using Point = typename Grid::value_type;
+        using Scalar = typename Point::Scalar;
+
+        /// Constant field
+        static std::function<Value(const Point&)> constant(Value c) {
+            return [c](const Point&) { return c; };
+        }
+
+        /// Linear field: value = coeff·point (for scalar or vector values)
+        static std::function<Value(const Point&)> linear(const Eigen::Matrix<Scalar, Point::RowsAtCompileTime, 1>& coeff) {
+            return [coeff](const Point& p) -> Value {
+                return coeff.dot(p.template cast<Scalar>());
+                };
+        }
+
+        /// Quadratic field: value = sum coeff_i * (p_i)^2
+        static std::function<Value(const Point&)> quadratic(const Eigen::Matrix<Scalar, Point::RowsAtCompileTime, 1>& coeff) {
+            return [coeff](const Point& p) -> Value {
+                return (p.array() * p.array()).matrix().dot(coeff);
+                };
+        }
+
+        /// Sine field: sin(kx·x) * sin(ky·y) * sin(kz·z) (works for 1D,2D,3D)
+        static std::function<Value(const Point&)> sine(double kx, double ky = 0, double kz = 0) {
+            return [kx, ky, kz](const Point& p) -> Value {
+                double v = 1.0;
+                if constexpr (Point::RowsAtCompileTime >= 1) v *= std::sin(kx * p.x());
+                if constexpr (Point::RowsAtCompileTime >= 2) v *= std::sin(ky * p.y());
+                if constexpr (Point::RowsAtCompileTime >= 3) v *= std::sin(kz * p.z());
+                return v;
+                };
+        }
+
+        /// Random field (uniform in [-scale, scale])
+        static std::function<Value(const Point&)> random(Scalar scale = 1.0) {
+            static std::mt19937 rng(42);
+            static std::uniform_real_distribution<Scalar> dist(-scale, scale);
+            return [scale](const Point&) { return dist(rng); };
+        }
+    };
+
+    /**
+     * @brief Fixture providing sample boundary conditions.
+     * @tparam Scalar Type of boundary value (e.g., double).
+     */
+    template<typename Scalar>
+    class BoundaryConditionsFixture : public DeltaTest {
+    protected:
+        numerical::BoundaryConditions<Scalar> bc;
+
+        void SetUp() override {
+            DeltaTest::SetUp();
+            // Example: Dirichlet on vertices 0 and 10
+            bc.set(0, numerical::BCType::Dirichlet, Scalar(0));
+            bc.set(10, numerical::BCType::Dirichlet, Scalar(1));
+            // Example: Neumann on edge 5 with flux 2
+            bc.set_edge_condition(5, numerical::BCType::Neumann, Scalar(2));
+        }
+    };
 
 } // namespace delta::testing

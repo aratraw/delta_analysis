@@ -1,35 +1,38 @@
 # tests/numerical/CMakeLists.txt
-# CMake configuration for numerical tests (e.g., tensor fields).
-# This suite focuses on matrix‑valued functions (Eigen::MatrixXd) and their
-# behaviour with uniform grids and operational functions.
+# CMake configuration for numerical unit tests.
+# This suite tests finite differences, gradient, Laplacian, discrete operators,
+# FEM assemblers, cotangent Laplacian, gauge theory, Green's identities,
+# and Cartesian grid operators.
 
-# 1. Create the test executable for numerical tests.
 add_executable(delta_tests_numerical
-    main_tests_numerical.cpp    # Test main with OpenMP initialisation
-    test_tensor_field.cpp       # Tests for tensor fields (Eigen matrices) on uniform grids
- "test_tensor_arithmetic.cpp" 
- "test_finite_differences.cpp" 
- "test_simplicial_complex.cpp"
-test_cotangent_laplacian.cpp)
+    main_tests_numerical.cpp
+    test_boundary_conditions.cpp
+    test_cartesian_operators.cpp
+    test_cotangent_laplacian.cpp
+    test_discrete_operators.cpp
+    test_fem_assemblers.cpp
+    test_finite_differences.cpp
+    test_gauge_theory.cpp
+    test_integrals_green.cpp
+    test_simplicial_complex.cpp
+    test_tensor_arithmetic.cpp
+    test_tensor_field.cpp
+)
 
-# 2. Link against required libraries.
-#    delta_core is an INTERFACE library that brings in Boost, Eigen, OpenMP, fmt,
-#    and the necessary include directories. gtest_main provides the Google Test
-#    entry point (and automatically pulls in gtest).
+target_include_directories(delta_tests_numerical PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/..)
+
 target_link_libraries(delta_tests_numerical
     PRIVATE
     delta_core
     gtest_main
 )
 
-# 3. Integration with Visual Studio Test Explorer and CTest.
-include(GoogleTest)
+if(MSVC)
+    target_compile_options(delta_tests_numerical PRIVATE /EHsc)
+endif()
 
-# Discover all tests defined in the executable and register them with CTest.
-# The ENVIRONMENT property ensures that the directory containing the MSVC compiler
-# (and thus the OpenMP DLLs) is in PATH, preventing test discovery failures.
-# MSVC_BIN_DIR is set in the root CMakeLists.txt.
+include(GoogleTest)
 gtest_discover_tests(delta_tests_numerical
-    PROPERTIES 
+    PROPERTIES
     ENVIRONMENT "PATH=${MSVC_BIN_DIR};$ENV{PATH}"
 )

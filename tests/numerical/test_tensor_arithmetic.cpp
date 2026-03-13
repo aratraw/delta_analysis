@@ -1,17 +1,21 @@
-// tests/test_tensor_arithmetic.cpp
+// tests/numerical/test_tensor_arithmetic.cpp
 #include <gtest/gtest.h>
 #include "delta/geometry/tensor_field.h"
 #include "delta/geometry/matrix_field.h"
 #include "delta/core/rational.h"
 
 using namespace delta::geometry;
-using Addr = int; // для простоты используем целые адреса
+using Addr = int; // simple integer addresses
 using Scalar = double;
 
+// -----------------------------------------------------------------------------
+// Tests for basic arithmetic of tensor fields (scalar, vector, matrix)
+// -----------------------------------------------------------------------------
+
 TEST(TensorFieldTest, ScalarFieldArithmetic) {
-    TensorField<Addr, Scalar, 0, 0> sf; // ранг 0, размерность не важна
-    sf[1] = 2.5;
-    sf[2] = 3.0;
+    TensorField<Addr, Scalar, 0, 0> sf; // rank 0
+    sf.set(1, 2.5);
+    sf.set(2, 3.0);
 
     EXPECT_EQ(sf.at(1), 2.5);
     EXPECT_EQ(sf.at(2), 3.0);
@@ -26,8 +30,8 @@ TEST(TensorFieldTest, ScalarFieldArithmetic) {
 
 TEST(TensorFieldTest, VectorFieldArithmetic) {
     TensorField<Addr, Scalar, 1, 3> vf;
-    vf[1] = Eigen::Vector3d(1.0, 2.0, 3.0);
-    vf[2] = Eigen::Vector3d(4.0, 5.0, 6.0);
+    vf.set(1, Eigen::Vector3d(1.0, 2.0, 3.0));
+    vf.set(2, Eigen::Vector3d(4.0, 5.0, 6.0));
 
     auto sum = vf + vf;
     EXPECT_EQ(sum.at(1), Eigen::Vector3d(2.0, 4.0, 6.0));
@@ -42,14 +46,14 @@ TEST(TensorFieldTest, MatrixFieldArithmetic) {
     Eigen::Matrix2d m1, m2;
     m1 << 1, 2, 3, 4;
     m2 << 5, 6, 7, 8;
-    mf[1] = m1;
-    mf[2] = m2;
+    mf.set(1, m1);
+    mf.set(2, m2);
 
     auto sum = mf + mf;
     EXPECT_EQ(sum.at(1), m1 * 2);
     EXPECT_EQ(sum.at(2), m2 * 2);
 
-    auto prod = mf * mf; // поэлементное матричное умножение (определённое в MatrixField)
+    auto prod = mf * mf; // elementwise matrix multiplication (defined in MatrixField)
     EXPECT_EQ(prod.at(1), m1 * m1);
     EXPECT_EQ(prod.at(2), m2 * m2);
 
