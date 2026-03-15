@@ -67,21 +67,44 @@ if(MSVC)
     target_compile_definitions(delta_core INTERFACE EIGEN_HAS_OPENMP)
 endif()
 
-# Option to select static vs dynamic rational backend (see delta/core/rational.h)
-option(DELTA_USE_STATIC_RATIONAL "Use static rational with fixed bit width" OFF)
-if(DELTA_USE_STATIC_RATIONAL)
-    target_compile_definitions(delta_core INTERFACE DELTA_RATIONAL_BITS=256)
+# --- Rational backend selection ---
+# Choose the arithmetic mode for delta::Rational.
+# Options: NATIVE_DOUBLE  - use built‑in double (fast, limited precision)
+#          BIN_FLOAT      - binary floating‑point (cpp_bin_float, default 100 digits)
+#          FIXED_RATIONAL - fixed‑bit rational (rational_adaptor with fixed integer, default 256 bits)
+#          EXACT_RATIONAL - exact unlimited rational (rational_adaptor with dynamic integers)
+set(DELTA_RATIONAL_MODE "EXACT_RATIONAL" CACHE STRING "Rational arithmetic mode")
+set_property(CACHE DELTA_RATIONAL_MODE PROPERTY STRINGS NATIVE_DOUBLE BIN_FLOAT FIXED_RATIONAL EXACT_RATIONAL)
+
+if(DELTA_RATIONAL_MODE STREQUAL "NATIVE_DOUBLE")
+    target_compile_definitions(delta_core INTERFACE DELTA_RATIONAL_MODE_NATIVE_DOUBLE)
+
+elseif(DELTA_RATIONAL_MODE STREQUAL "BIN_FLOAT")
+    target_compile_definitions(delta_core INTERFACE DELTA_RATIONAL_MODE_BIN_FLOAT)
+    # Optional: number of decimal digits (default 100)
+    set(DELTA_BIN_FLOAT_DIGITS "100" CACHE STRING "Number of decimal digits for binary float (cpp_bin_float)")
+    target_compile_definitions(delta_core INTERFACE DELTA_BIN_FLOAT_DIGITS=${DELTA_BIN_FLOAT_DIGITS})
+
+elseif(DELTA_RATIONAL_MODE STREQUAL "FIXED_RATIONAL")
+    target_compile_definitions(delta_core INTERFACE DELTA_RATIONAL_MODE_FIXED_RATIONAL)
+    # Optional: bit width for the fixed‑size integer (default 256)
+    set(DELTA_RATIONAL_BITS "256" CACHE STRING "Bit width for fixed‑bit rational (FIXED_RATIONAL mode)")
+    target_compile_definitions(delta_core INTERFACE DELTA_RATIONAL_BITS=${DELTA_RATIONAL_BITS})
+
+else()   # EXACT_RATIONAL (default)
+    target_compile_definitions(delta_core INTERFACE DELTA_RATIONAL_MODE_EXACT_RATIONAL)
 endif()
+# --------------
 
 # Helper variable: directory containing the MSVC compiler (used for DLL discovery in tests)
 get_filename_component(MSVC_BIN_DIR ${CMAKE_CXX_COMPILER} DIRECTORY CACHE INTERNAL "")
 
 # Add subdirectories for tests, examples, and benchmarks
-#add_subdirectory("tests/basic")
-#add_subdirectory("tests/calculus")
-#add_subdirectory("tests/regulative_ideas")
-add_subdirectory("tests/geometry")
+add_subdirectory("tests/basic")
+add_subdirectory("tests/calculus")
+add_subdirectory("tests/regulative_ideas")
+#add_subdirectory("tests/geometry")
 #add_subdirectory("tests/numerical")
 #add_subdirectory("tests/solvers")
-add_subdirectory("examples/arbitrary_regulative_ideas")
-add_subdirectory("benchmarks")
+#add_subdirectory("examples/arbitrary_regulative_ideas")
+#add_subdirectory("benchmarks")

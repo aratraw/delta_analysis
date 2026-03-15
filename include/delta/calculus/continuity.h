@@ -5,6 +5,7 @@
 #include <vector>
 #include <algorithm>
 #include <type_traits>
+#include "delta/core/rational.h"
 
 namespace delta::calculus {
 
@@ -25,7 +26,7 @@ namespace delta::calculus {
      */
     template<typename Grid, typename Func, typename ValueMetric>
     auto max_oscillation(const Grid& grid, Func&& func, const ValueMetric& vm) {
-        using Distance = decltype(vm(func(grid[0]), func(grid[0])));
+        using Distance = Rational; // принудительно используем Rational, чтобы избежать проблем с expression templates
         Distance max_dist{ 0 };
         const std::size_t n = grid.size();
         if (n < 2) return max_dist;
@@ -54,17 +55,18 @@ namespace delta::calculus {
      * @param func      The function.
      * @param vm        The value metric.
      * @param modulus   The modulus of continuity (callable with the maximum gap).
-     * @param tolerance Additional tolerance for floating‑point comparisons (default 0.0).
+     * @param tolerance Additional tolerance (will be converted to Distance).
      * @return true if the inequality holds for every consecutive pair.
      */
-    template<typename Grid, typename Func, typename ValueMetric, typename Mod>
+    template<typename Grid, typename Func, typename ValueMetric, typename Mod, typename T = Rational>
     bool check_continuity_level(const Grid& grid, Func&& func, const ValueMetric& vm,
-        const Mod& modulus, double tolerance = 0.0) {
-        using Distance = decltype(vm(func(grid[0]), func(grid[0])));
+        const Mod& modulus, const T& tolerance = Rational(0)) {
+        using Distance = Rational; // все расстояния приводим к Rational
         Distance max_osc = max_oscillation(grid, std::forward<Func>(func), vm);
         Distance delta_n = max_gap(grid);
         Distance bound = modulus(delta_n);
-        return max_osc <= bound + Distance(tolerance);
+        Distance tol = Distance(tolerance); // преобразуем tolerance в Distance (работает благодаря добавленному конструктору)
+        return max_osc <= bound + tol;
     }
 
 } // namespace delta::calculus

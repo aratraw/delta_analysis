@@ -90,7 +90,7 @@ namespace delta::testing {
         Addr left = "4478508612376765966049"_r / "4521910375044022450050"_r;
         Addr right = 1_r;
         // max_oscillation ≈ 0.94148, df ≈ 0.1883
-        Dist max_osc = "941480149401"_r / "1000000000000"_r;
+        Dist max_osc = 941480149401_r / 1000000000000_r;
         Dist df = max_osc * 2_r / 10_r;
         Val f_left = 0_r;
         Val f_right = df;
