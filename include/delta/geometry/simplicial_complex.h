@@ -4,6 +4,7 @@
 #include <vector>
 #include <array>
 #include <unordered_map>
+#include <map>
 #include <unordered_set>
 #include <cstddef>
 #include <algorithm>
@@ -163,17 +164,17 @@ namespace delta::geometry {
         }
 
         // Центр ребра (требует LinearAddress)
-        template<typename T = point_type>
-        auto edge_center(std::size_t edge_idx) const
-            -> std::enable_if_t<LinearAddress<T, scalar_type>, T> {
+        point_type edge_center(std::size_t edge_idx) const {
+            static_assert(LinearAddress<point_type, scalar_type>,
+                "edge_center requires LinearAddress");
             auto [v0, v1] = edge_at(edge_idx);
             return (vertex(v0) + vertex(v1)) / scalar_type{ 2 };
         }
 
         // Центр треугольника (требует LinearAddress)
-        template<typename T = point_type>
-        auto cell_center(std::size_t tri_idx) const
-            -> std::enable_if_t<LinearAddress<T, scalar_type>, T> {
+        point_type cell_center(std::size_t tri_idx) const {
+            static_assert(LinearAddress<point_type, scalar_type>,
+                "cell_center requires LinearAddress");
             auto tri = triangle_at(tri_idx);
             return (vertex(tri[0]) + vertex(tri[1]) + vertex(tri[2])) / scalar_type{ 3 };
         }
@@ -198,8 +199,8 @@ namespace delta::geometry {
         // Нормаль к ребру в 2D (вектор, длина равна длине ребра, направление выбрано так,
         // что для левого треугольника (с положительной ориентацией) указывает наружу)
         template<typename Metric>
-        auto edge_normal(std::size_t edge_idx, const Metric& metric) const
-            -> std::enable_if_t<Dim == 2, point_type> {
+        point_type edge_normal(std::size_t edge_idx, const Metric& metric) const {
+            static_assert(Dim == 2, "edge_normal only for 2D");
             auto [v0, v1] = edge_at(edge_idx);
             const point_type& p0 = vertex(v0);
             const point_type& p1 = vertex(v1);
@@ -248,11 +249,11 @@ namespace delta::geometry {
         // -------------------------------------------------------------------------
         template<typename Metric>
         static auto triangle_volume_impl(const point_type& a, const point_type& b, const point_type& c, const Metric& metric) {
-            using std::sqrt;
             auto ab = metric(a, b);
             auto bc = metric(b, c);
             auto ca = metric(c, a);
-            auto s = (ab + bc + ca) / 2;
+            auto s = (ab + bc + ca) / scalar_type{ 2 };
+            using delta::sqrt;
             return sqrt(s * (s - ab) * (s - bc) * (s - ca));
         }
 
@@ -272,7 +273,7 @@ namespace delta::geometry {
                 1, ac* ac, bc* bc, 0, cd* cd,
                 1, ad* ad, bd* bd, cd* cd, 0;
             scalar_type det = M.determinant();
-            using std::sqrt;
+            using delta::sqrt;
             return sqrt(det / 288);
         }
 
@@ -409,6 +410,32 @@ namespace delta::geometry {
     using SubdivisionMap = std::unordered_map<SimplexKey, std::vector<SimplexKey>, SimplexKeyHash>;
 
     // -----------------------------------------------------------------------------
+    // Трейты для получения параметров шаблона SimplicialComplex
+    // -----------------------------------------------------------------------------
+    template<typename> struct ComplexTraits;
+
+    template<int D, typename C>
+    struct ComplexTraits<SimplicialComplex<D, C>> {
+        static constexpr int Dim = D;
+        using Coord = C;
+    };
+
+    // -----------------------------------------------------------------------------
+    // Компаратор для point_type, используемый в std::map
+    // -----------------------------------------------------------------------------
+    template<int Dim, typename Coord>
+    struct PointLess {
+        using point_type = Eigen::Matrix<Coord, Dim, 1>;
+        bool operator()(const point_type& a, const point_type& b) const {
+            for (int i = 0; i < Dim; ++i) {
+                if (a(i) < b(i)) return true;
+                if (b(i) < a(i)) return false;
+            }
+            return false; // равны
+        }
+    };
+
+    // -----------------------------------------------------------------------------
     // Вспомогательная структура для рекурсивного подразделения (detail)
     // -----------------------------------------------------------------------------
     namespace detail {
@@ -419,7 +446,9 @@ namespace delta::geometry {
             using simplex = typename Complex::simplex;
 
             SubdivisionMap& subdiv_map;
-            std::unordered_map<point_type, vertex_index, std::hash<point_type>>& vertex_cache;
+            // Используем std::map с компаратором PointLess, параметризованным размерностью и координатой из Complex
+            std::map<point_type, vertex_index,
+                PointLess<ComplexTraits<Complex>::Dim, typename ComplexTraits<Complex>::Coord>>&vertex_cache;
             Complex& result;
 
             // Рекурсивное разбиение симплекса, заданного списком индексов вершин (уже в новом комплексе)
@@ -470,10 +499,14 @@ namespace delta::geometry {
         using point_type = typename Complex::point_type;
         using vertex_index = typename Complex::vertex_index;
         using simplex = typename Complex::simplex;
+        using Traits = ComplexTraits<Complex>;
+        constexpr int Dim = Traits::Dim;
+        using Coord = typename Traits::Coord;
 
         Complex result;
         SubdivisionMap subdiv_map;
-        std::unordered_map<point_type, vertex_index, std::hash<point_type>> vertex_cache;
+        // Используем std::map с компаратором PointLess, параметризованным Dim и Coord
+        std::map<point_type, vertex_index, PointLess<Dim, Coord>> vertex_cache;
 
         // Копируем все вершины исходного комплекса
         for (std::size_t i = 0; i < primal.num_vertices(); ++i) {
@@ -482,9 +515,7 @@ namespace delta::geometry {
         }
 
         int max_dim = 0;
-        for (const auto& kv : primal.simplices_) {
-            if (kv.first > max_dim) max_dim = kv.first;
-        }
+        while (primal.num_simplices(max_dim + 1) > 0) ++max_dim;
 
         detail::SubdivHelper<Complex> helper{ subdiv_map, vertex_cache, result };
 

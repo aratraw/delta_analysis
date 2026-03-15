@@ -103,7 +103,7 @@ get_filename_component(MSVC_BIN_DIR ${CMAKE_CXX_COMPILER} DIRECTORY CACHE INTERN
 add_subdirectory("tests/basic")
 add_subdirectory("tests/calculus")
 add_subdirectory("tests/regulative_ideas")
-#add_subdirectory("tests/geometry")
+add_subdirectory("tests/geometry")
 #add_subdirectory("tests/numerical")
 #add_subdirectory("tests/solvers")
 #add_subdirectory("examples/arbitrary_regulative_ideas")

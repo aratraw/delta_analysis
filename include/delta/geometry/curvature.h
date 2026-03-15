@@ -5,6 +5,7 @@
 #include <cmath>
 #include "connection.h"
 #include "simplicial_complex.h"
+#include "delta/core/rational.h"
 
 namespace delta::geometry {
 
@@ -52,7 +53,7 @@ namespace delta::geometry {
             Scalar bc = metric(b, c);
             Scalar ca = metric(c, a);
             Scalar s = (ab + bc + ca) / Scalar{ 2 };
-            using std::sqrt;
+            using delta::sqrt;  // <-- ЗАМЕНИТЬ std::sqrt НА delta::sqrt
             return sqrt(s * (s - ab) * (s - bc) * (s - ca));
         }
     } // namespace detail
@@ -185,9 +186,9 @@ namespace delta::geometry {
 
             Scalar a, b, c; // длины сторон, образующих угол при вершине vertex_index
             if (pos == 0) {
-                a = metric(p1, p0); // сторона vertex-p1
-                b = metric(p2, p0); // сторона vertex-p2
-                c = metric(p2, p1); // противоположная сторона
+                a = metric(p1, p0);
+                b = metric(p2, p0);
+                c = metric(p2, p1);
             }
             else if (pos == 1) {
                 a = metric(p0, p1);
@@ -206,11 +207,13 @@ namespace delta::geometry {
             Scalar cos_angle = (a * a + b * b - c * c) / (Scalar{ 2 } * a * b);
             if (cos_angle > Scalar{ 1 }) cos_angle = Scalar{ 1 };
             if (cos_angle < Scalar{ -1 }) cos_angle = Scalar{ -1 };
-            Scalar angle = Scalar(std::acos(cos_angle.template convert_to<double>()));
+
+            // Заменяем std::acos на delta::acos
+            Scalar angle = delta::acos(cos_angle);
             sum_angles += angle;
         }
 
-        Scalar deficit = Scalar{ 2 } * Scalar(std::numbers::pi) - sum_angles;
+        Scalar deficit = Scalar{ 2 } * delta::pi() - sum_angles;
         return deficit;
     }
 

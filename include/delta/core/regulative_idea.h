@@ -151,18 +151,34 @@ namespace delta {
     static_assert(Betweenness<LessBetweenness, int>);
 
     /**
-     * @struct EuclideanMetric
-     * @brief Euclidean (absolute) distance: `|a - b|`.
-     *
-     * Uses `abs` and works for arithmetic types.
-     */
+         * @struct EuclideanMetric
+         * @brief Euclidean (absolute) distance: |a - b| for scalars, norm for vectors/matrices.
+         */
     struct EuclideanMetric {
+        // Для арифметических типов (int, size_t, double и т.д.)
         template<typename T>
-        auto operator()(const T& a, const T& b) const {
+        std::enable_if_t<std::is_arithmetic_v<T>, T>
+            operator()(const T& a, const T& b) const {
+            using std::abs;
             return abs(a - b);
+        }
+
+        // Для Rational (boost number)
+        Rational operator()(const Rational& a, const Rational& b) const {
+            using boost::multiprecision::abs;
+            return abs(a - b);
+        }
+
+        // Для Eigen-векторов и матриц
+        template<typename Derived>
+        typename Derived::Scalar operator()(const Eigen::MatrixBase<Derived>& a,
+            const Eigen::MatrixBase<Derived>& b) const {
+            return (a - b).norm();
         }
     };
     static_assert(Metric<EuclideanMetric, int>);
+    static_assert(Metric<EuclideanMetric, Rational>);
+    static_assert(Metric<EuclideanMetric, Eigen::Vector2d>);
 
     /**
      * @struct LinearBetweenness

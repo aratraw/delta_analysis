@@ -83,8 +83,7 @@
  *   Double‑check that you are passing the right number of arguments,
  *   that you haven't accidentally enabled expression templates,
  *   and that your backend parameters match what Boost expects.
- *   READ THE SOURCE. DO NOT GUESS.
- *
+ *   READ THE SOURCE. DO NOT GUESS. *
  * - **YOU HAVE BEEN WARNED.**
  *   If you are tempted to "optimize" by re‑enabling expression templates
  *   or tweaking the backend arguments, remember the 36 hours of debugging
@@ -629,4 +628,68 @@ namespace delta {
 #endif
     }
 
+    // ---------- Arccosine function ------------------------------------------------
+/**
+ * Compute acos(x) with absolute accuracy at least `eps`.
+ * x must be in [-1, 1]. Throws std::domain_error otherwise.
+ */
+    template <typename T>
+    inline Rational acos(const T& x, const Rational& eps = DELTA_DEFAULT_EPS) {
+        static_assert(!is_forbidden_type<T>::value,
+            "[DELTA ERROR]: acos() called with floating‑point type!");
+        Rational a(x);
+        if (a < -1_r || a > 1_r) throw std::domain_error("acos argument out of [-1,1]");
+
+#ifdef DELTA_RATIONAL_MODE_NATIVE_DOUBLE
+        (void)eps;
+        return std::acos(a);
+#elif defined(DELTA_RATIONAL_MODE_BIN_FLOAT)
+        (void)eps;
+        return boost::multiprecision::acos(a);
+#else
+        // Use Newton's method to solve cos(y) = a for y in [0,π]
+        // Initial guess:
+        Rational y;
+        if (a >= 0_r) {
+            y = pi(eps) / 2_r * (1_r - a);
+        }
+        else {
+            y = pi(eps) - pi(eps) / 2_r * (1_r + a);
+        }
+
+        Rational delta;
+        std::size_t iter = 0;
+        do {
+            Rational cos_y = delta::cos(y, eps);
+            Rational sin_y = delta::sin(y, eps);
+            if (sin_y == 0_r) break; // shouldn't happen for |a|<1
+            delta = (cos_y - a) / sin_y;
+            y -= delta;
+#ifdef DELTA_RATIONAL_MODE_EXACT_RATIONAL
+            y.backend().normalize();
+#endif
+            ++iter;
+        } while (detail::abs(delta) > eps && iter < DELTA_SERIES_MAX_ITER);
+        return y;
+#endif
+    }
 } // namespace delta
+
+// Подключаем Eigen для специализации internal::sqrt_impl
+#include <Eigen/Core>
+
+namespace Eigen {
+    namespace internal {
+
+        // Явная специализация sqrt_impl для типа delta::Rational
+        template<>
+        struct sqrt_impl<delta::Rational>
+        {
+            static inline delta::Rational run(const delta::Rational& x)
+            {
+                return delta::sqrt(x);
+            }
+        };
+
+    } // namespace internal
+} // namespace Eigen

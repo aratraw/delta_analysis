@@ -16,7 +16,7 @@ namespace delta::geometry {
     // Вспомогательный шаблон для выбора типа тензора по рангу и размерности
     // -------------------------------------------------------------------------
     template<typename Scalar, int Rank, int Dim>
-    struct TensorTypeSelector;
+    struct TensorTypeSelector;  // primary template (не определён)
 
     template<typename Scalar, int Dim>
     struct TensorTypeSelector<Scalar, 0, Dim> {
@@ -33,11 +33,11 @@ namespace delta::geometry {
         using type = Eigen::Matrix<Scalar, Dim, Dim>;
     };
 
-    // Для рангов >2 пока не поддерживаем
+    // для Rank > 2 – ошибка компиляции
     template<typename Scalar, int Rank, int Dim>
-        requires (Rank > 2)
     struct TensorTypeSelector {
         static_assert(Rank <= 2, "Tensor ranks > 2 are not supported in this version");
+        using type = void;  // заглушка, но до неё не дойдёт из-за static_assert
     };
 
     template<typename Scalar, int Rank, int Dim>

@@ -130,13 +130,13 @@ namespace delta::geometry {
              * @brief Проверяет, что связность на мелкой сетке согласована с грубой.
              * @param fine Связность на мелкой сетке.
              * @param coarse_to_fine Отображение: грубое ребро (в виде пары вершин) -> список мелких рёбер (каждое мелкое ребро задаётся парой вершин).
-             * @param tolerance Допуск.
+             * @param tolerance Допуск (тип Scalar).
              * @return true, если для каждого грубого ребра произведение транспортов на мелких рёбрах равно транспорту на грубом.
              */
             template<typename EdgeList>
             bool is_consistent(const Connection& fine,
                 const std::vector<std::pair<edge_type, EdgeList>>& coarse_to_fine,
-                double tolerance = 1e-12) const {
+                const Scalar& tolerance = Scalar(1e-12)) const {
                 for (const auto& [coarse_edge, fine_edges] : coarse_to_fine) {
                     matrix_type prod = fine.holonomy(fine_edges);
                     matrix_type coarse_mat = get_transport(coarse_edge.first, coarse_edge.second);
@@ -153,14 +153,14 @@ namespace delta::geometry {
              * @param subdiv_map Карта подразделения (исходный симплекс -> список новых симплексов).
              * @param coarse_mesh Грубая сетка.
              * @param fine_mesh Мелкая сетка.
-             * @param tolerance Допуск.
+             * @param tolerance Допуск (тип Scalar).
              * @return true, если для каждого грубого ребра произведение транспортов на мелких рёбрах равно транспорту на грубом.
              */
             bool is_consistent(const Connection& fine,
                 const SubdivisionMap& subdiv_map,
                 const SimplicialComplex<Dim, Scalar>& coarse_mesh,
                 const SimplicialComplex<Dim, Scalar>& fine_mesh,
-                double tolerance = 1e-12) const {
+                const Scalar& tolerance = Scalar(1e-12)) const {
                 // Собираем отображение грубое ребро -> список мелких рёбер
                 std::vector<std::pair<edge_type, std::vector<edge_type>>> coarse_to_fine;
 
@@ -175,11 +175,11 @@ namespace delta::geometry {
                     for (const auto& new_key : it->second) {
                         if (new_key.dim != 1) continue; // только рёбра
                         auto fine_edge = fine_mesh.edge_at(new_key.idx);
-                        // Ориентация: предполагаем, что все мелкие рёбра ориентированы так же, как грубое.
-                        fine_edges.push_back({ fine_mesh.vertex(fine_edge[0]), fine_mesh.vertex(fine_edge[1]) });
+                        // Используем индексы вершин из fine_edge напрямую
+                        fine_edges.push_back({ fine_edge[0], fine_edge[1] });
                     }
                     coarse_to_fine.emplace_back(
-                        edge_type{ coarse_mesh.vertex(coarse_edge[0]), coarse_mesh.vertex(coarse_edge[1]) },
+                        edge_type{ coarse_edge[0], coarse_edge[1] }, // индексы из coarse_edge
                         std::move(fine_edges)
                     );
                 }
