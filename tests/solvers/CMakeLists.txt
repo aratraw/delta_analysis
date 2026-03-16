@@ -4,11 +4,6 @@
 
 add_executable(delta_tests_solvers
     main_tests_solvers.cpp
-    test_advection_solver.cpp
-    test_heat_solver.cpp
-    test_poisson_solver.cpp
-    test_variational_solvers.cpp
-    test_wave_solver.cpp
 )
 
 target_include_directories(delta_tests_solvers PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/..)

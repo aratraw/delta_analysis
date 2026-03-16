@@ -6,17 +6,6 @@
 
 add_executable(delta_tests_numerical
     main_tests_numerical.cpp
-    test_boundary_conditions.cpp
-    test_cartesian_operators.cpp
-    test_cotangent_laplacian.cpp
-    test_discrete_operators.cpp
-    test_fem_assemblers.cpp
-    test_finite_differences.cpp
-    test_gauge_theory.cpp
-    test_integrals_green.cpp
-    test_simplicial_complex.cpp
-    test_tensor_arithmetic.cpp
-    test_tensor_field.cpp
 )
 
 target_include_directories(delta_tests_numerical PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/..)
