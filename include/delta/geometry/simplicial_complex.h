@@ -37,6 +37,9 @@ namespace delta::geometry {
         using vertex_index = std::size_t;
         using simplex = std::vector<vertex_index>;
 
+        // Для соответствия SimpleGrid
+        using value_type = point_type;
+
         // Типы, необходимые для удобства и для соответствия концепту SimplicialComplex из grid_concept.h
         using edge_type = std::array<vertex_index, 2>;
         using triangle_type = std::array<vertex_index, 3>;
@@ -196,8 +199,23 @@ namespace delta::geometry {
         if (low_dim != top_dim - 1) {
             throw std::invalid_argument("incident_faces: only codimension 1 supported");
         }
+
         const auto& top_simp = mesh.get_simplex(top_dim, idx);
         std::vector<std::pair<std::size_t, int>> result;
+
+        // Особый случай: для top_dim = 1 (ребро) и low_dim = 0 (вершины)
+        // вершины не хранятся как симплексы, поэтому возвращаем их индексы напрямую.
+        if constexpr (Dim >= 1) {  // условие не обязательно, просто для ясности
+            if (top_dim == 1 && low_dim == 0) {
+                // Ребро: две вершины. Знаки: удаление первой вершины (i=0) даёт вторую вершину со знаком +1,
+                // удаление второй вершины (i=1) даёт первую вершину со знаком -1.
+                result.emplace_back(top_simp[1], 1);  // вершина 1
+                result.emplace_back(top_simp[0], -1); // вершина 0
+                return result;
+            }
+        }
+
+        // Общий случай для low_dim >= 1
         for (std::size_t i = 0; i < top_simp.size(); ++i) {
             std::vector<typename SimplicialComplex<Dim, Coord>::vertex_index> face_vertices;
             for (std::size_t j = 0; j < top_simp.size(); ++j) {
@@ -207,7 +225,7 @@ namespace delta::geometry {
             if (face_idx == -1) {
                 throw std::logic_error("incident_faces: face not found in complex");
             }
-            int sign = (i % 2 == 0) ? 1 : -1; // чередование знаков (ориентация)
+            int sign = (i % 2 == 0) ? 1 : -1;
             result.emplace_back(static_cast<std::size_t>(face_idx), sign);
         }
         return result;

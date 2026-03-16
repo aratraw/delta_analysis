@@ -211,30 +211,37 @@ namespace delta {
     }
 
     // -----------------------------------------------------------------------------
-    // 4.  Default epsilon – defined as an inline function to avoid macro pitfalls
+    // 4.  Default epsilon – defined dynamically for overriding in actual use
     // -----------------------------------------------------------------------------
 
-    inline const Rational& default_eps() {
-        static const Rational eps =
+    inline Rational& default_eps_value() {
+        static Rational eps =
 #ifdef DELTA_RATIONAL_MODE_NATIVE_DOUBLE
             1e-15;
 #else
-            // Use exact rational division: 1 / 10^30
             Rational(1) / Rational("1000000000000000000000000000000");
 #endif
         return eps;
     }
 
+    inline const Rational& default_eps() {
+        return default_eps_value();
+    }
+
+} // namespace delta
+
+// Макрос должен быть определён после объявления default_eps,
+// но до его использования в аргументах по умолчанию.
 #define DELTA_DEFAULT_EPS delta::default_eps()
+
+// Снова открываем namespace для всех остальных определений
+namespace delta {
 
     // -----------------------------------------------------------------------------
     // 5.  Hygiene: prevent implicit conversion from double to Rational (advisory only)
     // -----------------------------------------------------------------------------
 
 #ifndef DELTA_RATIONAL_MODE_NATIVE_DOUBLE
-    // Этот static_assert оставлен как напоминание, но закомментирован,
-    // потому что Boost предоставляет неявные преобразования, и мы не можем их отключить.
-    // Вместо этого полагаемся на дисциплину использования суффикса _r.
     // static_assert(!std::is_convertible_v<double, Rational>,
     //     "[DELTA ERROR]: Implicit conversion from double to Rational is forbidden! Use _r suffix.");
 #endif
@@ -629,10 +636,10 @@ namespace delta {
     }
 
     // ---------- Arccosine function ------------------------------------------------
-/**
- * Compute acos(x) with absolute accuracy at least `eps`.
- * x must be in [-1, 1]. Throws std::domain_error otherwise.
- */
+    /**
+     * Compute acos(x) with absolute accuracy at least `eps`.
+     * x must be in [-1, 1]. Throws std::domain_error otherwise.
+     */
     template <typename T>
     inline Rational acos(const T& x, const Rational& eps = DELTA_DEFAULT_EPS) {
         static_assert(!is_forbidden_type<T>::value,
@@ -673,6 +680,7 @@ namespace delta {
         return y;
 #endif
     }
+
 } // namespace delta
 
 // Подключаем Eigen для специализации internal::sqrt_impl

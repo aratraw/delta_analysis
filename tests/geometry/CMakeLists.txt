@@ -5,6 +5,8 @@
 
 add_executable(delta_tests_geometry
     main_tests_geometry.cpp
+    simplicial_complex_test.cpp
+    geometry_ops_test.cpp
 )
 
 target_include_directories(delta_tests_geometry PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/..)
@@ -23,4 +25,16 @@ include(GoogleTest)
 gtest_discover_tests(delta_tests_geometry
     PROPERTIES
     ENVIRONMENT "PATH=${MSVC_BIN_DIR};$ENV{PATH}"
+)
+
+target_precompile_headers(delta_tests_geometry PRIVATE
+    <Eigen/Core>
+    <Eigen/Sparse>
+    <Eigen/Dense>
+    <gtest/gtest.h>
+    <fmt/format.h>
+    <vector>
+    <functional>
+    <iostream>
+    <omp.h>
 )
