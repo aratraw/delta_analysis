@@ -6,7 +6,8 @@
 add_executable(delta_tests_geometry
     main_tests_geometry.cpp
     simplicial_complex_test.cpp
-    geometry_ops_test.cpp
+    product_regulative_test.cpp
+# "constructive_core_test.cpp"
 )
 
 target_include_directories(delta_tests_geometry PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/..)

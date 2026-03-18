@@ -46,6 +46,16 @@ namespace delta::testing {
     protected:
         void SetUp() override {}
         void TearDown() override {}
+        //if something breaks miserably - blame these usings.
+        using Addr = testing::Addr;
+        using Val = testing::Val;
+        using Dist = testing::Dist;
+        using Between = testing::Between;
+        using AddrMetric = testing::AddrMetric;
+        using ValMetric = testing::ValMetric;
+        using Compare = testing::Compare;
+
+
 
         /**
          * @brief Checks that a grid is sorted according to its comparator.

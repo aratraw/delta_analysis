@@ -681,6 +681,63 @@ namespace delta {
 #endif
     }
 
+    //------------------------------------------------------------------------------
+    // 8.  Floating-point literals with maximum precision
+    //     Support syntax: 0.123_r, 3.14159_r, etc.
+    //     Uses C++23 approach if available, otherwise falls back to long double
+    //     with maximum precision string conversion.
+    //------------------------------------------------------------------------------
+
+#ifdef __cpp_user_defined_literals_floating_point
+// C++23 way: compiler passes the exact character sequence
+    template <char... digits>
+    Rational operator""_r() {
+        // Pack digits into a null-terminated string at compile time
+        constexpr char str[] = { digits..., '\0' };
+        return Rational(str);
+    }
+#else
+// Fallback for older compilers: use long double and convert to string
+// with maximum precision to preserve as much accuracy as possible.
+    inline Rational operator""_r(long double x) {
+        // If we're in NATIVE_DOUBLE mode, we can just return x directly
+#ifdef DELTA_RATIONAL_MODE_NATIVE_DOUBLE
+        return static_cast<double>(x);
+#else
+// For rational modes, convert to string with maximum precision
+// to avoid losing digits during the double → rational conversion.
+
+// Handle special cases first
+        if (x == 0.0l) return 0_r;
+
+        // Use stringstream with maximum precision
+        std::stringstream ss;
+
+        // Set precision to ensure we capture all digits that matter
+        // max_digits10 gives us enough digits for round-trip conversion
+        ss.precision(std::numeric_limits<long double>::max_digits10);
+
+        // Don't use scientific notation for normal numbers
+        ss << std::fixed << x;
+
+        std::string str = ss.str();
+
+        // Trim trailing zeros to keep fractions small
+        if (str.find('.') != std::string::npos) {
+            while (!str.empty() && str.back() == '0') {
+                str.pop_back();
+            }
+            if (!str.empty() && str.back() == '.') {
+                str.pop_back(); // Remove trailing dot if all zeros after decimal
+            }
+        }
+
+        return Rational(str);
+#endif
+    }
+#endif
+
+    using detail::abs; //why? because!
 } // namespace delta
 
 // Подключаем Eigen для специализации internal::sqrt_impl

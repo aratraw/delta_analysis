@@ -99,6 +99,21 @@ endif()
 # Helper variable: directory containing the MSVC compiler (used for DLL discovery in tests)
 get_filename_component(MSVC_BIN_DIR ${CMAKE_CXX_COMPILER} DIRECTORY CACHE INTERNAL "")
 
+
+
+# Явно указываем стандарт C++20 для всех таргетов
+set(CMAKE_CXX_STANDARD 20)
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
+set(CMAKE_CXX_EXTENSIONS OFF)
+
+# Для MSVC включаем /std:c++20 и /permissive- для строгого соответствия стандарту
+if(MSVC)
+    add_compile_options(/std:c++20 /permissive-)
+endif()
+
+# Добавляем определение макроса для тестов
+add_compile_definitions($<$<CONFIG:Debug>:_DEBUG>)
+
 # Add subdirectories for tests, examples, and benchmarks
 #add_subdirectory("tests/basic")
 #add_subdirectory("tests/calculus")

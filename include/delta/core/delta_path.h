@@ -42,6 +42,10 @@ namespace delta {
     public:
         using GridType = ListGrid<Addr, Compare>;
         using Func = std::function<Value(const Addr&)>;
+        using grid_type = GridType;      // Чтобы ProductGrid понимал, что за сетка
+        using metric_type = Metric;        // Чтобы ProductPath видел тип метрики
+        using value_type = Value;         // На будущее, пригодится
+        using addr_type = Addr;
 
         /**
          * @brief Construct a path from an initial grid and a refinement strategy.
@@ -218,6 +222,10 @@ namespace delta {
         using Betweenness = TreeBetweenness;
         using Metric = StringUltrametric;
 
+        using grid_type = GridType;      // Чтобы ProductGrid понимал, что за сетка
+        using metric_type = Metric;        // Чтобы ProductPath видел тип метрики
+        using value_type = Value;         // На будущее, пригодится
+        using addr_type = Addr;
         /**
          * @brief Construct a tree path at level 0 (only the root node).
          * @param vm Value metric (default constructed).

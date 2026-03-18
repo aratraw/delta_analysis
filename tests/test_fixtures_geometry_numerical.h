@@ -1,43 +1,47 @@
-//tests/test_fixtures_geometry_numerical.h
+// tests/test_fixtures_geometry_numerical.h
 #pragma once
 
 #include <Eigen/Sparse>
+#include <random>
+#include <optional>
+#include <iomanip>
+#include <sstream>
 #include "test_fixtures.h"
 #include "delta/geometry/simplicial_complex.h"
-#include "delta/geometry/geometry_ops.h"
-
+#include "delta/geometry/constructive_core.h"
+#include "delta/geometry/product_regulative.h"
 
 namespace delta::testing {
 
+    /**
+     * @brief Test fixture for Stage 0 geometry modules.
+     *
+     * Provides type aliases and proxy methods for:
+     *   - SimplicialComplex
+     *   - ConstructiveCore (Point, Vector, K)
+     *   - ProductRegulativeIdea and ProductDeltaPath
+     *
+     * Also includes utilities for matrix/vector comparison and
+     * random point generation.
+     */
     class GeometryNumericalTest : public DeltaTest {
     protected:
         using Scalar = Rational;
 
+        // Dimension constants (matching SimplicialComplex)
         static constexpr int DIM_VERTEX = 0;
         static constexpr int DIM_EDGE = 1;
         static constexpr int DIM_TRIANGLE = 2;
         static constexpr int DIM_TETRAHEDRON = 3;
 
-        Rational old_precision;
-
-        void SetUp() override {
-            old_precision = delta::default_eps(); // запоминаем текущее значение точности
-        }
-
-        void TearDown() override {
-            delta::default_eps_value() = old_precision; // восстанавливаем после вызова теста с изменённым требованием точности
-        }
-
-        static void set_precision(const Rational& eps) {
-            delta::default_eps_value() = eps;
-        }
-
-
+        // -------------------------------------------------------------------------
+        // SimplicialComplex related types and proxies
+        // -------------------------------------------------------------------------
         template<int Dim>
         using Complex = delta::geometry::SimplicialComplex<Dim, Scalar>;
 
         template<int Dim>
-        using Point = typename Complex<Dim>::point_type;
+        using Point = typename Complex<Dim>::point_type;  // Это Eigen::Matrix
 
         template<int Dim>
         using VertexIndex = typename Complex<Dim>::vertex_index;
@@ -51,9 +55,7 @@ namespace delta::testing {
         template<int Dim>
         using Tetrahedron = typename Complex<Dim>::tetrahedron_type;
 
-        // -------------------------------------------------------------------------
-        // Proxy methods for SimplicialComplex
-        // -------------------------------------------------------------------------
+        // Proxies for SimplicialComplex construction
         template<int Dim>
         VertexIndex<Dim> add_vertex(Complex<Dim>& mesh, const Point<Dim>& p) {
             return mesh.add_vertex(p);
@@ -65,16 +67,23 @@ namespace delta::testing {
         }
 
         template<int Dim>
-        bool add_triangle(Complex<Dim>& mesh, VertexIndex<Dim> v0, VertexIndex<Dim> v1, VertexIndex<Dim> v2) {
+        bool add_triangle(Complex<Dim>& mesh,
+            VertexIndex<Dim> v0,
+            VertexIndex<Dim> v1,
+            VertexIndex<Dim> v2) {
             return mesh.add_triangle(v0, v1, v2);
         }
 
         template<int Dim>
-        bool add_tetrahedron(Complex<Dim>& mesh, VertexIndex<Dim> v0, VertexIndex<Dim> v1,
-            VertexIndex<Dim> v2, VertexIndex<Dim> v3) {
+        std::enable_if_t<Dim >= 3, bool> add_tetrahedron(Complex<Dim>& mesh,
+            VertexIndex<Dim> v0,
+            VertexIndex<Dim> v1,
+            VertexIndex<Dim> v2,
+            VertexIndex<Dim> v3) {
             return mesh.add_tetrahedron(v0, v1, v2, v3);
         }
 
+        // Accessors
         template<int Dim>
         std::size_t num_vertices(const Complex<Dim>& mesh) const {
             return mesh.num_vertices();
@@ -110,44 +119,187 @@ namespace delta::testing {
             return mesh.triangle_at(idx);
         }
 
+        // Получение тетраэдра по индексу (только при Dim >= 3)
         template<int Dim>
-        Tetrahedron<Dim> tetrahedron_at(const Complex<Dim>& mesh, std::size_t idx) const {
+        std::enable_if_t<Dim >= 3, Tetrahedron<Dim>> tetrahedron_at(const Complex<Dim>& mesh, std::size_t idx) const {
             return mesh.tetrahedron_at(idx);
         }
 
         template<int Dim>
-        std::ptrdiff_t find_simplex(const Complex<Dim>& mesh, int dim,
+        std::ptrdiff_t find_simplex(const Complex<Dim>& mesh,
+            int dim,
             const std::vector<VertexIndex<Dim>>& vertices) const {
             return mesh.find_simplex(dim, vertices);
         }
 
-        template<int Dim>
-        auto comparator(const Complex<Dim>& mesh) const {
-            return mesh.comparator();
+        // Geometric queries (methods of SimplicialComplex)
+        template<typename Complex, typename Metric>
+        static auto edge_length(const Complex& mesh, std::size_t edge_idx, const Metric& metric) {
+            return mesh.edge_length(edge_idx, metric);
         }
 
-        template<int Dim>
-        auto begin(const Complex<Dim>& mesh) const {
-            return mesh.begin();
+        template<typename Complex, typename Metric>
+        static auto cell_volume(const Complex& mesh, std::size_t cell_idx, const Metric& metric) {
+            return mesh.cell_volume(cell_idx, metric);
         }
 
-        template<int Dim>
-        auto end(const Complex<Dim>& mesh) const {
-            return mesh.end();
+        // 2D-specific geometric queries
+        template<typename Complex>
+        static auto edge_neighbors_2d(const Complex& mesh, std::size_t edge_idx) {
+            return mesh.edge_neighbors_2d(edge_idx);
+        }
+
+        template<typename Complex, typename Metric>
+        static auto edge_normal_2d(const Complex& mesh, std::size_t edge_idx, const Metric& metric) {
+            return mesh.edge_normal_2d(edge_idx, metric);
+        }
+
+        // Incidence and subdivision
+        template<typename Complex>
+        static auto incident_faces(const Complex& mesh,
+            int top_dim,
+            std::size_t idx,
+            int low_dim) {
+            return mesh.incident_faces(top_dim, idx, low_dim);
+        }
+
+        template<typename Complex>
+        static auto barycentric_subdivide(const Complex& mesh) {
+            return mesh.barycentric_subdivide();
         }
 
         // -------------------------------------------------------------------------
-        // Helper to create unit square triangulation (2D)
+        // Constructive Core types and proxies - ВАРИАНТ А (Point = Eigen::Matrix)
+        // -------------------------------------------------------------------------
+        template<int Dim>
+        using Vector = delta::geometry::Vector<Scalar, Dim>;
+
+        // Check if a point belongs to the constructive core K - перегрузки для 2D и 3D
+        static bool is_in_K(const Eigen::Matrix<Scalar, 2, 1>& p) {
+            return delta::geometry::is_in_K(p);
+        }
+        static bool is_in_K(const Eigen::Matrix<Scalar, 3, 1>& p) {
+            return delta::geometry::is_in_K(p);
+        }
+
+        // Operations on points and vectors - перегрузки для 2D и 3D
+        static Vector<2> point_minus_point(const Eigen::Matrix<Scalar, 2, 1>& a,
+            const Eigen::Matrix<Scalar, 2, 1>& b) {
+            // Вызываем оператор- из constructive_core.h, который возвращает Vector
+            return delta::geometry::operator-(a, b);
+        }
+        static Vector<3> point_minus_point(const Eigen::Matrix<Scalar, 3, 1>& a,
+            const Eigen::Matrix<Scalar, 3, 1>& b) {
+            return delta::geometry::operator-(a, b);
+        }
+
+        static std::optional<Eigen::Matrix<Scalar, 2, 1>> point_plus_vector(
+            const Eigen::Matrix<Scalar, 2, 1>& p,
+            const Vector<2>& v) {
+            return delta::geometry::operator+(p, v);
+        }
+        static std::optional<Eigen::Matrix<Scalar, 3, 1>> point_plus_vector(
+            const Eigen::Matrix<Scalar, 3, 1>& p,
+            const Vector<3>& v) {
+            return delta::geometry::operator+(p, v);
+        }
+
+        static Vector<2> vector_plus_vector(const Vector<2>& u, const Vector<2>& v) {
+            return u + v;
+        }
+        static Vector<3> vector_plus_vector(const Vector<3>& u, const Vector<3>& v) {
+            return u + v;
+        }
+
+        static Vector<2> scalar_times_vector(const Scalar& s, const Vector<2>& v) {
+            return s * v;
+        }
+        static Vector<3> scalar_times_vector(const Scalar& s, const Vector<3>& v) {
+            return s * v;
+        }
+
+        // Finite base numbers (static methods only)
+        template<int Base>
+        static bool is_representable(const Scalar& x) {
+            return delta::geometry::FiniteBaseNumbers<Base>::is_representable(x);
+        }
+
+        static bool is_in_universal_core(const Scalar& x) {
+            return delta::geometry::is_in_universal_core(x);
+        }
+
+        // -------------------------------------------------------------------------
+        // Product Regulative Idea proxies
+        // -------------------------------------------------------------------------
+        template<typename RI1, typename RI2>
+        using ProductIdea = delta::geometry::ProductRegulativeIdea<RI1, RI2>;
+
+        template<typename RI1, typename RI2, typename Addr>
+        static bool product_betweenness(const ProductIdea<RI1, RI2>& idea,
+            const Addr& x,
+            const Addr& y,
+            const Addr& z) {
+            return idea.betweenness()(x, y, z);
+        }
+
+        template<typename RI1, typename RI2, typename Addr>
+        static auto product_metric(const ProductIdea<RI1, RI2>& idea,
+            const Addr& a,
+            const Addr& b) {
+            return idea.metric()(a, b);
+        }
+
+        // -------------------------------------------------------------------------
+        // ProductDeltaPath proxies - ИСПРАВЛЕНО
+        // -------------------------------------------------------------------------
+
+        // Определяем конкретные типы путей для тестов
+        using Path1D = delta::DeltaPath<
+            Rational,                                   // Addr
+            Rational,                                   // Value
+            Rational,                                   // Distance
+            delta::LessBetweenness,           // Betweenness
+            delta::EuclideanMetric,           // Metric
+            delta::EuclideanValueMetric,                // ValueMetric
+            delta::StaticStrategy<delta::MidpointOperator>,  // Strategy
+            std::less<Rational>                         // Compare
+        >;
+
+        using Path2D = delta::geometry::ProductDeltaPath<Path1D, Path1D>;
+
+        // Тип функции для 2D продукта: принимает массив адресов, возвращает массив значений
+        using Path2DFunc = std::function<std::array<Rational, 2>(const std::array<Rational, 2>&)>;
+
+        // Прокси-методы для ProductPath - ТЕПЕРЬ С ФУНКЦИЕЙ
+        static void product_path_advance(Path2D& path, const Path2DFunc& func) {
+            path.advance(func);
+        }
+
+        static auto product_path_current_grid(const Path2D& path) {
+            return path.current_grid();
+        }
+
+        static std::size_t product_path_level(const Path2D& path) {
+            return path.level();
+        }
+
+        template<typename Metric>
+        static auto product_path_max_gap(const Path2D& path, const Metric& metric) {
+            return path.max_gap(metric);
+        }
+
+        // -------------------------------------------------------------------------
+        // Helper: unit square triangulation (2D)
         // -------------------------------------------------------------------------
         template<int Dim = 2>
         void make_unit_square_triangulation(Complex<Dim>& mesh) {
             static_assert(Dim == 2, "Unit square triangulation is for 2D only");
-            using Point = typename Complex<Dim>::point_type;
+            using Pt = Point<Dim>;
 
-            auto v0 = add_vertex(mesh, Point(0_r, 0_r));
-            auto v1 = add_vertex(mesh, Point(1_r, 0_r));
-            auto v2 = add_vertex(mesh, Point(1_r, 1_r));
-            auto v3 = add_vertex(mesh, Point(0_r, 1_r));
+            auto v0 = add_vertex(mesh, Pt(0_r, 0_r));
+            auto v1 = add_vertex(mesh, Pt(1_r, 0_r));
+            auto v2 = add_vertex(mesh, Pt(1_r, 1_r));
+            auto v3 = add_vertex(mesh, Pt(0_r, 1_r));
 
             add_edge(mesh, v0, v1);
             add_edge(mesh, v1, v2);
@@ -161,86 +313,73 @@ namespace delta::testing {
         }
 
         // -------------------------------------------------------------------------
-        // Wrappers for geometry_ops functions
-        // -------------------------------------------------------------------------
-        template<typename Complex, typename Metric>
-        static auto edge_length(const Complex& mesh, std::size_t edge_idx, const Metric& metric) {
-            return delta::geometry::edge_length(mesh, edge_idx, metric);
-        }
-
-        template<typename Complex>
-        static auto edge_center(const Complex& mesh, std::size_t edge_idx) {
-            return delta::geometry::edge_center(mesh, edge_idx);
-        }
-
-        template<typename Complex>
-        static auto triangle_center(const Complex& mesh, std::size_t tri_idx) {
-            return delta::geometry::triangle_center(mesh, tri_idx);
-        }
-
-        template<typename Complex, typename Metric>
-        static auto triangle_area(const Complex& mesh, std::size_t tri_idx, const Metric& metric) {
-            return delta::geometry::triangle_area(mesh, tri_idx, metric);
-        }
-
-        template<typename Complex, typename Metric>
-        static auto tetrahedron_volume(const Complex& mesh, std::size_t tet_idx, const Metric& metric) {
-            return delta::geometry::tetrahedron_volume(mesh, tet_idx, metric);
-        }
-
-        template<int Dim, typename Complex, typename Metric>
-        static auto cell_volume(const Complex& mesh, std::size_t cell_idx, const Metric& metric) {
-            return delta::geometry::cell_volume<Dim>(mesh, cell_idx, metric);
-        }
-
-        template<typename Complex, typename Metric>
-        static auto edge_normal_2d(const Complex& mesh, std::size_t edge_idx, const Metric& metric) {
-            return delta::geometry::edge_normal_2d(mesh, edge_idx, metric);
-        }
-
-        template<typename Complex>
-        static auto edge_neighbors_2d(const Complex& mesh, std::size_t edge_idx) {
-            return delta::geometry::edge_neighbors_2d(mesh, edge_idx);
-        }
-
-        // -------------------------------------------------------------------------
-        // Utilities for matrix/vector comparison
+        // Utilities for matrix/vector comparison (Eigen based)
         // -------------------------------------------------------------------------
         template<typename Derived>
         static bool matrix_near(const Eigen::DenseBase<Derived>& A,
             const Eigen::DenseBase<Derived>& B,
-            double eps = 1e-12) {
+            const Scalar& eps = delta::default_eps()) {
             return (A - B).norm() <= eps;
         }
 
         template<typename Scalar>
         static bool sparse_matrix_near(const Eigen::SparseMatrix<Scalar>& A,
             const Eigen::SparseMatrix<Scalar>& B,
-            Scalar eps = delta::default_eps()) {
-            if (A.rows() != B.rows() || A.cols() != B.cols()) return false;
+            const Scalar& eps = delta::default_eps()) {
+            if (A.rows() != B.rows() || A.cols() != B.cols())
+                return false;
             Eigen::SparseMatrix<Scalar> diff = A - B;
             diff.prune(eps);
             return diff.nonZeros() == 0;
         }
 
         template<int Dim>
-        static bool vector_near(const Point<Dim>& a, const Point<Dim>& b,
-            Scalar eps = delta::default_eps()) {
+        static bool vector_near(const Eigen::Matrix<Scalar, Dim, 1>& a,
+            const Eigen::Matrix<Scalar, Dim, 1>& b,
+            const Scalar& eps = delta::default_eps()) {
             return (a - b).squaredNorm() <= eps * eps;
         }
 
-        // Random point generator
+        // -------------------------------------------------------------------------
+        // Random point generator - безопасное преобразование double -> Rational
+        // -------------------------------------------------------------------------
         template<int Dim>
-        Point<Dim> random_point() {
+        Eigen::Matrix<Scalar, Dim, 1> random_point() {
             static std::mt19937 rng(42);
             static std::uniform_real_distribution<double> dist(0.0, 1.0);
-            Point<Dim> p;
-            for (int i = 0; i < Dim; ++i)
-                p(i) = Scalar(dist(rng));
+            Eigen::Matrix<Scalar, Dim, 1> p;
+            for (int i = 0; i < Dim; ++i) {
+                double d = dist(rng);
+                // Преобразуем double в строку с максимальной точностью, затем в Rational
+                std::stringstream ss;
+                ss << std::setprecision(std::numeric_limits<double>::max_digits10) << d;
+                p(i) = Scalar(ss.str());
+            }
             return p;
         }
+
+        // -------------------------------------------------------------------------
+        // Precision management (inherit from DeltaTest, but we add convenience)
+        // -------------------------------------------------------------------------
+        void SetUp() override {
+            DeltaTest::SetUp();
+            old_precision_ = delta::default_eps();
+        }
+
+        void TearDown() override {
+            delta::default_eps_value() = old_precision_;
+            DeltaTest::TearDown();
+        }
+
+        static void set_precision(const Rational& eps) {
+            delta::default_eps_value() = eps;
+        }
+
+    private:
+        Rational old_precision_;
     };
 
+    // Convenience macro for sparse matrix comparison
 #define EXPECT_SPARSE_NEAR(A, B, eps) \
     EXPECT_PRED3((::delta::testing::GeometryNumericalTest::sparse_matrix_near<decltype(A)::Scalar>), A, B, eps)
 

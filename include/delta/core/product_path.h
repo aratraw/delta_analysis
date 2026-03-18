@@ -1,55 +1,54 @@
 // include/delta/core/product_path.h
 #pragma once
 
-#include <tuple>
+#include <array>
 #include <cstddef>
 #include <iterator>
+#include <stdexcept>
+#include <utility>
+#include <functional>
 #include "delta/core/path_concept.h"
 #include "delta/core/grid_concept.h"
-
+//DeltaPath ДЛЯ СВОЕГО advance() ТРЕБУЕТ ФУНКЦИЮ. СООТВЕТСТВЕННО МЫ ОБЯЗАНЫ ЕМУ ЕЁ ПЕРЕДАВАТЬ
+//ИНАЧЕ НИХЕРА НЕ ЗАВЕДЁТСЯ И КОМПИЛЯТОР ОПЯТЬ БУДЕТ ПЛЕВАТЬСЯ.
 namespace delta {
 
     // -----------------------------------------------------------------------------
-    // ProductGrid: декартово произведение нескольких сеток (ленивое вычисление)
+    // ProductGrid – декартово произведение N сеток одного типа
     // -----------------------------------------------------------------------------
-    template<typename... Grids>
-        requires (SimpleGrid<Grids> && ...)
+    template<typename Grid, std::size_t N>
     class ProductGrid {
+        static_assert(N > 0, "ProductGrid requires at least one grid");
+        static_assert(SimpleGrid<Grid>, "Grid must satisfy SimpleGrid concept");
+
     public:
-        using value_type = std::tuple<typename Grids::value_type...>;
+        using value_type = std::array<typename Grid::value_type, N>;
         using size_type = std::size_t;
-        using const_iterator = class iterator;  // defined below
+        class const_iterator;
 
-        // Конструктор принимает кортеж ссылок на составляющие сетки
-        explicit ProductGrid(std::tuple<const Grids&...> grids)
-            : grids_(grids)
-            , sizes_(compute_sizes(grids))
-        {
+        explicit ProductGrid(std::array<Grid, N> grids)
+            : grids_(std::move(grids)) {
+            for (std::size_t i = 0; i < N; ++i) {
+                sizes_[i] = grids_[i].size();
+            }
         }
 
-        // -------------------------------------------------------------------------
-        // Основные методы, требуемые SimpleGrid
-        // -------------------------------------------------------------------------
         size_type size() const noexcept {
-            // Произведение всех размеров
-            return std::apply([](const auto&... g) {
-                return (static_cast<size_type>(g.size()) * ...);
-                }, grids_);
+            size_type total = 1;
+            for (std::size_t i = 0; i < N; ++i) {
+                total *= sizes_[i];
+            }
+            return total;
         }
 
-        // Доступ по линейному индексу (возвращает кортеж адресов)
         value_type operator[](size_type idx) const {
-            if (idx >= size())
-                throw std::out_of_range("ProductGrid index out of range");
+            if (idx >= size()) throw std::out_of_range("ProductGrid::operator[]");
             return compute_tuple(idx);
         }
 
         const_iterator begin() const noexcept { return const_iterator(this, 0); }
         const_iterator end() const noexcept { return const_iterator(this, size()); }
 
-        // -------------------------------------------------------------------------
-        // Итератор (ленивый forward iterator)
-        // -------------------------------------------------------------------------
         class const_iterator {
         public:
             using iterator_category = std::forward_iterator_tag;
@@ -62,10 +61,8 @@ namespace delta {
             const_iterator(const ProductGrid* grid, size_type idx) : grid_(grid), idx_(idx) {}
 
             value_type operator*() const { return grid_->compute_tuple(idx_); }
-
             const_iterator& operator++() { ++idx_; return *this; }
             const_iterator operator++(int) { auto tmp = *this; ++*this; return tmp; }
-
             bool operator==(const const_iterator& other) const { return idx_ == other.idx_; }
             bool operator!=(const const_iterator& other) const { return idx_ != other.idx_; }
 
@@ -75,88 +72,79 @@ namespace delta {
         };
 
     private:
-        std::tuple<const Grids&...> grids_;
-        std::tuple<size_type...> sizes_;  // размеры каждой сетки для быстрого доступа
+        std::array<Grid, N> grids_;
+        std::array<size_type, N> sizes_;
 
-        // Вычисление кортежа размеров
-        static auto compute_sizes(const std::tuple<const Grids&...>& grids) {
-            return std::apply([](const auto&... g) {
-                return std::tuple<size_type...>(g.size()...);
-                }, grids);
-        }
-
-        // Вспомогательная функция для вычисления кортежа адресов по линейному индексу
         value_type compute_tuple(size_type idx) const {
             value_type result;
-            compute_tuple_impl(idx, result, std::index_sequence_for<Grids...>{});
-            return result;
-        }
-
-        // Рекурсивное заполнение кортежа с помощью свёртки
-        template<std::size_t... I>
-        void compute_tuple_impl(size_type idx, value_type& result, std::index_sequence<I...>) const {
-            // Распаковываем размеры и соответствующие сетки
             size_type remaining = idx;
-            // Для каждого I вычисляем локальный индекс в сетке I
-            (([&] {
-                auto size = std::get<I>(sizes_);
-                size_type local_idx = remaining % size;  // берём остаток
-                remaining /= size;
-                // Получаем адрес из сетки и сохраняем в кортеж
-                std::get<I>(result) = std::get<I>(grids_)[local_idx];
-                }()), ...);
-            // После цикла remaining должно стать 0 (проверка необязательна)
+            for (std::size_t i = N; i-- > 0; ) {
+                size_type local_idx = remaining % sizes_[i];
+                remaining /= sizes_[i];
+                result[i] = grids_[i][local_idx];
+            }
+            return result;
         }
     };
 
     // -----------------------------------------------------------------------------
-    // ProductPath: путь, порождающий декартово произведение путей
+    // ProductPath – путь, являющийся декартовым произведением N путей одного типа
     // -----------------------------------------------------------------------------
-    template<typename... Paths>
-        requires (Path<Paths, typename Paths::metric_type> && ...)  // используем метрику из пути
+    template<typename Path, std::size_t N>
     class ProductPath {
+        static_assert(N > 0, "ProductPath requires at least one path");
+
     public:
-        using metric_type = std::tuple_element_t<0, std::tuple<Paths...>>::metric_type;
-        using grid_type = ProductGrid<typename Paths::grid_type...>;
+        using Addr = typename Path::addr_type;
+        using Value = typename Path::value_type;
+        using grid_type = ProductGrid<typename Path::grid_type, N>;
 
-        // Конструктор от кортежа путей
-        explicit ProductPath(std::tuple<Paths...> paths)
-            : paths_(std::move(paths))
-        {
+        // Тип функции для каждого отдельного пути: принимает адрес, возвращает значение
+        using SingleFunc = typename Path::Func;
+
+        // Тип массива функций для всех путей
+        using FuncArray = std::array<SingleFunc, N>;
+
+        explicit ProductPath(std::array<Path, N> paths) : paths_(std::move(paths)) {}
+
+        // Версия advance с массивом функций (каждая функция для своего пути)
+        void advance(const FuncArray& funcs) {
+            for (std::size_t i = 0; i < N; ++i) {
+                paths_[i].advance(funcs[i]);
+            }
         }
 
-        // Продвинуть все пути на один уровень
-        void advance() {
-            std::apply([](auto&... p) {
-                (p.advance(), ...);
-                }, paths_);
-        }
-
-        // Текущая сетка (декартово произведение текущих сеток путей)
         grid_type current_grid() const {
-            // Собираем ссылки на текущие сетки
-            auto grid_refs = std::apply([](const auto&... p) {
-                return std::tuple<const typename Paths::grid_type&...>(p.current_grid()...);
-                }, paths_);
-            return grid_type(std::move(grid_refs));
+            std::array<typename Path::grid_type, N> grids;
+            for (std::size_t i = 0; i < N; ++i) {
+                grids[i] = paths_[i].current_grid();
+            }
+            return grid_type(std::move(grids));
         }
 
-        // Уровень (берём уровень первого пути, предполагаем синхронизацию)
         std::size_t level() const {
-            return std::get<0>(paths_).level();
+            return paths_[0].level();
         }
 
-        // Максимальный разрыв (заглушка – возвращаем 0)
-        template<typename Metric>
-        auto max_gap(const Metric& /*metric*/) const {
-            using Distance = decltype(std::declval<Metric>()(
-                std::declval<typename Paths::grid_type::value_type>(),
-                std::declval<typename Paths::grid_type::value_type>()));
-            return Distance{ 0 };
+        template<typename ExtMetric>
+        auto max_gap(const ExtMetric& metric) const {
+            auto grid = current_grid();
+            const std::size_t n = grid.size();
+            if (n < 2) {
+                using Distance = decltype(metric(grid[0], grid[0]));
+                return Distance{ 0 };
+            }
+
+            auto max_d = metric(grid[0], grid[0]);
+            for (std::size_t i = 0; i + 1 < n; ++i) {
+                auto d = metric(grid[i], grid[i + 1]);
+                if (d > max_d) max_d = d;
+            }
+            return max_d;
         }
 
     private:
-        std::tuple<Paths...> paths_;
+        std::array<Path, N> paths_;
     };
 
 } // namespace delta
