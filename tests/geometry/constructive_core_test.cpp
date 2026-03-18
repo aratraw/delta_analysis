@@ -354,7 +354,6 @@ namespace delta::geometry::testing {
 
         // Approximate rotation by 45° using rational approximation
         // √2/2 ≈ 0.7071067811865475, but we'll use a rational approximation
-        // This should NOT be in K after rotation
         Rational approx_cos = 7071067811865475_r / 10000000000000000_r;  // ~0.7071
         Rational approx_sin = approx_cos;  // same for 45°
 
@@ -362,16 +361,11 @@ namespace delta::geometry::testing {
         Point2 p_rotated_approx;
         p_rotated_approx << approx_cos, approx_sin;
 
-        // This approximate point should NOT be in K because its coordinates are
-        // not finite decimals (they're approximations of irrationals)
-        // In our simplified is_in_K that only checks for non-zero, this would pass,
-        // so we need to check representability instead
-        EXPECT_FALSE(is_representable<10>(approx_cos));
-        EXPECT_FALSE(is_representable<10>(approx_sin));
-
-        // More generally, any non-dyadic rotation will map K out of itself
-        // We can test this by showing that the exact coordinates are irrational
-        // and thus not in any finite base
+        // The exact rotated point would have irrational coordinates,
+        // so it cannot be in K. The approximation is rational but not equal to the exact value.
+        // We cannot test representability of the approximation because it is a finite decimal.
+        // Instead, we rely on the fact that no rational approximation can be exact,
+        // which is tested elsewhere (e.g., SequenceOfRotations).
     }
 
     TEST_F(ConstructiveCoreTest, SequenceOfRotations) {
@@ -406,7 +400,7 @@ namespace delta::geometry::testing {
 
         // The last approximation should be close
         Rational error = abs(approximations.back() - true_inv_sqrt2);
-        EXPECT_LT(error, 1e-10_r);
+        EXPECT_LT(error, "0.0000000001"_r);
     }
 
     // =========================================================================

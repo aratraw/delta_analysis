@@ -94,10 +94,7 @@ namespace delta::geometry::testing {
         EXPECT_EQ(actual_edges, expected_edges);
     }
 
-    TEST_F(SimplicialComplexTest, DISABLED_AddTriangle) {
-        //ЭТОТ ТЕСТ ВЫЗЫВАЕТ STACK OVERFLOW
-        // ВЕРОЯТНО ПОТОМУ ЧТО ТУТ ПОД КАПОТОМ СЧИТАЕТСЯ МОДУЛЬ/КОРЕНЬ С ОГРОМНОЙ ТОЧНОСТЬЮ.
-        // ПОДКЛЮЧИ ЗДЕСЬ КОНТРОЛЬ ТОЧНОСТИ ИЗ ФИКСТУРЫ.
+    TEST_F(SimplicialComplexTest, AddTriangle) {
         Complex2D mesh;
         VIdx2 v0 = add_vertex(mesh, Point2(0_r, 0_r));
         VIdx2 v1 = add_vertex(mesh, Point2(1_r, 0_r));
@@ -119,7 +116,7 @@ namespace delta::geometry::testing {
         EXPECT_EQ(actual, expected);
     }
 
-    TEST_F(SimplicialComplexTest, DISABLED_AddTetrahedron) {
+    TEST_F(SimplicialComplexTest, AddTetrahedron) {
         Complex3D mesh;
         VIdx3 v0 = add_vertex(mesh, Point3(0_r, 0_r, 0_r));
         VIdx3 v1 = add_vertex(mesh, Point3(1_r, 0_r, 0_r));
@@ -463,9 +460,9 @@ namespace delta::geometry::testing {
         delta::EuclideanMetric metric;
 
         // Check edge lengths
-        EXPECT_RATIONAL_NEAR(edge_length(mesh, 0, metric), 1.0, 1e-12);  // (0,0)-(1,0)
-        EXPECT_RATIONAL_NEAR(edge_length(mesh, 1, metric), std::sqrt(2.0), 1e-12);  // (1,0)-(0,1)
-        EXPECT_RATIONAL_NEAR(edge_length(mesh, 2, metric), 1.0, 1e-12);  // (0,1)-(0,0)
+        EXPECT_RATIONAL_NEAR(edge_length(mesh, 0, metric), 1.0_r, "0.000000000001"_r);  // (0,0)-(1,0)
+        EXPECT_RATIONAL_NEAR(edge_length(mesh, 1, metric), delta::sqrt(2.0_r), "0.000000000001"_r);  // (1,0)-(0,1)
+        EXPECT_RATIONAL_NEAR(edge_length(mesh, 2, metric), 1.0_r, "0.000000000001"_r);  // (0,1)-(0,0)
     }
 
     TEST_F(SimplicialComplexTest, CellVolumeTriangle) {
@@ -483,10 +480,11 @@ namespace delta::geometry::testing {
 
         // Area of right triangle = 0.5
         Scalar area = cell_volume(mesh, 0, metric);
-        EXPECT_RATIONAL_NEAR(area, 0.5_r, 1e-12_r);
+        EXPECT_RATIONAL_NEAR(area, 0.5_r, "0.000000000001"_r);
     }
 
     TEST_F(SimplicialComplexTest, CellVolumeTetrahedron) {
+
         Complex3D mesh;
         VIdx3 v0 = add_vertex(mesh, Point3(0_r, 0_r, 0_r));
         VIdx3 v1 = add_vertex(mesh, Point3(1_r, 0_r, 0_r));
@@ -507,7 +505,7 @@ namespace delta::geometry::testing {
 
         // Volume of right tetrahedron = 1/6
         Scalar volume = cell_volume(mesh, 0, metric);
-        EXPECT_RATIONAL_NEAR(volume, 1_r / 6_r, 1e-12_r);
+        EXPECT_RATIONAL_NEAR(volume, 1_r / 6_r, "0.000000000001"_r);
     }
 
     TEST_F(SimplicialComplexTest, EdgeNormal2D) {
@@ -523,28 +521,25 @@ namespace delta::geometry::testing {
 
         delta::EuclideanMetric metric;
 
-        // Test normal of bottom edge (v0->v1)
-        auto normal = edge_normal_2d(mesh, 0, metric);  // edge v0-v1
+        auto normal = edge_normal_2d(mesh, 0, metric);  // point_type (Eigen::Matrix)
 
-        // Vector from edge midpoint to triangle centroid
-        auto centroid = (vertex(mesh, v0) + vertex(mesh, v1) + vertex(mesh, v2)) / 3_r;
-        auto midpoint = (vertex(mesh, v0) + vertex(mesh, v1)) / 2_r;
-        auto to_centroid = centroid - midpoint;
+        // Центроид и середина как point_type, чтобы вычитание дало Vector
+        Point2 centroid = (vertex(mesh, v0) + vertex(mesh, v1) + vertex(mesh, v2)) / 3_r;
+        Point2 midpoint = (vertex(mesh, v0) + vertex(mesh, v1)) / 2_r;
+        auto to_centroid = centroid - midpoint;          // Vector<Scalar,2>
+        auto edge_vec = vertex(mesh, v1) - vertex(mesh, v0); // Vector<Scalar,2>
 
-        // Normal should be perpendicular to edge
-        auto edge_vec = vertex(mesh, v1) - vertex(mesh, v0);
-        EXPECT_RATIONAL_NEAR(normal.dot(to_centroid), 0_r, 1e-12_r);
+        // Перпендикулярность
+        EXPECT_RATIONAL_NEAR(normal.dot(edge_vec.data()), 0_r, "0.000000000001"_r);
 
-        // Normal length should equal edge length (due to our scaling convention)
+        // Длина нормали равна длине ребра
         Scalar edge_len = edge_length(mesh, 0, metric);
-        EXPECT_RATIONAL_NEAR(normal.norm(), edge_len, 1e-12);
+        EXPECT_RATIONAL_NEAR(normal.norm(), edge_len, "0.000000000001"_r);
 
-        // For positively oriented triangle (CCW), normal should point outward
-        // For left triangle (0,0)-(1,0)-(0,1) orientation is positive,
-        // so normal should point outward (away from triangle)
-        // Dot product with to_centroid should be negative (outward)
-        EXPECT_LT(normal.dot(to_centroid), 0);
+        // Направление наружу (отрицательное скалярное произведение)
+        EXPECT_LT(normal.dot(to_centroid.data()), 0);
     }
+
 
     TEST_F(SimplicialComplexTest, EdgeNeighbors2D) {
         Complex2D mesh;

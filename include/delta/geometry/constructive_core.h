@@ -1,3 +1,4 @@
+//geometry/constructive_core.h
 #pragma once
 
 #include <optional>
@@ -229,8 +230,14 @@ namespace delta::geometry {
     /**
      * @brief Разность двух точек даёт вектор.
      */
+    
     template<typename Scalar, int Dim>
     Vector<Scalar, Dim> operator-(const Point<Scalar, Dim>& a, const Point<Scalar, Dim>& b) {
+        // КРИТИЧНО: НЕЛЬЗЯ МЕНЯТЬ ПРОСТО НА (a-b) ПОТОМУ ЧТО
+        // ЭТО ВЫЗОВЕТ ЭТОТ ЖЕ ОПЕРАТОР, И ВСЁ ВПАДЁТ
+        // В БЕСКОНЕЧНУЮ РЕКУРСИЮ. НЕ ТУПИТЕ.
+        // Обращение через a.array() достоверно безопасно
+        // eval() не работает, derived() не работает. Eigen::Matrix<Scalar, Dim, 1>(a) - НЕ РАБОТАЕТ
         return Vector<Scalar, Dim>(a.array() - b.array());
     }
 

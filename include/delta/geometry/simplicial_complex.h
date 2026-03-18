@@ -624,7 +624,28 @@ namespace delta::geometry {
                 // Triangle (v2, c, m12)
                 fine.add_triangle(vertex_map[v2], c_idx, m12);
             }
+            // Add edges from centroid to vertices and midpoints for each triangle
+            for (std::size_t t = 0; t < num_triangles(); ++t) {
+                auto [v0, v1, v2] = triangle_at(t);
+                vertex_index c_idx = triangle_centroids[t];
+                auto e01_idx = find_simplex(1, { v0, v1 });
+                auto e12_idx = find_simplex(1, { v1, v2 });
+                auto e20_idx = find_simplex(1, { v2, v0 });
+                // Проверка, что индексы рёбер найдены (должны быть, так как мы их добавляли ранее)
+                if (e01_idx == -1 || e12_idx == -1 || e20_idx == -1) {
+                    throw std::logic_error("Missing edges in barycentric subdivision");
+                }
+                vertex_index m01 = edge_midpoints[e01_idx];
+                vertex_index m12 = edge_midpoints[e12_idx];
+                vertex_index m20 = edge_midpoints[e20_idx];
 
+                fine.add_edge(vertex_map[v0], c_idx);
+                fine.add_edge(vertex_map[v1], c_idx);
+                fine.add_edge(vertex_map[v2], c_idx);
+                fine.add_edge(m01, c_idx);
+                fine.add_edge(m12, c_idx);
+                fine.add_edge(m20, c_idx);
+            }
             // Step 4: For 3D, handle tetrahedra (if Dim >= 3)
             if constexpr (Dim >= 3) {
                 // Similar logic for tetrahedra would go here
@@ -766,31 +787,21 @@ namespace delta::geometry {
         }
 
         /**
-         * @brief Compute tetrahedron volume using Cayley-Menger determinant.
+         * @brief Compute tetrahedron volume 
          */
         template<typename Metric>
-        scalar_type tetrahedron_volume(const point_type& a, const point_type& b,
-            const point_type& c, const point_type& d,
-            const Metric& metric) const {
-            // Cayley-Menger determinant for volume
-            auto ab2 = metric(a, b) * metric(a, b);
-            auto ac2 = metric(a, c) * metric(a, c);
-            auto ad2 = metric(a, d) * metric(a, d);
-            auto bc2 = metric(b, c) * metric(b, c);
-            auto bd2 = metric(b, d) * metric(b, d);
-            auto cd2 = metric(c, d) * metric(c, d);
-
-            // Вычисление определителя (остаётся без изменений)
-            scalar_type det =
-                -ab2 * ab2 * cd2 - ac2 * ac2 * bd2 - ad2 * ad2 * bc2
-                + ab2 * ac2 * bc2 + ab2 * ad2 * bd2 + ac2 * ad2 * cd2
-                + ab2 * bc2 * cd2 + ac2 * bd2 * cd2 + bc2 * bd2 * ad2
-                + ab2 * ac2 * ad2 + ab2 * bc2 * bd2 + ac2 * bc2 * cd2
-                + ad2 * bd2 * cd2;
-
-            // Volume = sqrt(det / 288)
-            using delta::sqrt;
-            return sqrt(det / 288_r);
+        scalar_type tetrahedron_volume(const point_type& a,
+            const point_type& b,
+            const point_type& c,
+            const point_type& d,
+            const Metric& /*metric*/) const {
+            static_assert(Dim == 3, "Tetrahedron volume only for 3D");
+            // Используем смешанное произведение векторов рёбер
+            auto ab = (b - a).data();
+            auto ac = (c - a).data();
+            auto ad = (d - a).data();
+            scalar_type vol = delta::abs(ab.cross(ac).dot(ad)) / 6;
+            return vol;
         }
 
         /**

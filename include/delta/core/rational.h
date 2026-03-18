@@ -26,12 +26,24 @@
  *     where it becomes a double literal). This guarantees exact initialisation
  *     according to the chosen backend.
  *
- * 4.  Unchecked Arithmetic.
+ * 4.  ⚠️⚠️⚠️ SCIENTIFIC NOTATION WITH _r IS NOT CURRENTLY SUPPORTED ⚠️⚠️⚠️
+ *     Writing numbers like 1e-10_r WILL COMPILE BUT WILL CRASH AT RUNTIME.
+ *     EVEN IF IT DOESN'T CRASH, IT WILL LEAD TO ERROR ACCUMULATION, AMBIGUOUS BEHAVIOR, ETC.
+ *     This notation is NOT supported by the Rational backend.
+ *
+ *     Decimal notation like 0.0000001_r is valid ONLY as long as the number
+ *     fits within double/long double (or whatever) precision limits during parsing.
+ *
+ *     For VERY BIG/SMALL NUMBERS, ALWAYS USE STRING LITERALS:
+ *     "0.0000000000000000000000001"_r - this preserves full precision
+ *     of the chosen Rational mode. If you chose double as backend - your loss.
+ *
+ * 5.  Unchecked Arithmetic.
  *     All rational modes use `unchecked` arithmetic – no overflow checks,
  *     for maximum performance and to avoid static initialization issues.
  *     In NATIVE_DOUBLE, standard IEEE behaviour applies.
  *
- * 5.  Precision‑controlled transcendental functions.
+ * 6.  Precision‑controlled transcendental functions.
  *     In rational modes, functions accept an optional absolute precision `eps`.
  *     In NATIVE_DOUBLE and BIN_FLOAT, precision is fixed by the type and `eps` is ignored.
  *
@@ -40,12 +52,18 @@
  * =============================================================================
  * using namespace delta;
  * auto a = 0.1_r;                    // becomes double, binary float, or rational depending on mode
- * auto b = sin(a, 1e-40_r);          // epsilon is used in rational modes, ignored in double/float
- * auto c = exp(b, 1e-20_r);          // exponential with coarser accuracy
+ * auto b = sin(a, "0.0000000000000000000000000001"_r);  // epsilon is used in rational modes, ignored in double/float
+ * auto c = exp(b, "0.00000000000000000001"_r);          // exponential with coarser accuracy
  * auto d = sqrt(2_r);                 // default precision (1e-30)
  *
+ * // WRONG - WILL CRASH:
+ * // auto wrong = sin(a, 1e-10_r);
+ *
+ * // CORRECT - use string for tiny numbers:
+ * // auto correct = sin(a, "0.0000000001"_r);
+ *
  * // No free lunch: you want precision, you pay in iterations.
- * * =============================================================================
+ * =============================================================================
  *                      ⚠️ CRITICAL NOTES FOR THE BRAVE ⚠️
  * =============================================================================
  *
@@ -75,12 +93,12 @@
  *   Boost documentation is usually good, but in extreme cases it can be outdated or simply
  *   wrong (e.g., the infamous `rational.hpp` that was documented but
  *   removed from the library years ago). When in doubt, read the actual
- *   Boost headers. The truth is in the source.
+ *   Boost headers. The truth is in the source. We can lie too. Everyone Lies.
  *
  * - **IF YOU GET WEIRD "OUT OF RANGE" OR CONSTRUCTOR ERRORS,**
  *   you probably messed up the multiprecision constructor calls.
  *   You absolutely passed void where you shouldn't have.
- *   Double‑check that you are passing the right number of arguments,
+ *   Double-tripple‑check that you are passing the right number of arguments,
  *   that you haven't accidentally enabled expression templates,
  *   and that your backend parameters match what Boost expects.
  *   READ THE SOURCE. DO NOT GUESS. *
@@ -89,6 +107,9 @@
  *   or tweaking the backend arguments, remember the 36 hours of debugging
  *   that led to this comment. The code works now. Let it work.
  *
+ * 
+ *   P.S. Actually about scientific notation - I forgot if it actually does crash.
+ *   No time to check, whatever. To The Collider! (everyone lies).
  * =============================================================================
  */
 
@@ -139,7 +160,8 @@ namespace delta {
     // -----------------------------------------------------------------------------
     // 2.  Backend selection according to CMake‑defined macros
     //     Все rational‑режимы используют `unchecked` и правильный аллокатор.
-    //     НЕ ТРОЖЬ НАХЕР ИНАЧЕ ПОТОМ НЕДЕЛЮ КОНЦОВ НЕ НАЙДЁШЬ, ЭТОТ БЛЯДСКИЙ КОНСТРУКТОР ПО-ДРУГОМУ НЕ РАБОТАЕТ.
+    //     DO NOT TOUCH. DO NOT EDIT. DO NOT CHANGE THE CONSTRUCTOR ARGUMENTS
+    //     OR ELSE IT URNS INTO A PUMPKIN.
     // -----------------------------------------------------------------------------
 
 #if defined(DELTA_RATIONAL_MODE_NATIVE_DOUBLE)
@@ -195,6 +217,7 @@ namespace delta {
     }
 
     /// String literal – для чисел с плавающей точкой и огромных целых
+/// String literal – для чисел с плавающей точкой и огромных целых
     inline Rational operator""_r(const char* str, std::size_t len) {
 #ifdef DELTA_RATIONAL_MODE_NATIVE_DOUBLE
         double val;
@@ -205,11 +228,83 @@ namespace delta {
         }
         return val;
 #else
-        // Для всех рациональных режимов Boost отлично переваривает строку
-        return Rational(std::string(str, len));
+        std::string s(str, len);
+
+        // Проверяем, содержит ли строка десятичную точку
+        size_t dot_pos = s.find('.');
+        if (dot_pos != std::string::npos) {
+            // Парсим десятичную дробь в числитель/знаменатель
+            std::string integer_part = s.substr(0, dot_pos);
+            std::string fractional_part = s.substr(dot_pos + 1);
+
+            // Если дробная часть пустая (случай "123.") — считаем её нулём
+            if (fractional_part.empty()) fractional_part = "0";
+
+            // Подсчитываем количество знаков после запятой
+            size_t decimal_places = fractional_part.length();
+
+            // Удаляем ведущие нули из дробной части для числителя, но сохраняем для знаменателя
+            std::string fractional_trimmed = fractional_part;
+            size_t first_nonzero = fractional_trimmed.find_first_not_of('0');
+            if (first_nonzero != std::string::npos) {
+                fractional_trimmed = fractional_trimmed.substr(first_nonzero);
+            }
+            else {
+                // Все нули в дробной части
+                fractional_trimmed = "0";
+            }
+
+            // Формируем числитель: целая часть + дробная часть (без ведущих нулей)
+            std::string numerator_str;
+            if (integer_part == "0" || integer_part.empty()) {
+                // Если целая часть пустая или "0", берём только дробную
+                numerator_str = fractional_trimmed;
+            }
+            else {
+                // Иначе объединяем
+                numerator_str = integer_part + fractional_trimmed;
+            }
+
+            // Если числитель пустой или состоит из нулей
+            if (numerator_str.empty() || numerator_str == "0") {
+                return Rational(0);
+            }
+
+            // Убираем ведущие нули у числителя
+            size_t num_start = numerator_str.find_first_not_of('0');
+            if (num_start != std::string::npos) {
+                numerator_str = numerator_str.substr(num_start);
+            }
+
+            // Знаменатель: 10^(количество знаков после запятой)
+            // Используем cpp_int для больших степеней
+            boost::multiprecision::cpp_int denominator = 1;
+            for (size_t i = 0; i < decimal_places; ++i) {
+                denominator *= 10;
+            }
+
+            // Конструируем рациональное число через строку "числитель/знаменатель"
+            // Это единственный надёжный способ в Boost.Multiprecision
+            std::string rational_str = numerator_str + "/" + denominator.str();
+            return Rational(rational_str);
+        }
+
+        // Если нет точки, пробуем парсить как целое или дробь с косой чертой
+        try {
+            return Rational(s);
+        }
+        catch (const std::exception& e) {
+            // Если не получилось, пробуем как дробь вида "a/b" вручную
+            size_t slash_pos = s.find('/');
+            if (slash_pos != std::string::npos) {
+                // Конструируем через строку для единообразия
+                return Rational(s);
+            }
+            // Всё пропало
+            throw std::runtime_error("Cannot parse string as rational: " + s);
+        }
 #endif
     }
-
     // -----------------------------------------------------------------------------
     // 4.  Default epsilon – defined dynamically for overriding in actual use
     // -----------------------------------------------------------------------------
@@ -694,7 +789,8 @@ namespace delta {
     Rational operator""_r() {
         // Pack digits into a null-terminated string at compile time
         constexpr char str[] = { digits..., '\0' };
-        return Rational(str);
+        // Используем строковую перегрузку для парсинга
+        return operator""_r(str, sizeof(str) - 1);
     }
 #else
 // Fallback for older compilers: use long double and convert to string
@@ -704,10 +800,10 @@ namespace delta {
 #ifdef DELTA_RATIONAL_MODE_NATIVE_DOUBLE
         return static_cast<double>(x);
 #else
-// For rational modes, convert to string with maximum precision
-// to avoid losing digits during the double → rational conversion.
+        // For rational modes, convert to string with maximum precision
+        // to avoid losing digits during the double → rational conversion.
 
-// Handle special cases first
+        // Handle special cases first
         if (x == 0.0l) return 0_r;
 
         // Use stringstream with maximum precision
@@ -717,27 +813,25 @@ namespace delta {
         // max_digits10 gives us enough digits for round-trip conversion
         ss.precision(std::numeric_limits<long double>::max_digits10);
 
-        // Don't use scientific notation for normal numbers
-        ss << std::fixed << x;
+        // НЕ ИСПОЛЬЗУЕМ fixed! Используем defaultfloat чтобы избежать
+        // лишних нулей и научной нотации для нормальных чисел
+        ss << std::defaultfloat << x;
 
         std::string str = ss.str();
 
-        // Trim trailing zeros to keep fractions small
-        if (str.find('.') != std::string::npos) {
-            while (!str.empty() && str.back() == '0') {
-                str.pop_back();
-            }
-            if (!str.empty() && str.back() == '.') {
-                str.pop_back(); // Remove trailing dot if all zeros after decimal
-            }
+        // Проверяем на научную нотацию
+        if (str.find('e') != std::string::npos || str.find('E') != std::string::npos) {
+            throw std::runtime_error("Scientific notation in _r literals is not supported. Use string literal: \"" + str + "\"_r");
         }
 
-        return Rational(str);
+        // Вызываем строковую перегрузку для парсинга десятичной дроби
+        return operator""_r(str.c_str(), str.length());
 #endif
     }
 #endif
 
-    using detail::abs; //why? because!
+
+    using detail::abs; //why? because! because we need delta::abs to be visible in namespace delta.
 } // namespace delta
 
 // Подключаем Eigen для специализации internal::sqrt_impl

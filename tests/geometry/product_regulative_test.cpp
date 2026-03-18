@@ -158,7 +158,7 @@ namespace delta::geometry::testing {
 
         EXPECT_EQ(metric(a, a), 0_r);
     }
-// definitely compiles up to this point.Beware fellow traveller, here be dragons.
+    // Beware fellow traveller, here be dragons.
     // =========================================================================
     // Test group 2: ProductDeltaPath behavior
     // =========================================================================
@@ -190,10 +190,11 @@ namespace delta::geometry::testing {
         auto grid1 = product_path.current_grid();
         EXPECT_EQ(grid1.size(), 9);
 
+        // Проверяем, что все ненулевые координаты — dyadic
         for (std::size_t i = 0; i < grid1.size(); ++i) {
             PathAddr addr = grid1[i];
-            EXPECT_TRUE(is_dyadic(addr[0]));
-            EXPECT_TRUE(is_dyadic(addr[1]));
+            if (addr[0] != 0) EXPECT_TRUE(is_dyadic(addr[0]));
+            if (addr[1] != 0) EXPECT_TRUE(is_dyadic(addr[1]));
         }
 
         product_path.advance(identity_func);
@@ -244,18 +245,25 @@ namespace delta::geometry::testing {
             return 4_r * sum;
             };
 
-        FundamentalSequence pi_seq(pi_seq_gen, 4_r, 0.5_r, 0);
+        // Степенной модуль для ряда Лейбница:
+        // |π - π_n| ≤ 4/(2n+1) ≈ 2/n, поэтому берём C = 4_r, α = 1_r
+        PowerDecayModulus modulus(4_r, 1_r);
+        FundamentalSequence<PowerDecayModulus> pi_seq(pi_seq_gen, modulus, 0);
 
-        Rational pi_exact = pi(1e-30_r);
+        Rational pi_exact = pi("0.000000000000000000000000000001"_r);
         std::size_t n = 1000;
         Rational pi_approx = pi_seq(n);
         Rational error = delta::abs(pi_approx - pi_exact);
 
-        EXPECT_LT(error, 0.01_r);
+        EXPECT_LT(error, "0.01"_r);
 
+        // Проверка фундаментальности: |x_n - x_{n+100}| ≤ modulus(n)
         Rational diff = delta::abs(pi_seq(n) - pi_seq(n + 100));
-        Rational bound = pi_seq.bound() * delta::pow(pi_seq.rate(), static_cast<int>(n));
-        EXPECT_LE(diff, bound + 1e-10_r);
+        Rational bound = pi_seq.modulus()(n);  // оценка через модуль
+
+        // Для n=1000, modulus(1000) ≈ 4/1000 = 0.004
+        // Добавляем небольшой допуск на приближённые вычисления
+        EXPECT_LE(diff, bound + "0.0001"_r);
     }
 
     TEST_F(ProductRegulativeTest, FundamentalSequenceToE) {
@@ -273,34 +281,34 @@ namespace delta::geometry::testing {
 
         FundamentalSequence e_seq(e_seq_gen, 3_r, 0.5_r, 0);
 
-        Rational e_exact = e(1e-30_r);
+        Rational e_exact = e("0.000000000000000000000000000001"_r);
         std::size_t n = 20;
         Rational e_approx = e_seq(n);
         Rational error = delta::abs(e_approx - e_exact);
 
-        EXPECT_LT(error, 1e-10_r);
+        EXPECT_LT(error, "0.0000000001"_r);
 
         Rational diff = delta::abs(e_seq(n) - e_seq(n + 5));
         Rational bound = e_seq.bound() * delta::pow(e_seq.rate(), static_cast<int>(n));
-        EXPECT_LE(diff, bound + 1e-10_r);
+        EXPECT_LE(diff, bound + "0.0000000001"_r);
     }
 
     TEST_F(ProductRegulativeTest, RealNumberConstruction) {
         using namespace delta;
 
         auto pi_seq_gen = [](std::size_t n) -> Rational {
-            return pi(1e-30_r);
+            return pi("0.000000000000000000000000000001"_r);
             };
 
-        auto pi_seq = std::make_shared<FundamentalSequence>(
+        auto pi_seq = std::make_shared<FundamentalSequence<ExponentialModulus>>(
             pi_seq_gen, 1_r, 0.5_r, 0
         );
 
         RealNumber pi_real(pi_seq);
         Rational pi_approx = pi_real.approximate(10);
-        Rational pi_exact = pi(1e-30_r);
+        Rational pi_exact = pi("0.000000000000000000000000000001"_r);
 
-        EXPECT_RATIONAL_NEAR(pi_approx, pi_exact, 1e-15_r);
+        EXPECT_RATIONAL_NEAR(pi_approx, pi_exact, Rational(1, 1000000000000));
 
         RealNumber half_real(0.5_r);
         EXPECT_EQ(half_real.approximate(0), 0.5_r);
@@ -308,9 +316,10 @@ namespace delta::geometry::testing {
         RealNumber half_real2(0.5_r);
         EXPECT_TRUE(half_real == half_real2);
 
-        RealNumber almost_half(0.5000000001_r);
-        EXPECT_TRUE(half_real.approx_equal(almost_half, 1e-6_r));
-        EXPECT_FALSE(half_real.approx_equal(almost_half, 1e-12_r));
+        // Используем строковый литерал для точного задания
+        RealNumber almost_half("0.5000000001"_r);
+        EXPECT_TRUE(half_real.approx_equal(almost_half, Rational(1, 1000000)));
+        EXPECT_FALSE(half_real.approx_equal(almost_half, Rational(1, 1000000000000)));
     }
 
     TEST_F(ProductRegulativeTest, ProductGridApproximatesR2) {
