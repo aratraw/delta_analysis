@@ -8,6 +8,9 @@ add_executable(delta_tests_geometry
     simplicial_complex_test.cpp
     product_regulative_test.cpp
  constructive_core_test.cpp
+ "tensor_field_test.cpp" 
+ #"matrix_field_test.cpp" 
+ "discrete_operators_test.cpp"
 )
 
 target_include_directories(delta_tests_geometry PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/..)

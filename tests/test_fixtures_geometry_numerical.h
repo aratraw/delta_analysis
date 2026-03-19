@@ -359,6 +359,54 @@ namespace delta::testing {
         }
 
         // -------------------------------------------------------------------------
+        // Stage 1 Fixture Updates: Tensor Fiels, Matrix Fields,
+        // Discrete Operators, Integrals, Dual Complex.
+        // -------------------------------------------------------------------------
+
+        // Tensor Field Fixture Components
+        // Сравнение двух Eigen-матриц одинакового размера
+        template<typename Derived>
+        static bool matrix_near(const Eigen::MatrixBase<Derived>& A,
+            const Eigen::MatrixBase<Derived>& B,
+            const Scalar& eps = delta::default_eps()) {
+            return (A - B).norm() <= eps;
+        }
+
+        // Генерация случайной матрицы заданного размера со значениями в [0,1]
+        template<int Rows, int Cols>
+        static Eigen::Matrix<Scalar, Rows, Cols> random_matrix() {
+            static std::mt19937 rng(42);
+            static std::uniform_real_distribution<double> dist(0.0, 1.0);
+            Eigen::Matrix<Scalar, Rows, Cols> m;
+            for (int i = 0; i < Rows; ++i) {
+                for (int j = 0; j < Cols; ++j) {
+                    double d = dist(rng);
+                    std::stringstream ss;
+                    ss << std::setprecision(std::numeric_limits<double>::max_digits10) << d;
+                    m(i, j) = Scalar(ss.str());
+                }
+            }
+            return m;
+        }
+
+        // Генерация случайного скаляра (ранг 0)
+        static Scalar random_scalar() {
+            return random_matrix<1, 1>()(0, 0);
+        }
+
+        // Компаратор для точек (лексикографический)
+        template<int Dim>
+        struct PointLess {
+            bool operator()(const Point<Dim>& a, const Point<Dim>& b) const {
+                for (int i = 0; i < Dim; ++i) {
+                    if (a[i] < b[i]) return true;
+                    if (b[i] < a[i]) return false;
+                }
+                return false; // равны
+            }
+        };
+
+        // -------------------------------------------------------------------------
         // Precision management (inherit from DeltaTest, but we add convenience)
         // -------------------------------------------------------------------------
         void SetUp() override {
