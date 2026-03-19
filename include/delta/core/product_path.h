@@ -22,6 +22,11 @@ namespace delta {
         static_assert(SimpleGrid<Grid>, "Grid must satisfy SimpleGrid concept");
 
     public:
+        //addition for proper use with discrete n-dimensional operators
+        const Grid& get_grid(std::size_t i) const {
+            if (i >= N) throw std::out_of_range("ProductGrid::get_grid");
+            return grids_[i];
+        }
         using value_type = std::array<typename Grid::value_type, N>;
         using size_type = std::size_t;
         class const_iterator;
@@ -45,6 +50,7 @@ namespace delta {
             if (idx >= size()) throw std::out_of_range("ProductGrid::operator[]");
             return compute_tuple(idx);
         }
+
 
         const_iterator begin() const noexcept { return const_iterator(this, 0); }
         const_iterator end() const noexcept { return const_iterator(this, size()); }

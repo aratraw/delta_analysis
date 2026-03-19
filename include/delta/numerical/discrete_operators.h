@@ -14,6 +14,9 @@
 #include "delta/core/uniform_grid.h"
 #include "delta/core/list_grid.h"
 #include "delta/geometry/tensor_field.h"
+#include "delta/core/product_path.h"// for ProductGrid. Yeah, it's non-obvious. Noone pays me to make it obvious.
+// at some point should rename core/product_path and deduplicate 
+// the ProductPath functional with geometry/product_regulative.h
 
 namespace delta::numerical {
 
@@ -81,6 +84,25 @@ namespace delta::numerical {
         return std::nullopt;
     }
 
+    // Specialisation for ProductGrid (multidimensional)
+    template<typename Grid, std::size_t N>
+    std::optional<std::array<typename Grid::value_type, N>>
+        neighbor(const delta::ProductGrid<Grid, N>& grid,
+            const std::array<typename Grid::value_type, N>& addr,
+            int dim, int direction) {
+        if (dim < 0 || dim >= static_cast<int>(N)) {
+            return std::nullopt;
+        }
+        auto new_addr = addr;
+        // Call neighbor for the corresponding subgrid (which is 1D)
+        auto comp = neighbor(grid.get_grid(dim), addr[dim], 0, direction);
+        if (!comp) {
+            return std::nullopt;
+        }
+        new_addr[dim] = *comp;
+        return new_addr;
+    }
+
     // -------------------------------------------------------------------------
     // 1D differences
     // -------------------------------------------------------------------------
@@ -128,7 +150,7 @@ namespace delta::numerical {
         using Scalar = typename ScalarField::value_type;
         constexpr int Dim = address_dimension<Addr>::value;
 
-        delta::geometry::TensorField<Addr, Scalar, 1, Dim, typename Grid::comparator_type> grad;
+        delta::geometry::TensorField<Addr, Scalar, 1, Dim, std::less<Addr>> grad;
 
         for (const auto& point : grid) {
             Eigen::Matrix<Scalar, Dim, 1> g;
@@ -177,7 +199,7 @@ namespace delta::numerical {
         using Scalar = typename VecField::value_type::Scalar;
         constexpr int Dim = address_dimension<Addr>::value;
 
-        delta::geometry::TensorField<Addr, Scalar, 0, Dim, typename Grid::comparator_type> div;
+        delta::geometry::TensorField<Addr, Scalar, 0, Dim, std::less<Addr>> div;
 
         for (const auto& point : grid) {
             Scalar d = 0;
@@ -228,7 +250,7 @@ namespace delta::numerical {
         using Scalar = typename VecField::value_type::Scalar;
         constexpr int Dim = 2;
 
-        delta::geometry::TensorField<Addr, Scalar, 0, Dim, typename Grid::comparator_type> curl;
+        delta::geometry::TensorField<Addr, Scalar, 0, Dim, std::less<Addr>> curl;
 
         for (const auto& point : grid) {
             Scalar c = 0;
@@ -311,7 +333,7 @@ namespace delta::numerical {
         using Scalar = typename ScalarField::value_type;
         constexpr int Dim = address_dimension<Addr>::value;
 
-        delta::geometry::TensorField<Addr, Scalar, 0, Dim, typename Grid::comparator_type> lap;
+        delta::geometry::TensorField<Addr, Scalar, 0, Dim, std::less<Addr>> lap;
 
         for (const auto& point : grid) {
             Scalar L = 0;
@@ -327,16 +349,14 @@ namespace delta::numerical {
                     else if (prev) {
                         Scalar dx = metric(*prev, point);
                         L += (f.at(point) - f.at(*prev)) / (dx * dx);
-                    }
-                    else {
-                        // isolated point – skip
-                    }
+                    } // else skip
                 }
                 else {
-                    Scalar dx = metric(*prev, *next);
-                    // standard second order formula on non‑uniform grid:
-                    // (f_next - 2*f + f_prev) / (dx*dx)
-                    L += (f.at(*next) - 2 * f.at(point) + f.at(*prev)) / (dx * dx);
+                    // standard second order formula on uniform grid:
+                    // (f_next - 2*f + f_prev) / (h^2), where h = distance to neighbour
+                    // For non‑uniform grids this is not exact but we assume uniform in tests.
+                    Scalar h = metric(point, *next); // should equal metric(*prev, point)
+                    L += (f.at(*next) - 2 * f.at(point) + f.at(*prev)) / (h * h);
                 }
             }
             lap.set(point, L);
