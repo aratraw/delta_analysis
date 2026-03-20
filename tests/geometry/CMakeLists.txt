@@ -11,7 +11,7 @@ add_executable(delta_tests_geometry
  "tensor_field_test.cpp" 
  #"matrix_field_test.cpp" 
  "discrete_operators_test.cpp"
-)
+ "discrete_operators_3d_4d_test.cpp")
 
 target_include_directories(delta_tests_geometry PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/..)
 

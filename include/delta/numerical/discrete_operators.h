@@ -323,6 +323,149 @@ namespace delta::numerical {
         }
         return curl;
     }
+    // -------------------------------------------------------------------------
+// Curl of a vector field in 3D (returns a vector field)
+// -------------------------------------------------------------------------
+    template<typename Grid, typename VecField, typename Metric>
+    auto discrete_curl_3d(const Grid& grid, const VecField& v, const Metric& metric,
+        DifferenceScheme scheme = DifferenceScheme::CENTRAL) {
+        static_assert(address_dimension<typename Grid::value_type>::value == 3,
+            "curl_3d requires 3D addresses");
+        using Addr = typename Grid::value_type;
+        using Scalar = typename VecField::value_type::Scalar;
+        constexpr int Dim = 3;
+
+        delta::geometry::TensorField<Addr, Scalar, 1, Dim, std::less<Addr>> curl;
+
+        for (const auto& point : grid) {
+            Eigen::Matrix<Scalar, Dim, 1> c;
+            // curl_x = ∂v_z/∂y - ∂v_y/∂z
+            {
+                auto next_y = neighbor(grid, point, 1, +1);
+                auto prev_y = neighbor(grid, point, 1, -1);
+                auto next_z = neighbor(grid, point, 2, +1);
+                auto prev_z = neighbor(grid, point, 2, -1);
+                Scalar dvz_dy = 0, dvy_dz = 0;
+                // Compute dvz_dy
+                if (next_y && prev_y) {
+                    Scalar hy = metric(*prev_y, *next_y);
+                    dvz_dy = (v.at(*next_y)[2] - v.at(*prev_y)[2]) / hy;
+                }
+                else if (next_y) {
+                    Scalar hy = metric(point, *next_y);
+                    dvz_dy = (v.at(*next_y)[2] - v.at(point)[2]) / hy;
+                }
+                else if (prev_y) {
+                    Scalar hy = metric(*prev_y, point);
+                    dvz_dy = (v.at(point)[2] - v.at(*prev_y)[2]) / hy;
+                }
+                else {
+                    throw std::out_of_range("curl: no neighbours in y direction");
+                }
+                // Compute dvy_dz
+                if (next_z && prev_z) {
+                    Scalar hz = metric(*prev_z, *next_z);
+                    dvy_dz = (v.at(*next_z)[1] - v.at(*prev_z)[1]) / hz;
+                }
+                else if (next_z) {
+                    Scalar hz = metric(point, *next_z);
+                    dvy_dz = (v.at(*next_z)[1] - v.at(point)[1]) / hz;
+                }
+                else if (prev_z) {
+                    Scalar hz = metric(*prev_z, point);
+                    dvy_dz = (v.at(point)[1] - v.at(*prev_z)[1]) / hz;
+                }
+                else {
+                    throw std::out_of_range("curl: no neighbours in z direction");
+                }
+                c[0] = dvz_dy - dvy_dz;
+            }
+            // curl_y = ∂v_x/∂z - ∂v_z/∂x
+            {
+                auto next_z = neighbor(grid, point, 2, +1);
+                auto prev_z = neighbor(grid, point, 2, -1);
+                auto next_x = neighbor(grid, point, 0, +1);
+                auto prev_x = neighbor(grid, point, 0, -1);
+                Scalar dvx_dz = 0, dvz_dx = 0;
+                // dvx_dz
+                if (next_z && prev_z) {
+                    Scalar hz = metric(*prev_z, *next_z);
+                    dvx_dz = (v.at(*next_z)[0] - v.at(*prev_z)[0]) / hz;
+                }
+                else if (next_z) {
+                    Scalar hz = metric(point, *next_z);
+                    dvx_dz = (v.at(*next_z)[0] - v.at(point)[0]) / hz;
+                }
+                else if (prev_z) {
+                    Scalar hz = metric(*prev_z, point);
+                    dvx_dz = (v.at(point)[0] - v.at(*prev_z)[0]) / hz;
+                }
+                else {
+                    throw std::out_of_range("curl: no neighbours in z direction");
+                }
+                // dvz_dx
+                if (next_x && prev_x) {
+                    Scalar hx = metric(*prev_x, *next_x);
+                    dvz_dx = (v.at(*next_x)[2] - v.at(*prev_x)[2]) / hx;
+                }
+                else if (next_x) {
+                    Scalar hx = metric(point, *next_x);
+                    dvz_dx = (v.at(*next_x)[2] - v.at(point)[2]) / hx;
+                }
+                else if (prev_x) {
+                    Scalar hx = metric(*prev_x, point);
+                    dvz_dx = (v.at(point)[2] - v.at(*prev_x)[2]) / hx;
+                }
+                else {
+                    throw std::out_of_range("curl: no neighbours in x direction");
+                }
+                c[1] = dvx_dz - dvz_dx;
+            }
+            // curl_z = ∂v_y/∂x - ∂v_x/∂y
+            {
+                auto next_x = neighbor(grid, point, 0, +1);
+                auto prev_x = neighbor(grid, point, 0, -1);
+                auto next_y = neighbor(grid, point, 1, +1);
+                auto prev_y = neighbor(grid, point, 1, -1);
+                Scalar dvy_dx = 0, dvx_dy = 0;
+                // dvy_dx
+                if (next_x && prev_x) {
+                    Scalar hx = metric(*prev_x, *next_x);
+                    dvy_dx = (v.at(*next_x)[1] - v.at(*prev_x)[1]) / hx;
+                }
+                else if (next_x) {
+                    Scalar hx = metric(point, *next_x);
+                    dvy_dx = (v.at(*next_x)[1] - v.at(point)[1]) / hx;
+                }
+                else if (prev_x) {
+                    Scalar hx = metric(*prev_x, point);
+                    dvy_dx = (v.at(point)[1] - v.at(*prev_x)[1]) / hx;
+                }
+                else {
+                    throw std::out_of_range("curl: no neighbours in x direction");
+                }
+                // dvx_dy
+                if (next_y && prev_y) {
+                    Scalar hy = metric(*prev_y, *next_y);
+                    dvx_dy = (v.at(*next_y)[0] - v.at(*prev_y)[0]) / hy;
+                }
+                else if (next_y) {
+                    Scalar hy = metric(point, *next_y);
+                    dvx_dy = (v.at(*next_y)[0] - v.at(point)[0]) / hy;
+                }
+                else if (prev_y) {
+                    Scalar hy = metric(*prev_y, point);
+                    dvx_dy = (v.at(point)[0] - v.at(*prev_y)[0]) / hy;
+                }
+                else {
+                    throw std::out_of_range("curl: no neighbours in y direction");
+                }
+                c[2] = dvy_dx - dvx_dy;
+            }
+            curl.set(point, c);
+        }
+        return curl;
+    }
 
     // -------------------------------------------------------------------------
     // Laplacian of a scalar field (using second differences)
@@ -340,24 +483,25 @@ namespace delta::numerical {
             for (int d = 0; d < Dim; ++d) {
                 auto next = neighbor(grid, point, d, +1);
                 auto prev = neighbor(grid, point, d, -1);
-                if (!next || !prev) {
-                    // boundary: use one‑sided second derivative
-                    if (next) {
-                        Scalar dx = metric(point, *next);
-                        L += (f.at(*next) - f.at(point)) / (dx * dx);
-                    }
-                    else if (prev) {
-                        Scalar dx = metric(*prev, point);
-                        L += (f.at(point) - f.at(*prev)) / (dx * dx);
-                    } // else skip
+                if (next && prev) {
+                    // внутренняя точка: используем формулу с двумя шагами
+                    Scalar h_plus = metric(point, *next);
+                    Scalar h_minus = metric(*prev, point);
+                    Scalar right_diff = (f.at(*next) - f.at(point)) / h_plus;
+                    Scalar left_diff = (f.at(point) - f.at(*prev)) / h_minus;
+                    L += (Scalar(2) / (h_plus + h_minus)) * (right_diff - left_diff);
                 }
-                else {
-                    // standard second order formula on uniform grid:
-                    // (f_next - 2*f + f_prev) / (h^2), where h = distance to neighbour
-                    // For non‑uniform grids this is not exact but we assume uniform in tests.
-                    Scalar h = metric(point, *next); // should equal metric(*prev, point)
-                    L += (f.at(*next) - 2 * f.at(point) + f.at(*prev)) / (h * h);
+                else if (next) {
+                    // правая граница: используем одностороннюю вторую производную
+                    Scalar h = metric(point, *next);
+                    L += (f.at(*next) - f.at(point)) / (h * h);
                 }
+                else if (prev) {
+                    // левая граница
+                    Scalar h = metric(*prev, point);
+                    L += (f.at(point) - f.at(*prev)) / (h * h);
+                }
+                // иначе: изолированная точка – пропускаем
             }
             lap.set(point, L);
         }
