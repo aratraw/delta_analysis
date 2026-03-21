@@ -77,7 +77,8 @@ namespace delta::geometry {
             // Iterators for range‑based loops
             auto begin() const { return values_.begin(); }
             auto end() const { return values_.end(); }
-
+            auto begin() { return values_.begin(); }
+            auto end() { return values_.end(); }
             // Access the comparator
             const Compare& comparator() const { return values_.key_comp(); }
 

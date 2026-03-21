@@ -670,7 +670,7 @@ namespace delta {
         Rational n = 1;
         std::size_t iter = 0;
         while (detail::abs(term) > eps && iter < DELTA_SERIES_MAX_ITER) {
-            term *= -y2 / ((2 * n) * (2 * n + 1));
+            term *= -y2 / ((n + 1) * (n + 2));
 #ifdef DELTA_RATIONAL_MODE_EXACT_RATIONAL
             term.backend().normalize();
 #endif

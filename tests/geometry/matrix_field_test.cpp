@@ -16,8 +16,7 @@ namespace delta::geometry::testing {
         using Grid = delta::ListGrid<Addr, Compare>;
         using Matrix2 = Eigen::Matrix<Scalar, DIM, DIM>;
 
-        // Поле матриц
-        using MatrixField2 = delta::geometry::MatrixField<Addr, Scalar, DIM, Compare>;
+        using MatrixField2 = delta::geometry::MatrixField<Addr, DIM, Compare>;
 
         Grid make_test_grid() {
             std::vector<Addr> points;
@@ -27,29 +26,44 @@ namespace delta::geometry::testing {
         }
     };
 
+    // -------------------------------------------------------------------------
+    // Utility Test to check actual precision management
+    // -------------------------------------------------------------------------
+    TEST_F(MatrixFieldTest, PrecisionManagementWorks) {
+        // Проверяем, что set_precision действительно изменяет глобальную переменную
+        Rational original_eps = delta::default_eps();
+
+        set_precision(Rational(1, 1000));
+        EXPECT_EQ(delta::default_eps(), Rational(1, 1000));
+
+        set_precision(Rational(1, 1000000));
+        EXPECT_EQ(delta::default_eps(), Rational(1, 1000000));
+
+        // Восстанавливаем исходное значение
+        set_precision(original_eps);
+        EXPECT_EQ(delta::default_eps(), original_eps);
+    }
+
+    // -------------------------------------------------------------------------
+    // Basic operations
+    // -------------------------------------------------------------------------
     TEST_F(MatrixFieldTest, MatrixMultiplication) {
         Grid grid = make_test_grid();
         MatrixField2 A(grid), B(grid), C(grid);
 
-        // Первая точка
         Matrix2 a1; a1 << 1_r, 2_r, 3_r, 4_r;
         Matrix2 b1; b1 << 5_r, 6_r, 7_r, 8_r;
         A.set(grid[0], a1);
         B.set(grid[0], b1);
 
-        // Вторая точка
         Matrix2 a2; a2 << 2_r, 0_r, 1_r, 3_r;
         Matrix2 b2; b2 << 1_r, 2_r, 2_r, 1_r;
         A.set(grid[1], a2);
         B.set(grid[1], b2);
 
-        C = A * B;  // оператор * должен быть определён
-
-        Matrix2 expected1 = a1 * b1;
-        Matrix2 expected2 = a2 * b2;
-
-        EXPECT_TRUE(matrix_near(C.at(grid[0]), expected1));
-        EXPECT_TRUE(matrix_near(C.at(grid[1]), expected2));
+        C = A * B;
+        EXPECT_TRUE(matrix_near(C.at(grid[0]), (a1 * b1).eval()));
+        EXPECT_TRUE(matrix_near(C.at(grid[1]), (a2 * b2).eval()));
     }
 
     TEST_F(MatrixFieldTest, Determinant) {
@@ -61,13 +75,9 @@ namespace delta::geometry::testing {
         A.set(grid[0], a1);
         A.set(grid[1], a2);
 
-        auto det = A.determinant();  // должно вернуть TensorField ранга 0
-
-        Scalar det1 = a1.determinant();  // 1*4 - 2*3 = -2
-        Scalar det2 = a2.determinant();  // 2*3 - 0*1 = 6
-
-        EXPECT_EQ(det.at(grid[0]), det1);
-        EXPECT_EQ(det.at(grid[1]), det2);
+        auto det = A.determinant();
+        EXPECT_EQ(det.at(grid[0]), a1.determinant());
+        EXPECT_EQ(det.at(grid[1]), a2.determinant());
     }
 
     TEST_F(MatrixFieldTest, Commutator) {
@@ -84,35 +94,174 @@ namespace delta::geometry::testing {
         A.set(grid[1], a2);
         B.set(grid[1], b2);
 
-        auto comm = A.comm(B);  // [A,B] = A*B - B*A
-
-        Matrix2 comm1 = a1 * b1 - b1 * a1;
-        Matrix2 comm2 = a2 * b2 - b2 * a2;
-
-        EXPECT_TRUE(matrix_near(comm.at(grid[0]), comm1));
-        EXPECT_TRUE(matrix_near(comm.at(grid[1]), comm2));
+        auto comm = A.comm(B);
+        EXPECT_TRUE(matrix_near(comm.at(grid[0]), (a1 * b1 - b1 * a1).eval()));
+        EXPECT_TRUE(matrix_near(comm.at(grid[1]), (a2 * b2 - b2 * a2).eval()));
     }
 
+    // -------------------------------------------------------------------------
+    // In-place multiplication
+    // -------------------------------------------------------------------------
+    TEST_F(MatrixFieldTest, MultiplicationAssign) {
+        Grid grid = make_test_grid();
+        MatrixField2 A(grid), B(grid);
+
+        Matrix2 a1; a1 << 1_r, 2_r, 3_r, 4_r;
+        Matrix2 b1; b1 << 5_r, 6_r, 7_r, 8_r;
+        A.set(grid[0], a1);
+        B.set(grid[0], b1);
+
+        Matrix2 a2; a2 << 2_r, 0_r, 1_r, 3_r;
+        Matrix2 b2; b2 << 1_r, 2_r, 2_r, 1_r;
+        A.set(grid[1], a2);
+        B.set(grid[1], b2);
+
+        MatrixField2 A_copy = A;
+        A_copy *= B;
+        MatrixField2 expected = A * B;
+        for (const auto& addr : grid) {
+            EXPECT_TRUE(matrix_near(A_copy.at(addr), expected.at(addr)));
+        }
+    }
+
+    // -------------------------------------------------------------------------
+    // Exponential and logarithm
+    // -------------------------------------------------------------------------
     TEST_F(MatrixFieldTest, ExponentialAndLogarithm) {
         Grid grid = make_test_grid();
         MatrixField2 A(grid);
 
-        // Используем нильпотентную матрицу N = [[0,1],[0,0]]
-        // Тогда B = I + N, log(B) = N, exp(N) = I + N = B
-        Matrix2 N; N << 0_r, 1_r, 0_r, 0_r;
-        Matrix2 B = Matrix2::Identity() + N;  // [[1,1],[0,1]]
+        // Use a small nilpotent matrix N = [[0, 0.1], [0, 0]]
+        Matrix2 N; N << 0_r, Scalar(1, 10), 0_r, 0_r;
+        Matrix2 B = Matrix2::Identity() + N;   // norm(B-I) = 0.1 < 0.5 → no scaling needed
 
         A.set(grid[0], B);
-        A.set(grid[1], B);  // обе точки одинаковы для простоты
+        A.set(grid[1], B);
 
-        auto logA = A.log();   // должно быть поле с матрицами N
-        auto exp_logA = logA.exp();  // должно быть поле с B
+        auto logA = A.log();
+        auto exp_logA = logA.exp();
 
+        // Check that log(B) = N and exp(N) = B
         EXPECT_TRUE(matrix_near(logA.at(grid[0]), N, delta::default_eps()));
         EXPECT_TRUE(matrix_near(exp_logA.at(grid[0]), B, delta::default_eps()));
 
-        // Проверим, что exp(logA) = A
+        // Check that exp(log(B)) == B
         EXPECT_TRUE(matrix_near(exp_logA.at(grid[0]), A.at(grid[0]), delta::default_eps()));
+
+        // Check log(exp(N)) == N
+        MatrixField2 N_field(grid);
+        N_field.set(grid[0], N);
+        N_field.set(grid[1], N);
+        auto expN = N_field.exp();
+        auto log_expN = expN.log();
+        EXPECT_TRUE(matrix_near(log_expN.at(grid[0]), N, delta::default_eps()));
+    }
+
+    TEST_F(MatrixFieldTest, ExponentialLogarithmDiagonal) {
+        // Устанавливаем более низкую точность для ускорения вычислений.
+        // При дефолтной точности (1e-30) тест выполняется недопустимо долго из-за
+        // сложных вычислений с рациональными числами.
+        set_precision(Rational(1, 100000)); // 1e-6
+
+        Grid grid = make_test_grid();
+        MatrixField2 A(grid);
+        Matrix2 D; D << "0.1"_r, 0_r, 0_r, "0.2"_r;
+        A.set(grid[0], D);
+
+        auto expD = A.exp();
+        auto logExpD = expD.log();
+
+        // При точности 1e-6 результат должен быть близок к исходной матрице.
+        // Проверяем с тем же допуском.
+        EXPECT_TRUE(matrix_near(logExpD.at(grid[0]), D, delta::default_eps()));
+    }
+
+    // -------------------------------------------------------------------------
+    // Symmetric positive definite matrix (near identity)
+    // -------------------------------------------------------------------------
+    TEST_F(MatrixFieldTest, ExponentialLogarithmSymmetric) {
+        Grid grid = make_test_grid();
+        MatrixField2 A(grid);
+        Matrix2 M; M << 1.1_r, 0.05_r, 0.05_r, 0.9_r;
+        A.set(grid[0], M);
+
+        auto logM = A.log();
+        auto exp_logM = logM.exp();
+
+        EXPECT_TRUE(matrix_near(exp_logM.at(grid[0]), M, delta::default_eps()));
+    }
+
+    // -------------------------------------------------------------------------
+    // Large norm matrix (scaling required)
+    // -------------------------------------------------------------------------
+    TEST_F(MatrixFieldTest, ExponentialLogarithmLargeNorm) {
+        Grid grid = make_test_grid();
+        MatrixField2 A(grid);
+        // Use B = I + N where N has entry 0.5, so norm(B-I)=0.5 – borderline, will trigger scaling
+        Matrix2 N; N << 0_r, 0.5_r, 0_r, 0_r;
+        Matrix2 B = Matrix2::Identity() + N;
+        A.set(grid[0], B);
+
+        auto logB = A.log();
+        auto exp_logB = logB.exp();
+
+        EXPECT_TRUE(matrix_near(exp_logB.at(grid[0]), B, delta::default_eps()));
+
+        MatrixField2 N_field(grid);
+        N_field.set(grid[0], N);
+        auto expN = N_field.exp();
+        auto log_expN = expN.log();
+        EXPECT_TRUE(matrix_near(log_expN.at(grid[0]), N, delta::default_eps()));
+    }
+
+    // -------------------------------------------------------------------------
+    // Singular matrix should throw domain_error
+    // -------------------------------------------------------------------------
+    TEST_F(MatrixFieldTest, LogarithmSingularMatrix) {
+        Grid grid = make_test_grid();
+        MatrixField2 A(grid);
+        Matrix2 Z; Z << 0_r, 0_r, 0_r, 0_r;
+        A.set(grid[0], Z);
+
+        EXPECT_THROW(A.log(), std::domain_error);
+    }
+
+    // -------------------------------------------------------------------------
+    // Matrix far from identity (norm > 0.5) still works with scaling
+    // -------------------------------------------------------------------------
+    TEST_F(MatrixFieldTest, LogarithmFarFromIdentity) {
+        Grid grid = make_test_grid();
+        MatrixField2 A(grid);
+        // M = diag(10, 0.1) – far from identity, but positive definite
+        Matrix2 M; M << 10_r, 0_r, 0_r, Scalar(1, 10);
+        A.set(grid[0], M);
+
+        EXPECT_NO_THROW(A.log());
+        auto logM = A.log();
+        auto exp_logM = logM.exp();
+        EXPECT_TRUE(matrix_near(exp_logM.at(grid[0]), M, delta::default_eps()));
+    }
+
+    // -------------------------------------------------------------------------
+    // Square root consistency via exp(0.5*log(M))
+    // -------------------------------------------------------------------------
+    TEST_F(MatrixFieldTest, SquareRootConsistency) {
+        auto grid = make_test_grid();
+        MatrixField2 A(grid);
+        Matrix2 M; M << 2_r, 1_r, 1_r, 2_r;
+        A.set(grid[0], M);
+
+        auto logM = A.log();
+        auto halfLog = logM * 0.5_r;   // TensorField
+
+        MatrixField2 halfLogField(grid);
+        for (const auto& addr : grid) {
+            halfLogField.set(addr, halfLog.at(addr));
+        }
+
+        auto sqrtM = halfLogField.exp();
+        auto sqrtM_sq = sqrtM * sqrtM;
+        EXPECT_TRUE(matrix_near(sqrtM_sq.at(grid[0]), M, delta::default_eps()));
     }
 
 } // namespace delta::geometry::testing

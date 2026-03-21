@@ -410,13 +410,11 @@ namespace delta::testing {
         // Precision management (inherit from DeltaTest, but we add convenience)
         // -------------------------------------------------------------------------
         void SetUp() override {
-            DeltaTest::SetUp();
             old_precision_ = delta::default_eps();
         }
 
         void TearDown() override {
             delta::default_eps_value() = old_precision_;
-            DeltaTest::TearDown();
         }
 
         static void set_precision(const Rational& eps) {

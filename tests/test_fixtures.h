@@ -44,8 +44,20 @@ namespace delta::testing {
      */
     class DeltaTest : public ::testing::Test {
     protected:
-        void SetUp() override {}
-        void TearDown() override {}
+        // -------------------------------------------------------------------------
+        // Precision management (inherit from DeltaTest, but we add convenience)
+        // -------------------------------------------------------------------------
+        void SetUp() override {
+            old_precision_ = delta::default_eps();
+        }
+
+        void TearDown() override {
+            delta::default_eps_value() = old_precision_;
+        }
+
+        static void set_precision(const Rational& eps) {
+            delta::default_eps_value() = eps;
+        }
         //if something breaks miserably - blame these usings.
         using Addr = testing::Addr;
         using Val = testing::Val;
@@ -132,6 +144,9 @@ namespace delta::testing {
                 left, right, level, f_left, f_right, max_osc,
                 Between{}, AddrMetric{}, ValMetric{});
         }
+
+    private:
+        Rational old_precision_;
     };
 
     // -------------------------------------------------------------------------
