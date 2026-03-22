@@ -36,7 +36,7 @@ endif()
 find_package(Boost REQUIRED)          # Boost libraries (headers mostly)
 find_package(Eigen3 REQUIRED)         # Eigen3 for linear algebra
 find_package(fmt CONFIG REQUIRED)     # fmtlib for formatting
-
+find_package(absl CONFIG REQUIRED)    # migration from pure multiprecision.
 # 4. Google Test (included once for the whole project)
 include(FetchContent)
 set(gtest_force_shared_crt ON CACHE BOOL "" FORCE)   # Ensure consistent CRT with MSVC
@@ -58,6 +58,8 @@ target_link_libraries(delta_core INTERFACE
     Eigen3::Eigen
     OpenMP::OpenMP_CXX
     fmt::fmt
+    absl::int128
+    absl::strings 
 )
 
 if(MSVC)
@@ -71,10 +73,9 @@ endif()
 # Choose the arithmetic mode for delta::Rational.
 # Options: NATIVE_DOUBLE  - use built‑in double (fast, limited precision)
 #          BIN_FLOAT      - binary floating‑point (cpp_bin_float, default 100 digits)
-#          FIXED_RATIONAL - fixed‑bit rational (rational_adaptor with fixed integer, default 256 bits)
-#          EXACT_RATIONAL - exact unlimited rational (rational_adaptor with dynamic integers)
-set(DELTA_RATIONAL_MODE "EXACT_RATIONAL" CACHE STRING "Rational arithmetic mode")
-set_property(CACHE DELTA_RATIONAL_MODE PROPERTY STRINGS NATIVE_DOUBLE BIN_FLOAT FIXED_RATIONAL EXACT_RATIONAL)
+#          LAZY_HYBRID    - hybrid rational with lazy reduction (high performance, exact)
+set(DELTA_RATIONAL_MODE "LAZY_HYBRID" CACHE STRING "Rational arithmetic mode")
+set_property(CACHE DELTA_RATIONAL_MODE PROPERTY STRINGS NATIVE_DOUBLE BIN_FLOAT LAZY_HYBRID)
 
 if(DELTA_RATIONAL_MODE STREQUAL "NATIVE_DOUBLE")
     target_compile_definitions(delta_core INTERFACE DELTA_RATIONAL_MODE_NATIVE_DOUBLE)
@@ -85,14 +86,8 @@ elseif(DELTA_RATIONAL_MODE STREQUAL "BIN_FLOAT")
     set(DELTA_BIN_FLOAT_DIGITS "100" CACHE STRING "Number of decimal digits for binary float (cpp_bin_float)")
     target_compile_definitions(delta_core INTERFACE DELTA_BIN_FLOAT_DIGITS=${DELTA_BIN_FLOAT_DIGITS})
 
-elseif(DELTA_RATIONAL_MODE STREQUAL "FIXED_RATIONAL")
-    target_compile_definitions(delta_core INTERFACE DELTA_RATIONAL_MODE_FIXED_RATIONAL)
-    # Optional: bit width for the fixed‑size integer (default 256)
-    set(DELTA_RATIONAL_BITS "256" CACHE STRING "Bit width for fixed‑bit rational (FIXED_RATIONAL mode)")
-    target_compile_definitions(delta_core INTERFACE DELTA_RATIONAL_BITS=${DELTA_RATIONAL_BITS})
-
-else()   # EXACT_RATIONAL (default)
-    target_compile_definitions(delta_core INTERFACE DELTA_RATIONAL_MODE_EXACT_RATIONAL)
+else()   # LAZY_HYBRID (default)
+    target_compile_definitions(delta_core INTERFACE DELTA_RATIONAL_MODE_LAZY_HYBRID)
 endif()
 # --------------
 
