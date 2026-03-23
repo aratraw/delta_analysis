@@ -17,10 +17,10 @@ namespace Eigen {
         using Literal = delta::Rational;
 
         static inline Real epsilon() {
-            return delta::default_eps();
+            return delta::default_eps();   // return a copy, not a reference
         }
         static inline Real dummy_precision() {
-            return delta::default_eps();
+            return delta::default_eps();   // return a copy
         }
 
         enum {

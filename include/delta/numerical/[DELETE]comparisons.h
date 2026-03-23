@@ -1,11 +1,11 @@
 // include/delta/rational/comparisons.h
 #pragma once
 
-#include "delta/rational/rational_class.h"
 #include "delta/rational/interval.h"
-#include "delta/rational/evaluation.h"   // for evaluate()
+#include "delta/rational/rational_class.h"
 #include "delta/rational/context.h"
-#include "delta/rational/simplify.h"
+#include "delta/rational/utils.h"   // for to_cpp_int, would_overflow_mul
+#include <boost/multiprecision/cpp_int.hpp>
 
 namespace delta::internal {
     // Forward declaration – defined in simplify.h
@@ -41,10 +41,12 @@ namespace delta {
         if (ea.is_small() && eb.is_small()) {
             const auto& sa = *ea.as_small();
             const auto& sb = *eb.as_small();
-            // Normalise both to ensure correct comparison (they might be reduced already)
-            const_cast<internal::SmallStorage&>(sa).normalize();
-            const_cast<internal::SmallStorage&>(sb).normalize();
-            return sa.num == sb.num && sa.den == sb.den;
+            // Normalise copies to avoid const_cast
+            internal::SmallStorage sa_copy = sa;
+            internal::SmallStorage sb_copy = sb;
+            sa_copy.normalize();
+            sb_copy.normalize();
+            return sa_copy.num == sb_copy.num && sa_copy.den == sb_copy.den;
         }
         if (ea.is_big() && eb.is_big()) {
             const auto& ba = *ea.as_big();
@@ -56,17 +58,19 @@ namespace delta {
         if (ea.is_small() && eb.is_big()) {
             const auto& sa = *ea.as_small();
             const auto& bb = *eb.as_big();
-            sa.normalize();
-            boost::multiprecision::cpp_int n(sa.num);
-            boost::multiprecision::cpp_int d(sa.den);
+            internal::SmallStorage sa_copy = sa;
+            sa_copy.normalize();
+            boost::multiprecision::cpp_int n = internal::to_cpp_int(sa_copy.num);
+            boost::multiprecision::cpp_int d = internal::to_cpp_int(sa_copy.den);
             return n == bb.num && d == bb.den;
         }
         if (ea.is_big() && eb.is_small()) {
             const auto& ba = *ea.as_big();
             const auto& sb = *eb.as_small();
-            sb.normalize();
-            boost::multiprecision::cpp_int n(sb.num);
-            boost::multiprecision::cpp_int d(sb.den);
+            internal::SmallStorage sb_copy = sb;
+            sb_copy.normalize();
+            boost::multiprecision::cpp_int n = internal::to_cpp_int(sb_copy.num);
+            boost::multiprecision::cpp_int d = internal::to_cpp_int(sb_copy.den);
             return ba.num == n && ba.den == d;
         }
         // Should not happen (both non‑lazy)
@@ -105,24 +109,26 @@ namespace delta {
         if (ea.is_small() && eb.is_small()) {
             const auto& sa = *ea.as_small();
             const auto& sb = *eb.as_small();
-            sa.normalize();
-            sb.normalize();
+            internal::SmallStorage sa_copy = sa;
+            internal::SmallStorage sb_copy = sb;
+            sa_copy.normalize();
+            sb_copy.normalize();
             // Compare cross-multiplied to avoid division
             // a.num / a.den < b.num / b.den  <=> a.num * b.den < b.num * a.den
             // Use 128-bit multiplication if possible, else promote.
-            bool overflow = internal::would_overflow_mul(sa.num, static_cast<absl::int128>(sb.den)) ||
-                internal::would_overflow_mul(sb.num, static_cast<absl::int128>(sa.den));
+            bool overflow = internal::would_overflow_mul(sa_copy.num, static_cast<absl::int128>(sb_copy.den)) ||
+                internal::would_overflow_mul(sb_copy.num, static_cast<absl::int128>(sa_copy.den));
             if (!overflow) {
-                absl::int128 lhs = sa.num * static_cast<absl::int128>(sb.den);
-                absl::int128 rhs = sb.num * static_cast<absl::int128>(sa.den);
+                absl::int128 lhs = sa_copy.num * static_cast<absl::int128>(sb_copy.den);
+                absl::int128 rhs = sb_copy.num * static_cast<absl::int128>(sa_copy.den);
                 return lhs < rhs;
             }
             else {
                 // Promote to big integers
-                boost::multiprecision::cpp_int n1(sa.num);
-                boost::multiprecision::cpp_int d1(sa.den);
-                boost::multiprecision::cpp_int n2(sb.num);
-                boost::multiprecision::cpp_int d2(sb.den);
+                boost::multiprecision::cpp_int n1 = internal::to_cpp_int(sa_copy.num);
+                boost::multiprecision::cpp_int d1 = internal::to_cpp_int(sa_copy.den);
+                boost::multiprecision::cpp_int n2 = internal::to_cpp_int(sb_copy.num);
+                boost::multiprecision::cpp_int d2 = internal::to_cpp_int(sb_copy.den);
                 return n1 * d2 < n2 * d1;
             }
         }
@@ -135,17 +141,19 @@ namespace delta {
         if (ea.is_small() && eb.is_big()) {
             const auto& sa = *ea.as_small();
             const auto& bb = *eb.as_big();
-            sa.normalize();
-            boost::multiprecision::cpp_int n1(sa.num);
-            boost::multiprecision::cpp_int d1(sa.den);
+            internal::SmallStorage sa_copy = sa;
+            sa_copy.normalize();
+            boost::multiprecision::cpp_int n1 = internal::to_cpp_int(sa_copy.num);
+            boost::multiprecision::cpp_int d1 = internal::to_cpp_int(sa_copy.den);
             return n1 * bb.den < bb.num * d1;
         }
         if (ea.is_big() && eb.is_small()) {
             const auto& ba = *ea.as_big();
             const auto& sb = *eb.as_small();
-            sb.normalize();
-            boost::multiprecision::cpp_int n2(sb.num);
-            boost::multiprecision::cpp_int d2(sb.den);
+            internal::SmallStorage sb_copy = sb;
+            sb_copy.normalize();
+            boost::multiprecision::cpp_int n2 = internal::to_cpp_int(sb_copy.num);
+            boost::multiprecision::cpp_int d2 = internal::to_cpp_int(sb_copy.den);
             return ba.num * d2 < n2 * ba.den;
         }
         return false;

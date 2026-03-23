@@ -1,14 +1,16 @@
 // include/delta/rational/storage.h
 #pragma once
 
+#include <stdexcept>
 #include "delta/rational/rational_fwd.h"
 #include "delta/rational/interval.h"
+#include <absl/container/inlined_vector.h>
 #include <absl/numeric/int128.h>
 #include <boost/multiprecision/cpp_int.hpp>
+#include <cmath>
 #include <memory>
 #include <optional>
 #include <variant>
-#include <vector>
 
 namespace delta::internal {
 
@@ -108,31 +110,23 @@ namespace delta::internal {
     };
 
     // Forward declaration of compute_approx (defined in simplify.h)
-    Interval compute_approx(LazyOp op, const std::vector<std::shared_ptr<const Rational>>& args);
+    Interval compute_approx(LazyOp op, const absl::InlinedVector<std::shared_ptr<const Rational>, 2>& args);
 
     // =========================================================================
-    // LazyNode – deferred operation tree with shared ownership and immediate interval
+    // LazyNode – deferred operation tree (declaration only, definitions in simplify.h)
     // =========================================================================
     struct LazyNode {
         LazyOp op;
-        std::vector<std::shared_ptr<const Rational>> args;   // shared ownership to avoid recursion
-        Rational precision;                                  // required accuracy for transcendentals
-        mutable std::optional<Rational> cached_value;        // after eager evaluation
-        Interval approx;                                     // always up‑to‑date interval for fast comparisons
+        absl::InlinedVector<std::shared_ptr<const Rational>, 2> args;
+        std::shared_ptr<const Rational> precision;          // changed from Rational
+        mutable std::optional<std::shared_ptr<const Rational>> cached_value; // changed from std::optional<Rational>
+        Interval approx;
+        int depth;
 
-        // Constructors – immediately compute approximate interval
-        LazyNode(LazyOp o, std::vector<std::shared_ptr<const Rational>>&& a, const Rational& eps = Rational())
-            : op(o), args(std::move(a)), precision(eps), cached_value(std::nullopt),
-            approx(compute_approx(op, this->args)) {
-        }
-
-        LazyNode(LazyOp o, std::shared_ptr<const Rational> a, const Rational& eps = Rational())
-            : LazyNode(o, std::vector<std::shared_ptr<const Rational>>{std::move(a)}, eps) {
-        }
-
-        LazyNode(LazyOp o, std::shared_ptr<const Rational> a, std::shared_ptr<const Rational> b, const Rational& eps = Rational())
-            : LazyNode(o, std::vector<std::shared_ptr<const Rational>>{std::move(a), std::move(b)}, eps) {
-        }
+        // Constructors – declared, defined in simplify.h
+        LazyNode(LazyOp o, absl::InlinedVector<std::shared_ptr<const Rational>, 2>&& a, std::shared_ptr<const Rational> eps);
+        LazyNode(LazyOp o, std::shared_ptr<const Rational> a, std::shared_ptr<const Rational> eps);
+        LazyNode(LazyOp o, std::shared_ptr<const Rational> eps);
     };
 
     // =========================================================================

@@ -3,10 +3,10 @@
 
 #include "delta/rational/rational_class.h"
 #include "delta/rational/context.h"
-#include <memory>
-#include <vector>
-#include "delta/rational/evaluation.h"
 #include "delta/rational/simplify.h"
+#include <absl/container/inlined_vector.h>
+#include "delta/rational/rational_fwd.h"
+#include <memory>
 
 namespace delta {
 
@@ -29,14 +29,10 @@ namespace delta {
         if (internal::global_eager_mode) {
             return internal::eager_add(a, b);
         }
-        auto node = std::make_shared<internal::LazyNode>(
-            internal::LazyOp::ADD,
-            std::vector<std::shared_ptr<const Rational>>{
-            std::make_shared<Rational>(a),
-                std::make_shared<Rational>(b)
-        },
-            Rational()  // default precision (ignored for arithmetic)
-        );
+        absl::InlinedVector<std::shared_ptr<const Rational>, 2> args;
+        args.emplace_back(std::make_shared<Rational>(a));
+        args.emplace_back(std::make_shared<Rational>(b));
+        auto node = std::make_shared<internal::LazyNode>(internal::LazyOp::ADD, std::move(args));
         Rational result(node);
         return internal::simplify(result);
     }
@@ -45,13 +41,10 @@ namespace delta {
         if (internal::global_eager_mode) {
             return internal::eager_sub(a, b);
         }
-        auto node = std::make_shared<internal::LazyNode>(
-            internal::LazyOp::SUB,
-            std::vector<std::shared_ptr<const Rational>>{
-            std::make_shared<Rational>(a),
-                std::make_shared<Rational>(b)
-        }
-        );
+        absl::InlinedVector<std::shared_ptr<const Rational>, 2> args;
+        args.emplace_back(std::make_shared<Rational>(a));
+        args.emplace_back(std::make_shared<Rational>(b));
+        auto node = std::make_shared<internal::LazyNode>(internal::LazyOp::SUB, std::move(args));
         Rational result(node);
         return internal::simplify(result);
     }
@@ -60,13 +53,10 @@ namespace delta {
         if (internal::global_eager_mode) {
             return internal::eager_mul(a, b);
         }
-        auto node = std::make_shared<internal::LazyNode>(
-            internal::LazyOp::MUL,
-            std::vector<std::shared_ptr<const Rational>>{
-            std::make_shared<Rational>(a),
-                std::make_shared<Rational>(b)
-        }
-        );
+        absl::InlinedVector<std::shared_ptr<const Rational>, 2> args;
+        args.emplace_back(std::make_shared<Rational>(a));
+        args.emplace_back(std::make_shared<Rational>(b));
+        auto node = std::make_shared<internal::LazyNode>(internal::LazyOp::MUL, std::move(args));
         Rational result(node);
         return internal::simplify(result);
     }
@@ -75,13 +65,10 @@ namespace delta {
         if (internal::global_eager_mode) {
             return internal::eager_div(a, b);
         }
-        auto node = std::make_shared<internal::LazyNode>(
-            internal::LazyOp::DIV,
-            std::vector<std::shared_ptr<const Rational>>{
-            std::make_shared<Rational>(a),
-                std::make_shared<Rational>(b)
-        }
-        );
+        absl::InlinedVector<std::shared_ptr<const Rational>, 2> args;
+        args.emplace_back(std::make_shared<Rational>(a));
+        args.emplace_back(std::make_shared<Rational>(b));
+        auto node = std::make_shared<internal::LazyNode>(internal::LazyOp::DIV, std::move(args));
         Rational result(node);
         return internal::simplify(result);
     }
@@ -90,12 +77,7 @@ namespace delta {
         if (internal::global_eager_mode) {
             return internal::eager_neg(a);
         }
-        auto node = std::make_shared<internal::LazyNode>(
-            internal::LazyOp::NEG,
-            std::vector<std::shared_ptr<const Rational>>{
-            std::make_shared<Rational>(a)
-        }
-        );
+        auto node = std::make_shared<internal::LazyNode>(internal::LazyOp::NEG, std::make_shared<Rational>(a));
         Rational result(node);
         return internal::simplify(result);
     }

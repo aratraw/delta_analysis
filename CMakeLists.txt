@@ -69,27 +69,6 @@ if(MSVC)
     target_compile_definitions(delta_core INTERFACE EIGEN_HAS_OPENMP)
 endif()
 
-# --- Rational backend selection ---
-# Choose the arithmetic mode for delta::Rational.
-# Options: NATIVE_DOUBLE  - use built‑in double (fast, limited precision)
-#          BIN_FLOAT      - binary floating‑point (cpp_bin_float, default 100 digits)
-#          LAZY_HYBRID    - hybrid rational with lazy reduction (high performance, exact)
-set(DELTA_RATIONAL_MODE "LAZY_HYBRID" CACHE STRING "Rational arithmetic mode")
-set_property(CACHE DELTA_RATIONAL_MODE PROPERTY STRINGS NATIVE_DOUBLE BIN_FLOAT LAZY_HYBRID)
-
-if(DELTA_RATIONAL_MODE STREQUAL "NATIVE_DOUBLE")
-    target_compile_definitions(delta_core INTERFACE DELTA_RATIONAL_MODE_NATIVE_DOUBLE)
-
-elseif(DELTA_RATIONAL_MODE STREQUAL "BIN_FLOAT")
-    target_compile_definitions(delta_core INTERFACE DELTA_RATIONAL_MODE_BIN_FLOAT)
-    # Optional: number of decimal digits (default 100)
-    set(DELTA_BIN_FLOAT_DIGITS "100" CACHE STRING "Number of decimal digits for binary float (cpp_bin_float)")
-    target_compile_definitions(delta_core INTERFACE DELTA_BIN_FLOAT_DIGITS=${DELTA_BIN_FLOAT_DIGITS})
-
-else()   # LAZY_HYBRID (default)
-    target_compile_definitions(delta_core INTERFACE DELTA_RATIONAL_MODE_LAZY_HYBRID)
-endif()
-# --------------
 
 # Helper variable: directory containing the MSVC compiler (used for DLL discovery in tests)
 get_filename_component(MSVC_BIN_DIR ${CMAKE_CXX_COMPILER} DIRECTORY CACHE INTERNAL "")
@@ -110,10 +89,12 @@ endif()
 add_compile_definitions($<$<CONFIG:Debug>:_DEBUG>)
 
 # Add subdirectories for tests, examples, and benchmarks
+add_subdirectory("tests/rational")
 #add_subdirectory("tests/basic")
 #add_subdirectory("tests/calculus")
 #add_subdirectory("tests/regulative_ideas")
-add_subdirectory("tests/geometry")
+#add_subdirectory("tests/geometry")
+
 #add_subdirectory("tests/numerical")
 #add_subdirectory("tests/solvers")
 #add_subdirectory("examples/arbitrary_regulative_ideas")

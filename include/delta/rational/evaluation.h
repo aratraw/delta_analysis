@@ -1,13 +1,16 @@
 // include/delta/rational/evaluation.h
 #pragma once
 
+#include <stdexcept>
 #include "delta/rational/rational_class.h"
 #include "delta/rational/context.h"
 #include "delta/rational/utils.h"
-#include <stdexcept>
 #include <cmath>
+#include <vector>
 
 namespace delta::internal {
+    // Declaration of eager_pi (defined below)
+    Rational eager_pi(const Rational& eps);
 
     // -------------------------------------------------------------------------
     // Eager arithmetic on non-lazy rationals
@@ -19,7 +22,6 @@ namespace delta::internal {
             const_cast<SmallStorage&>(*r.as_small()).normalize();
         }
         else if (r.is_big()) {
-            // BigStorage is already normalised by construction, but we can call
             const_cast<BigStorage&>(*r.as_big()).normalize();
         }
     }
@@ -48,7 +50,10 @@ namespace delta::internal {
             }
             else {
                 // Promote to big
-                boost::multiprecision::cpp_int n1(ca.num), d1(ca.den), n2(cb.num), d2(cb.den);
+                boost::multiprecision::cpp_int n1 = to_cpp_int(ca.num);
+                boost::multiprecision::cpp_int d1 = to_cpp_int(ca.den);
+                boost::multiprecision::cpp_int n2 = to_cpp_int(cb.num);
+                boost::multiprecision::cpp_int d2 = to_cpp_int(cb.den);
                 boost::multiprecision::cpp_int num = n1 * d2 + n2 * d1;
                 boost::multiprecision::cpp_int den = d1 * d2;
                 return Rational(num, den);
@@ -58,8 +63,8 @@ namespace delta::internal {
         boost::multiprecision::cpp_int n1, d1, n2, d2;
         if (ea.is_small()) {
             const auto& s = *ea.as_small();
-            n1 = s.num;
-            d1 = s.den;
+            n1 = to_cpp_int(s.num);
+            d1 = to_cpp_int(s.den);
         }
         else {
             const auto& b = *ea.as_big();
@@ -68,8 +73,8 @@ namespace delta::internal {
         }
         if (eb.is_small()) {
             const auto& s = *eb.as_small();
-            n2 = s.num;
-            d2 = s.den;
+            n2 = to_cpp_int(s.num);
+            d2 = to_cpp_int(s.den);
         }
         else {
             const auto& b = *eb.as_big();
@@ -80,6 +85,9 @@ namespace delta::internal {
         boost::multiprecision::cpp_int den = d1 * d2;
         return Rational(num, den);
     }
+
+    // Forward declaration
+    Rational eager_neg(const Rational& a);
 
     inline Rational eager_sub(const Rational& a, const Rational& b) {
         Rational ea = evaluate(a);
@@ -105,7 +113,10 @@ namespace delta::internal {
                 return Rational(num, den);
             }
             else {
-                boost::multiprecision::cpp_int n1(ca.num), d1(ca.den), n2(cb.num), d2(cb.den);
+                boost::multiprecision::cpp_int n1 = to_cpp_int(ca.num);
+                boost::multiprecision::cpp_int d1 = to_cpp_int(ca.den);
+                boost::multiprecision::cpp_int n2 = to_cpp_int(cb.num);
+                boost::multiprecision::cpp_int d2 = to_cpp_int(cb.den);
                 return Rational(n1 * n2, d1 * d2);
             }
         }
@@ -113,8 +124,8 @@ namespace delta::internal {
         boost::multiprecision::cpp_int n1, d1, n2, d2;
         if (ea.is_small()) {
             const auto& s = *ea.as_small();
-            n1 = s.num;
-            d1 = s.den;
+            n1 = to_cpp_int(s.num);
+            d1 = to_cpp_int(s.den);
         }
         else {
             const auto& b = *ea.as_big();
@@ -123,8 +134,8 @@ namespace delta::internal {
         }
         if (eb.is_small()) {
             const auto& s = *eb.as_small();
-            n2 = s.num;
-            d2 = s.den;
+            n2 = to_cpp_int(s.num);
+            d2 = to_cpp_int(s.den);
         }
         else {
             const auto& b = *eb.as_big();
@@ -353,6 +364,76 @@ namespace delta::internal {
             if (n > 1000000) throw std::runtime_error("e did not converge");
         }
         return sum;
+    }
+
+    // -------------------------------------------------------------------------
+    // Evaluate a lazy rational (with caching)
+    // -------------------------------------------------------------------------
+    inline Rational evaluate(const Rational& r) {
+        if (!r.is_lazy()) return r;
+        auto node = r.as_lazy();
+
+        // Return cached value if present
+        if (node->cached_value.has_value()) {
+            return *(*node->cached_value);
+        }
+
+        // Evaluate arguments recursively
+        std::vector<Rational> ev_args;
+        ev_args.reserve(node->args.size());
+        for (const auto& arg : node->args) {
+            ev_args.push_back(evaluate(*arg));
+        }
+
+        // Apply the operation
+        Rational result;
+        switch (node->op) {
+        case LazyOp::ADD:
+            result = eager_add(ev_args[0], ev_args[1]);
+            break;
+        case LazyOp::SUB:
+            result = eager_sub(ev_args[0], ev_args[1]);
+            break;
+        case LazyOp::MUL:
+            result = eager_mul(ev_args[0], ev_args[1]);
+            break;
+        case LazyOp::DIV:
+            result = eager_div(ev_args[0], ev_args[1]);
+            break;
+        case LazyOp::NEG:
+            result = eager_neg(ev_args[0]);
+            break;
+        case LazyOp::SQRT:
+            result = eager_sqrt(ev_args[0], *node->precision);
+            break;
+        case LazyOp::EXP:
+            result = eager_exp(ev_args[0], *node->precision);
+            break;
+        case LazyOp::LOG:
+            result = eager_log(ev_args[0], *node->precision);
+            break;
+        case LazyOp::SIN:
+            result = eager_sin(ev_args[0], *node->precision);
+            break;
+        case LazyOp::COS:
+            result = eager_cos(ev_args[0], *node->precision);
+            break;
+        case LazyOp::ACOS:
+            result = eager_acos(ev_args[0], *node->precision);
+            break;
+        case LazyOp::PI:
+            result = eager_pi(*node->precision);
+            break;
+        case LazyOp::E:
+            result = eager_e(*node->precision);
+            break;
+        default:
+            throw std::runtime_error("Unknown LazyOp in evaluate");
+        }
+
+        // Cache the result
+        node->cached_value = std::make_shared<const Rational>(result);
+        return result;
     }
 
 } // namespace delta::internal
