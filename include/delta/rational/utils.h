@@ -7,6 +7,7 @@
 #include <climits>
 #include <cstdint>
 #include <string>
+#include <limits> 
 
 namespace delta::internal {
 
@@ -43,47 +44,38 @@ namespace delta::internal {
 
     // Check if a * b would overflow absl::int128
     inline bool would_overflow_mul(absl::int128 a, absl::int128 b) noexcept {
-        // Use compiler built-ins when available
+        // Используем компиляторные встроенные функции, если доступны
 #if defined(__GNUC__) || defined(__clang__)
         absl::int128 result;
         return __builtin_mul_overflow(a, b, &result);
-#elif defined(_MSC_VER) && defined(_M_IX86) || defined(_M_X64)
-    // MSVC provides _Mul128 for 64-bit, but for 128-bit we need to use __mul128?
-    // Actually _Mul128 works on __int64, not __int128. Use fallback.
-        (void)a; (void)b;
-        // Fallback to manual check
-        // We'll just use the fallback for MSVC as well for simplicity
-        // Since the fallback is safe, we'll use it universally for MSVC.
-        // The fallback is below.
-#endif
-
-    // Fallback: use division to check
+#else
+    // Fallback: проверка через деление
         if (a == 0 || b == 0) return false;
         bool negative = (a < 0) ^ (b < 0);
         absl::uint128 aa = a < 0 ? -a : a;
         absl::uint128 bb = b < 0 ? -b : b;
         absl::uint128 max_val = negative
-            ? static_cast<absl::uint128>(absl::int128(1) << 127)   // 2^127
-            : static_cast<absl::uint128>(absl::int128(1) << 127) - 1; // 2^127 - 1
-        if (aa > max_val / bb) return true;
-        return false;
+            ? static_cast<absl::uint128>(std::numeric_limits<absl::int128>::min()) // -2^127 -> 2^127
+            : static_cast<absl::uint128>(std::numeric_limits<absl::int128>::max()); // 2^127 - 1
+        return aa > max_val / bb;
+#endif
     }
 
     // Check if a + b would overflow absl::int128
     inline bool would_overflow_add(absl::int128 a, absl::int128 b) noexcept {
-        // Use compiler built-ins
 #if defined(__GNUC__) || defined(__clang__)
         absl::int128 result;
         return __builtin_add_overflow(a, b, &result);
-#elif defined(_MSC_VER)
-        (void)a; (void)b;
-        // Fallback
-#endif
-
-    // Fallback: check sign bits
-        if ((b > 0) && (a > (absl::int128(1) << 127) - 1 - b)) return true;
-        if ((b < 0) && (a < -((absl::int128(1) << 127)) - b)) return true;
+#else
+        // Fallback: проверка знаков
+        if (b > 0) {
+            return a > std::numeric_limits<absl::int128>::max() - b;
+        }
+        else if (b < 0) {
+            return a < std::numeric_limits<absl::int128>::min() - b;
+        }
         return false;
+#endif
     }
 
     // Least common multiple for absl::uint128 (result may not fit in 128 bits)

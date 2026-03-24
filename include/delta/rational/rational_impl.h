@@ -18,15 +18,18 @@
 namespace delta {
 
     // ----------------------------------------------------------------------------
-    // Constructors
-    // ----------------------------------------------------------------------------
+   // Constructors
+   // ----------------------------------------------------------------------------
 
     inline Rational::Rational() noexcept : storage_(internal::SmallStorage{}) {}
 
     inline Rational::Rational(absl::int128 num) : storage_(internal::SmallStorage(num)) {}
 
-    inline Rational::Rational(absl::int128 num, absl::uint128 den)
-        : storage_(internal::SmallStorage(num, den)) {
+    inline Rational::Rational(absl::int128 num, absl::uint128 den) {
+        if (den == 0) {
+            throw std::domain_error("Denominator cannot be zero");
+        }
+        storage_ = internal::SmallStorage(num, den);
     }
 
     inline Rational::Rational(const boost::multiprecision::cpp_int& num)
@@ -34,12 +37,18 @@ namespace delta {
     }
 
     inline Rational::Rational(const boost::multiprecision::cpp_int& num,
-        const boost::multiprecision::cpp_int& den)
-        : storage_(internal::BigStorage(num, den)) {
+        const boost::multiprecision::cpp_int& den) {
+        if (den == 0) {
+            throw std::domain_error("Denominator cannot be zero");
+        }
+        storage_ = internal::BigStorage(num, den);
     }
 
-    inline Rational::Rational(int num, int den)
-        : Rational(static_cast<absl::int128>(num), static_cast<absl::uint128>(den)) {
+    inline Rational::Rational(int num, int den) {
+        if (den == 0) {
+            throw std::domain_error("Denominator cannot be zero");
+        }
+        *this = Rational(static_cast<absl::int128>(num), static_cast<absl::uint128>(den));
     }
 
     inline Rational::Rational(const std::string& s) {
@@ -85,21 +94,56 @@ namespace delta {
             else {
                 std::string int_part = s.substr(0, dot);
                 std::string frac_part = s.substr(dot + 1);
-                // Remove trailing zeros to avoid huge denominators
-                while (!frac_part.empty() && frac_part.back() == '0')
-                    frac_part.pop_back();
-                boost::multiprecision::cpp_int num(int_part + frac_part);
-                boost::multiprecision::cpp_int den(1);
-                for (size_t i = 0; i < frac_part.size(); ++i)
-                    den *= 10;
-                // Reduce
+                if (frac_part.empty()) frac_part = "0";
+
+                // Подсчитываем количество знаков после запятой
+                size_t decimal_places = frac_part.length();
+
+                // Удаляем ведущие нули из дробной части для числителя
+                std::string frac_trimmed = frac_part;
+                size_t first_nonzero = frac_trimmed.find_first_not_of('0');
+                if (first_nonzero != std::string::npos) {
+                    frac_trimmed = frac_trimmed.substr(first_nonzero);
+                }
+                else {
+                    frac_trimmed = "0";
+                }
+
+                // Формируем числитель: целая часть + дробная часть (без ведущих нулей)
+                std::string num_str;
+                if (int_part == "0" || int_part.empty()) {
+                    num_str = frac_trimmed;
+                }
+                else {
+                    // Убираем знак из целой части, если есть, и запоминаем
+                    bool negative = false;
+                    if (!int_part.empty() && int_part[0] == '-') {
+                        negative = true;
+                        int_part = int_part.substr(1);
+                    }
+                    num_str = int_part + frac_trimmed;
+                    // Убираем ведущие нули у числителя
+                    size_t num_start = num_str.find_first_not_of('0');
+                    if (num_start != std::string::npos) {
+                        num_str = num_str.substr(num_start);
+                    }
+                    if (negative) num_str = "-" + num_str;
+                }
+                if (num_str.empty() || num_str == "0") num_str = "0";
+
+                // Знаменатель: 10^decimal_places
+                boost::multiprecision::cpp_int den = 1;
+                for (size_t i = 0; i < decimal_places; ++i) den *= 10;
+
+                // Преобразуем числитель в cpp_int
+                boost::multiprecision::cpp_int num(num_str);
+
+                // Сокращаем
                 boost::multiprecision::cpp_int g = boost::multiprecision::gcd(num, den);
                 num /= g;
                 den /= g;
-                // Handle sign
-                if (int_part.front() == '-') {
-                    num = -num;
-                }
+
+                // Выбираем хранилище
                 if (num <= internal::to_cpp_int((std::numeric_limits<absl::int128>::max)()) &&
                     den <= internal::to_cpp_int((std::numeric_limits<absl::uint128>::max)())) {
                     storage_ = internal::SmallStorage(
