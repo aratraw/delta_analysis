@@ -1,130 +1,125 @@
-// include/delta/rational/interval.h
 #pragma once
 
 #include <algorithm>
 #include <cmath>
 #include <limits>
+#include <stdexcept>
 
 namespace delta::internal {
 
-    /**
-     * @brief Интервал с направленным округлением.
-     *
-     * Представляет число как отрезок [lo, hi], где lo <= hi.
-     * Арифметические операции гарантированно расширяют интервал так,
-     * чтобы он содержал точный результат.
-     */
     class Interval {
-        double lo;
-        double hi;
-
     public:
-        // -------------------------------------------------------------------------
-        // Конструкторы
-        // -------------------------------------------------------------------------
-        Interval() : lo(0.0), hi(0.0) {}
-        explicit Interval(double x) : lo(x), hi(x) {}
-        Interval(double l, double h) : lo(l), hi(h) {
+        constexpr Interval() noexcept : lo(0.0), hi(0.0) {}
+        constexpr explicit Interval(double x) noexcept : lo(x), hi(x) {}
+        constexpr Interval(double l, double h) noexcept
+            : lo(l), hi(h)
+        {
             if (lo > hi) std::swap(lo, hi);
         }
 
-        // -------------------------------------------------------------------------
-        // Доступ к границам
-        // -------------------------------------------------------------------------
-        double lower() const { return lo; }
-        double upper() const { return hi; }
-        double width() const { return hi - lo; }
+        constexpr double lower() const noexcept { return lo; }
+        constexpr double upper() const noexcept { return hi; }
+        constexpr double width() const noexcept { return hi - lo; }
 
-        // -------------------------------------------------------------------------
-        // Арифметические операции с направленным округлением
-        // -------------------------------------------------------------------------
-        Interval operator+(const Interval& other) const {
-            double new_lo = lo + other.lo;
-            double new_hi = hi + other.hi;
-            // Расширяем наружу, чтобы гарантировать покрытие точного результата
-            new_lo = std::nextafter(new_lo, -std::numeric_limits<double>::infinity());
-            new_hi = std::nextafter(new_hi, std::numeric_limits<double>::infinity());
-            return Interval(new_lo, new_hi);
+        // Arithmetic operations with outward rounding using nextafter
+        Interval operator+(const Interval& other) const noexcept
+        {
+            double raw_lo = lo + other.lo;
+            double raw_hi = hi + other.hi;
+            return Interval(
+                std::nextafter(raw_lo, -std::numeric_limits<double>::infinity()),
+                std::nextafter(raw_hi, std::numeric_limits<double>::infinity())
+            );
         }
 
-        Interval operator-(const Interval& other) const {
-            double new_lo = lo - other.hi;
-            double new_hi = hi - other.lo;
-            new_lo = std::nextafter(new_lo, -std::numeric_limits<double>::infinity());
-            new_hi = std::nextafter(new_hi, std::numeric_limits<double>::infinity());
-            return Interval(new_lo, new_hi);
+        Interval operator-(const Interval& other) const noexcept
+        {
+            double raw_lo = lo - other.hi;
+            double raw_hi = hi - other.lo;
+            return Interval(
+                std::nextafter(raw_lo, -std::numeric_limits<double>::infinity()),
+                std::nextafter(raw_hi, std::numeric_limits<double>::infinity())
+            );
         }
 
-        Interval operator*(const Interval& other) const {
-            // Для умножения рассматриваем все 4 комбинации границ
+        Interval operator*(const Interval& other) const noexcept
+        {
             double a = lo * other.lo;
             double b = lo * other.hi;
             double c = hi * other.lo;
             double d = hi * other.hi;
-            double new_lo = std::min({ a, b, c, d });
-            double new_hi = std::max({ a, b, c, d });
-            new_lo = std::nextafter(new_lo, -std::numeric_limits<double>::infinity());
-            new_hi = std::nextafter(new_hi, std::numeric_limits<double>::infinity());
-            return Interval(new_lo, new_hi);
+            double raw_lo = std::min({ a, b, c, d });
+            double raw_hi = std::max({ a, b, c, d });
+            return Interval(
+                std::nextafter(raw_lo, -std::numeric_limits<double>::infinity()),
+                std::nextafter(raw_hi, std::numeric_limits<double>::infinity())
+            );
         }
 
-        Interval operator/(const Interval& other) const {
-            // Деление на ноль недопустимо – вызывающий должен убедиться, что интервал не содержит нуля
-            // Для простоты расширяем бесконечно, если other содержит 0.
+        Interval operator/(const Interval& other) const
+        {
+            // Division by an interval containing zero -> [-∞, +∞]
             if (other.lo <= 0.0 && other.hi >= 0.0) {
-                return Interval(-std::numeric_limits<double>::infinity(),
-                    std::numeric_limits<double>::infinity());
+                return Interval(
+                    -std::numeric_limits<double>::infinity(),
+                    std::numeric_limits<double>::infinity()
+                );
             }
+            // Compute the four possible quotients
             double a = lo / other.lo;
             double b = lo / other.hi;
             double c = hi / other.lo;
             double d = hi / other.hi;
-            double new_lo = std::min({ a, b, c, d });
-            double new_hi = std::max({ a, b, c, d });
-            new_lo = std::nextafter(new_lo, -std::numeric_limits<double>::infinity());
-            new_hi = std::nextafter(new_hi, std::numeric_limits<double>::infinity());
-            return Interval(new_lo, new_hi);
+            double raw_lo = std::min({ a, b, c, d });
+            double raw_hi = std::max({ a, b, c, d });
+            return Interval(
+                std::nextafter(raw_lo, -std::numeric_limits<double>::infinity()),
+                std::nextafter(raw_hi, std::numeric_limits<double>::infinity())
+            );
         }
 
-        Interval operator-() const {
-            double new_lo = -hi;
-            double new_hi = -lo;
-            new_lo = std::nextafter(new_lo, -std::numeric_limits<double>::infinity());
-            new_hi = std::nextafter(new_hi, std::numeric_limits<double>::infinity());
-            return Interval(new_lo, new_hi);
+        Interval operator-() const noexcept
+        {
+            double raw_lo = -hi;
+            double raw_hi = -lo;
+            return Interval(
+                std::nextafter(raw_lo, -std::numeric_limits<double>::infinity()),
+                std::nextafter(raw_hi, std::numeric_limits<double>::infinity())
+            );
         }
 
-        // -------------------------------------------------------------------------
-        // Логические предикаты (без расширения интервалов)
-        // -------------------------------------------------------------------------
-        bool operator<(const Interval& other) const {
+        // Comparisons (without rounding)
+        constexpr bool operator<(const Interval& other) const noexcept
+        {
             return hi < other.lo;
         }
-        bool operator>(const Interval& other) const {
+        constexpr bool operator>(const Interval& other) const noexcept
+        {
             return lo > other.hi;
         }
-        bool operator<=(const Interval& other) const {
+        constexpr bool operator<=(const Interval& other) const noexcept
+        {
             return hi <= other.lo;
         }
-        bool operator>=(const Interval& other) const {
+        constexpr bool operator>=(const Interval& other) const noexcept
+        {
             return lo >= other.hi;
         }
-        bool operator==(const Interval& other) const {
+        constexpr bool operator==(const Interval& other) const noexcept
+        {
             return lo == other.lo && hi == other.hi;
         }
 
-        /**
-         * @brief Проверяет, пересекаются ли два интервала.
-         */
-        bool overlaps(const Interval& other) const {
-            return !(hi < other.lo || lo > other.hi);
+        constexpr bool overlaps(const Interval& other) const noexcept
+        {
+            return !(hi < other.lo || other.hi < lo);
         }
 
-        // -------------------------------------------------------------------------
-        // Статические константы
-        // -------------------------------------------------------------------------
-        static Interval zero() { return Interval(0.0); }
-        static Interval one() { return Interval(1.0); }
+        static constexpr Interval zero() noexcept { return Interval(0.0); }
+        static constexpr Interval one() noexcept { return Interval(1.0); }
+
+    private:
+        double lo, hi;
     };
 
 } // namespace delta::internal

@@ -1,18 +1,21 @@
 // include/delta/core/rational.h
 #pragma once
 
-// Main public header for delta::Rational.
-
-// Forward declarations and basic types (no full definition required)
 #include "delta/rational/rational_fwd.h"
 #include "delta/rational/interval.h"
 #include "delta/rational/utils.h"
-#include "delta/rational/context.h"
-
-// The full definition of Rational (includes storage.h internally)
+#include "delta/rational/storage.h"
+#include "delta/rational/expression_root.h"
+#include "delta/rational/evaluation_core.h"
+#include "delta/rational/simplify.h"
+#include "delta/rational/expression_root_impl.h"
 #include "delta/rational/rational_class.h"
-
-// Additional functionality that depends on the full Rational definition
+#include "delta/rational/eager.h"
+#include "delta/rational/expression_root_factories.h"
+#include "delta/rational/rational_impl.h"
+#include "delta/rational/operations.h"
+#include "delta/rational/comparisons.h"
 #include "delta/rational/transcendentals.h"
+#include "delta/rational/context.h"
 #include "delta/rational/literals.h"
 #include "delta/rational/eigen_integration.h"

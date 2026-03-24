@@ -1,372 +1,207 @@
-// include/delta/rational/simplify.h
 #pragma once
 
-#include "delta/rational/rational_class.h"
-#include "delta/rational/storage.h"
-#include "delta/rational/evaluation.h"
-#include "delta/rational/context.h"
-#include "delta/rational/batch_arithmetic.h"
-#include <absl/container/inlined_vector.h>
-#include <algorithm>
-#include <cmath>
-#include <limits>
+#include "expression_root.h"
+#include "evaluation_core.h"  // for to_double
+#include <functional>
 #include <vector>
 
 namespace delta::internal {
 
-    // -------------------------------------------------------------------------
-    // Helper: get interval from a Rational (may be lazy)
-    // -------------------------------------------------------------------------
-    inline Interval get_interval(const Rational& r) {
-        return r.approx_interval();
-    }
-
-    // -------------------------------------------------------------------------
-    // Interval computation for a lazy node (robust, using interval arithmetic)
-    // -------------------------------------------------------------------------
-    inline Interval compute_approx(LazyOp op, const absl::InlinedVector<std::shared_ptr<const Rational>, 2>& args) {
-        switch (op) {
-        case LazyOp::ADD: {
-            Interval ia = get_interval(*args[0]);
-            Interval ib = get_interval(*args[1]);
-            return ia + ib;
-        }
-        case LazyOp::SUB: {
-            Interval ia = get_interval(*args[0]);
-            Interval ib = get_interval(*args[1]);
-            return ia - ib;
-        }
-        case LazyOp::MUL: {
-            Interval ia = get_interval(*args[0]);
-            Interval ib = get_interval(*args[1]);
-            return ia * ib;
-        }
-        case LazyOp::DIV: {
-            Interval ia = get_interval(*args[0]);
-            Interval ib = get_interval(*args[1]);
-            return ia / ib;
-        }
-        case LazyOp::NEG: {
-            Interval ia = get_interval(*args[0]);
-            return -ia;
-        }
-        case LazyOp::SQRT: {
-            Interval ia = get_interval(*args[0]);
-            double l = std::sqrt(ia.lower());
-            double h = std::sqrt(ia.upper());
-            if (l > h) std::swap(l, h);
-            l = std::nextafter(l, -std::numeric_limits<double>::infinity());
-            h = std::nextafter(h, std::numeric_limits<double>::infinity());
-            return Interval(l, h);
-        }
-        case LazyOp::EXP: {
-            Interval ia = get_interval(*args[0]);
-            double l = std::exp(ia.lower());
-            double h = std::exp(ia.upper());
-            if (l > h) std::swap(l, h);
-            l = std::nextafter(l, -std::numeric_limits<double>::infinity());
-            h = std::nextafter(h, std::numeric_limits<double>::infinity());
-            return Interval(l, h);
-        }
-        case LazyOp::LOG: {
-            Interval ia = get_interval(*args[0]);
-            double l = std::log(ia.lower());
-            double h = std::log(ia.upper());
-            if (l > h) std::swap(l, h);
-            l = std::nextafter(l, -std::numeric_limits<double>::infinity());
-            h = std::nextafter(h, std::numeric_limits<double>::infinity());
-            return Interval(l, h);
-        }
-        case LazyOp::SIN: {
-            Interval ia = get_interval(*args[0]);
-            double lo = ia.lower();
-            double hi = ia.upper();
-            double pi = 3.141592653589793;
-            double min_val = std::sin(lo);
-            double max_val = std::sin(hi);
-            if (min_val > max_val) std::swap(min_val, max_val);
-            double start = std::floor(lo / (pi / 2)) * (pi / 2);
-            for (double t = start; t <= hi + 1e-12; t += pi / 2) {
-                if (t >= lo && t <= hi) {
-                    double val = std::sin(t);
-                    if (val < min_val) min_val = val;
-                    if (val > max_val) max_val = val;
-                }
-            }
-            min_val = std::nextafter(min_val, -std::numeric_limits<double>::infinity());
-            max_val = std::nextafter(max_val, std::numeric_limits<double>::infinity());
-            return Interval(min_val, max_val);
-        }
-        case LazyOp::COS: {
-            Interval ia = get_interval(*args[0]);
-            double lo = ia.lower();
-            double hi = ia.upper();
-            double pi = 3.141592653589793;
-            double min_val = std::cos(lo);
-            double max_val = std::cos(hi);
-            if (min_val > max_val) std::swap(min_val, max_val);
-            double start = std::floor(lo / (pi / 2)) * (pi / 2);
-            for (double t = start; t <= hi + 1e-12; t += pi / 2) {
-                if (t >= lo && t <= hi) {
-                    double val = std::cos(t);
-                    if (val < min_val) min_val = val;
-                    if (val > max_val) max_val = val;
-                }
-            }
-            min_val = std::nextafter(min_val, -std::numeric_limits<double>::infinity());
-            max_val = std::nextafter(max_val, std::numeric_limits<double>::infinity());
-            return Interval(min_val, max_val);
-        }
-        case LazyOp::ACOS: {
-            Interval ia = get_interval(*args[0]);
-            double l = std::acos(ia.upper());
-            double h = std::acos(ia.lower());
-            if (l > h) std::swap(l, h);
-            l = std::nextafter(l, -std::numeric_limits<double>::infinity());
-            h = std::nextafter(h, std::numeric_limits<double>::infinity());
-            return Interval(l, h);
-        }
-        case LazyOp::PI:
-            return Interval(3.141592653589793, 3.141592653589793);
-        case LazyOp::E:
-            return Interval(2.718281828459045, 2.718281828459045);
-        default:
-            return Interval::zero();
-        }
-    }
-
-    // -------------------------------------------------------------------------
-    // Definitions of LazyNode constructors (now using shared_ptr for precision)
-    // -------------------------------------------------------------------------
-    inline LazyNode::LazyNode(LazyOp o, absl::InlinedVector<std::shared_ptr<const Rational>, 2>&& a, std::shared_ptr<const Rational> eps)
-        : op(o), args(std::move(a)), precision(eps), cached_value(std::nullopt),
-        approx(compute_approx(op, this->args)), depth(0) {
-        depth = 1;
-        for (const auto& arg : args) {
-            if (arg && arg->is_lazy()) {
-                int d = arg->as_lazy()->depth;
-                if (d + 1 > depth) depth = d + 1;
-            }
-        }
-    }
-
-    inline LazyNode::LazyNode(LazyOp o, std::shared_ptr<const Rational> a, std::shared_ptr<const Rational> eps)
-        : LazyNode(o, absl::InlinedVector<std::shared_ptr<const Rational>, 2>{std::move(a)}, eps) {
-    }
-
-    inline LazyNode::LazyNode(LazyOp o, std::shared_ptr<const Rational> eps)
-        : op(o), args(), precision(eps), cached_value(std::nullopt),
-        approx(compute_approx(o, args)), depth(1) {
-    }
-
-    // -------------------------------------------------------------------------
-    // Helper: check if a rational is zero (non‑lazy only)
-    // -------------------------------------------------------------------------
-    inline bool is_exact_zero(const Rational& r) {
-        if (r.is_small()) {
-            const auto& s = *r.as_small();
-            return s.num == 0;
-        }
-        if (r.is_big()) {
-            const auto& b = *r.as_big();
-            return b.num == 0;
-        }
-        return false;
-    }
-
-    // -------------------------------------------------------------------------
-    // Helper: check if a rational is one (non‑lazy only)
-    // -------------------------------------------------------------------------
-    inline bool is_exact_one(const Rational& r) {
-        if (r.is_small()) {
-            SmallStorage s = *r.as_small();
-            s.normalize();
-            return s.num == 1 && s.den == 1;
-        }
-        if (r.is_big()) {
-            const auto& b = *r.as_big();
-            return b.num == 1 && b.den == 1;
-        }
-        return false;
-    }
-
-    // -------------------------------------------------------------------------
-    // Structural equality for lazy nodes
-    // -------------------------------------------------------------------------
-    inline bool structurally_equal(const LazyNode& a, const LazyNode& b) {
+    bool structurally_equal(const ExpressionRoot& a, const ExpressionRoot& b) {
         if (&a == &b) return true;
-        if (a.op != b.op) return false;
-        if (a.args.size() != b.args.size()) return false;
-        for (size_t i = 0; i < a.args.size(); ++i) {
-            if (!structurally_equal(*a.args[i], *b.args[i])) return false;
-        }
-        return true;
+        if (a.hash() != b.hash()) return false;
+
+        const auto& nodes_a = a.nodes();
+        const auto& nodes_b = b.nodes();
+        const auto& values_a = a.values();
+        const auto& values_b = b.values();
+
+        std::function<bool(int, int)> compare = [&](int idx_a, int idx_b) -> bool {
+            if (idx_a == idx_b) return true;
+            const Node& na = nodes_a[idx_a];
+            const Node& nb = nodes_b[idx_b];
+            if (na.op != nb.op) return false;
+            if (na.op == LazyOp::CONST) {
+                const Value& va = values_a[na.value_idx];
+                const Value& vb = values_b[nb.value_idx];
+                return va == vb;
+            }
+            bool eq = true;
+            if (na.child0 != -1 && nb.child0 != -1)
+                eq = eq && compare(na.child0, nb.child0);
+            else if (na.child0 != -1 || nb.child0 != -1)
+                return false;
+            if (na.child1 != -1 && nb.child1 != -1)
+                eq = eq && compare(na.child1, nb.child1);
+            else if (na.child1 != -1 || nb.child1 != -1)
+                return false;
+            return eq;
+            };
+
+        return compare(a.root_index(), b.root_index());
     }
 
-    // -------------------------------------------------------------------------
-    // Structural equality for Rational
-    // -------------------------------------------------------------------------
-    inline bool structurally_equal(const Rational& a, const Rational& b) {
-        if (&a == &b) return true;
-        if (a.is_lazy() && b.is_lazy()) {
-            return structurally_equal(*a.as_lazy(), *b.as_lazy());
-        }
-        return false;
-    }
+    ExpressionRoot simplify(const ExpressionRoot& root) {
+        const auto& nodes = root.nodes();
+        const auto& values = root.values();
+        if (nodes.empty()) return root;
 
-    // -------------------------------------------------------------------------
-    // Symbolic simplification of lazy nodes
-    // -------------------------------------------------------------------------
-    inline Rational simplify(const Rational& r) {
-        if (!r.is_lazy()) return r;
-        auto node = r.as_lazy();
+        std::vector<int> simplified_idx(nodes.size(), -1);
+        std::vector<Node> new_nodes;
+        std::vector<Value> new_values;
 
-        // 1. Simplify arguments recursively
-        absl::InlinedVector<std::shared_ptr<const Rational>, 2> new_args;
-        bool changed = false;
-        for (const auto& arg : node->args) {
-            Rational simp = simplify(*arg);
-            if (&simp != arg.get()) changed = true;
-            new_args.push_back(std::make_shared<Rational>(std::move(simp)));
-        }
+        auto add_const = [&](const Value& val) -> int {
+            int val_idx = static_cast<int>(new_values.size());
+            new_values.push_back(val);
+            Node const_node(LazyOp::CONST, -1, -1, val_idx,
+                Interval(to_double(val)), 0);
+            new_nodes.push_back(const_node);
+            return static_cast<int>(new_nodes.size()) - 1;
+            };
 
-        if (changed) {
-            auto new_node = std::make_shared<LazyNode>(node->op, std::move(new_args), node->precision);
-            return simplify(Rational(new_node));
-        }
+        std::function<int(int)> process = [&](int old_idx) -> int {
+            if (simplified_idx[old_idx] != -1)
+                return simplified_idx[old_idx];
 
-        // 2. Depth overflow: force evaluation
-        if (node->depth > MAX_LAZY_DEPTH) {
-            Rational ev = evaluate(r);
-            return ev;
-        }
+            const Node& node = nodes[old_idx];
+            int new_child0 = -1, new_child1 = -1;
+            if (node.child0 != -1) new_child0 = process(node.child0);
+            if (node.child1 != -1) new_child1 = process(node.child1);
 
-        // 3. Apply algebraic simplification rules
-        auto& a = new_args[0];
-        auto b = (new_args.size() > 1) ? new_args[1] : nullptr;   // removed reference
+            auto get_const_value = [&](int idx) -> const Value* {
+                if (idx < 0) return nullptr;
+                const Node& n = new_nodes[idx];
+                if (n.op == LazyOp::CONST)
+                    return &new_values[n.value_idx];
+                return nullptr;
+                };
 
-        switch (node->op) {
-        case LazyOp::NEG: {
-            if (a->is_lazy()) {
-                const auto& sub = *a->as_lazy();
-                if (sub.op == LazyOp::NEG && sub.args.size() == 1) {
-                    return *sub.args[0];
-                }
-            }
-            break;
-        }
-        case LazyOp::ADD: {
-            if (is_exact_zero(*a)) return *b;
-            if (is_exact_zero(*b)) return *a;
-            break;
-        }
-        case LazyOp::SUB: {
-            if (is_exact_zero(*b)) return *a;
-            if (is_exact_zero(*a)) return -(*b);
-            if (structurally_equal(*a, *b)) return Rational(0);
-            break;
-        }
-        case LazyOp::MUL: {
-            if (is_exact_zero(*a) || is_exact_zero(*b)) return Rational(0);
-            if (is_exact_one(*a)) return *b;
-            if (is_exact_one(*b)) return *a;
-            break;
-        }
-        case LazyOp::DIV: {
-            if (is_exact_one(*b)) return *a;
-            if (is_exact_zero(*a)) return Rational(0);
-            if (structurally_equal(*a, *b)) return Rational(1);
-            break;
-        }
-        case LazyOp::SQRT: {
-            if (is_exact_zero(*a)) return Rational(0);
-            if (is_exact_one(*a)) return Rational(1);
-            if (a->is_lazy() && a->as_lazy()->op == LazyOp::EXP) {
-                const auto& exp_args = a->as_lazy()->args;
-                Rational half = Rational(1, 2);
-                Rational new_arg = *exp_args[0] * half;
-                auto new_node = std::make_shared<LazyNode>(LazyOp::EXP, std::make_shared<Rational>(new_arg), node->precision);
-                return simplify(Rational(new_node));
-            }
-            break;
-        }
-        case LazyOp::EXP: {
-            if (is_exact_zero(*a)) return Rational(1);
-            if (a->is_lazy() && a->as_lazy()->op == LazyOp::LOG) {
-                const auto& log_args = a->as_lazy()->args;
-                return *log_args[0];
-            }
-            break;
-        }
-        case LazyOp::LOG: {
-            if (is_exact_one(*a)) return Rational(0);
-            if (a->is_lazy() && a->as_lazy()->op == LazyOp::EXP) {
-                const auto& exp_args = a->as_lazy()->args;
-                return *exp_args[0];
-            }
-            break;
-        }
-        case LazyOp::SIN: {
-            if (is_exact_zero(*a)) return Rational(0);
-            break;
-        }
-        case LazyOp::COS: {
-            if (is_exact_zero(*a)) return Rational(1);
-            break;
-        }
-        case LazyOp::ACOS: {
-            if (is_exact_one(*a)) return Rational(0);
-            if (is_exact_zero(*a)) {
-                Rational pi_half = eager_pi(*node->precision) / Rational(2);
-                return pi_half;
-            }
-            break;
-        }
-        default: break;
-        }
+            Value zero_val = SmallStorage(absl::int128(0));
+            Value one_val = SmallStorage(absl::int128(1));
 
-        // 4. Batch addition
-        if (node->op == LazyOp::ADD && new_args.size() >= 2) {
-            std::vector<Rational> terms;
-            bool all_non_lazy = true;
-            for (const auto& arg : new_args) {
-                if (arg->is_lazy()) {
-                    all_non_lazy = false;
+            auto simplify_node = [&]() -> int {
+                switch (node.op) {
+                case LazyOp::CONST:
+                    return add_const(values[node.value_idx]);
+
+                case LazyOp::ADD: {
+                    const Value* left = get_const_value(new_child0);
+                    const Value* right = get_const_value(new_child1);
+                    if (left && *left == zero_val) return new_child1;
+                    if (right && *right == zero_val) return new_child0;
                     break;
                 }
-                terms.push_back(*arg);
-            }
-            if (all_non_lazy) {
-                return batch_add(terms);
-            }
-        }
+                case LazyOp::SUB: {
+                    const Value* right = get_const_value(new_child1);
+                    if (right && *right == zero_val) return new_child0;
+                    if (new_child0 == new_child1) {
+                        return add_const(zero_val);
+                    }
+                    break;
+                }
+                case LazyOp::MUL: {
+                    const Value* left = get_const_value(new_child0);
+                    const Value* right = get_const_value(new_child1);
+                    if (left && *left == one_val) return new_child1;
+                    if (right && *right == one_val) return new_child0;
+                    if (left && *left == zero_val) return add_const(zero_val);
+                    if (right && *right == zero_val) return add_const(zero_val);
+                    break;
+                }
+                case LazyOp::DIV: {
+                    const Value* right = get_const_value(new_child1);
+                    if (right && *right == one_val) return new_child0;
+                    if (new_child0 == new_child1) {
+                        const Value* x_val = get_const_value(new_child0);
+                        if (!x_val || *x_val != zero_val)
+                            return add_const(one_val);
+                    }
+                    break;
+                }
+                case LazyOp::NEG: {
+                    const Node& child_node = new_nodes[new_child0];
+                    if (child_node.op == LazyOp::NEG && child_node.child0 != -1)
+                        return child_node.child0;
+                    break;
+                }
+                case LazyOp::SQRT: {
+                    const Value* arg = get_const_value(new_child0);
+                    if (arg && *arg == zero_val) return add_const(zero_val);
+                    if (arg && *arg == one_val) return add_const(one_val);
+                    break;
+                }
+                case LazyOp::EXP: {
+                    const Value* arg = get_const_value(new_child0);
+                    if (arg && *arg == zero_val) return add_const(one_val);
+                    if (new_child0 >= 0) {
+                        const Node& child_node = new_nodes[new_child0];
+                        if (child_node.op == LazyOp::LOG && child_node.child0 != -1)
+                            return child_node.child0;
+                    }
+                    break;
+                }
+                case LazyOp::LOG: {
+                    const Value* arg = get_const_value(new_child0);
+                    if (arg && *arg == one_val) return add_const(zero_val);
+                    if (new_child0 >= 0) {
+                        const Node& child_node = new_nodes[new_child0];
+                        if (child_node.op == LazyOp::EXP && child_node.child0 != -1)
+                            return child_node.child0;
+                    }
+                    break;
+                }
+                case LazyOp::SIN: {
+                    const Value* arg = get_const_value(new_child0);
+                    if (arg && *arg == zero_val) return add_const(zero_val);
+                    break;
+                }
+                case LazyOp::COS: {
+                    const Value* arg = get_const_value(new_child0);
+                    if (arg && *arg == zero_val) return add_const(one_val);
+                    break;
+                }
+                default:
+                    break;
+                }
 
-        // 5. Constant folding
-        bool all_non_lazy = true;
-        for (const auto& arg : new_args) {
-            if (arg->is_lazy()) { all_non_lazy = false; break; }
-        }
-        if (all_non_lazy) {
-            switch (node->op) {
-            case LazyOp::ADD: return eager_add(*a, *b);
-            case LazyOp::SUB: return eager_sub(*a, *b);
-            case LazyOp::MUL: return eager_mul(*a, *b);
-            case LazyOp::DIV: return eager_div(*a, *b);
-            case LazyOp::NEG: return eager_neg(*a);
-            case LazyOp::SQRT: return eager_sqrt(*a, *node->precision);
-            case LazyOp::EXP:  return eager_exp(*a, *node->precision);
-            case LazyOp::LOG:  return eager_log(*a, *node->precision);
-            case LazyOp::SIN:  return eager_sin(*a, *node->precision);
-            case LazyOp::COS:  return eager_cos(*a, *node->precision);
-            case LazyOp::ACOS: return eager_acos(*a, *node->precision);
-            case LazyOp::PI:   return eager_pi(*node->precision);
-            case LazyOp::E:    return eager_e(*node->precision);
-            default: break;
-            }
-        }
+                // No simplification: create a new node
+                Interval approx;
+                int depth = 0;
+                if (node.op != LazyOp::CONST) {
+                    Interval left_approx, right_approx;
+                    if (new_child0 >= 0) left_approx = new_nodes[new_child0].approx;
+                    if (new_child1 >= 0) right_approx = new_nodes[new_child1].approx;
+                    approx = ExpressionRoot::compute_interval(node.op, left_approx, right_approx);
+                    depth = 1 + std::max(
+                        (new_child0 >= 0 ? new_nodes[new_child0].depth : 0),
+                        (new_child1 >= 0 ? new_nodes[new_child1].depth : 0)
+                    );
+                }
 
-        auto new_node = std::make_shared<LazyNode>(node->op, std::move(new_args), node->precision);
-        return Rational(new_node);
+                int val_idx = -1;
+                if (node.op == LazyOp::CONST) {
+                    val_idx = node.value_idx;
+                }
+                else if (node.op == LazyOp::SQRT || node.op == LazyOp::EXP ||
+                    node.op == LazyOp::LOG || node.op == LazyOp::SIN ||
+                    node.op == LazyOp::COS || node.op == LazyOp::ACOS ||
+                    node.op == LazyOp::PI || node.op == LazyOp::E) {
+                    val_idx = static_cast<int>(new_values.size());
+                    new_values.push_back(values[node.value_idx]);
+                }
+
+                new_nodes.emplace_back(node.op, new_child0, new_child1, val_idx, approx, depth);
+                return static_cast<int>(new_nodes.size()) - 1;
+                };
+
+            int new_idx = simplify_node();
+            simplified_idx[old_idx] = new_idx;
+            return new_idx;
+            };
+
+        int new_root_idx = process(root.root_index());
+
+        return ExpressionRoot(std::move(new_nodes), std::move(new_values), new_root_idx);
     }
 
 } // namespace delta::internal

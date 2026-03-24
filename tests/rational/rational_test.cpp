@@ -11,63 +11,64 @@ namespace delta::testing {
     TEST_F(RationalTest, Constructors) {
         // Default constructor
         Rational a;
-        EXPECT_EQ(a.to_string(), "0");
+        EXPECT_EQ(delta::to_string(a), "0");
 
         // Integer constructors
         Rational b(123_r);
-        EXPECT_EQ(b.to_string(), "123");
+        EXPECT_EQ(delta::to_string(b), "123");
         Rational c(-45_r);
-        EXPECT_EQ(c.to_string(), "-45");
+        EXPECT_EQ(delta::to_string(c), "-45");
 
         // String constructors
         Rational d("0.5"_r);
-        EXPECT_EQ(d.to_string(), "1/2");
+        EXPECT_EQ(delta::to_string(d), "1/2");
         Rational e("1/3"_r);
-        EXPECT_EQ(e.to_string(), "1/3");
+        EXPECT_EQ(delta::to_string(e), "1/3");
 
         // Explicit two‑int constructor
         Rational f(1, 5);
-        EXPECT_EQ(f.to_string(), "1/5");
+        EXPECT_EQ(delta::to_string(f), "1/5");
     }
 
     // -------------------------------------------------------------------------
     // 2. String parsing
     // -------------------------------------------------------------------------
     TEST_F(RationalTest, StringParsing) {
-        // Integers
-        EXPECT_EQ(Rational("123"_r).to_string(), "123");
-        EXPECT_EQ(Rational("-456"_r).to_string(), "-456");
+        // Целые числа
+        EXPECT_EQ(delta::to_string("123"_r), "123");
+        EXPECT_EQ(delta::to_string("-456"_r), "-456");
 
-        // Decimals
-        EXPECT_EQ(Rational("0.75"_r).to_string(), "3/4");
-        EXPECT_EQ(Rational("-0.125"_r).to_string(), "-1/8");
-        EXPECT_EQ(Rational("0.0"_r).to_string(), "0");
+        // Десятичные дроби
+        EXPECT_EQ(delta::to_string("0.75"_r), "3/4");
+        EXPECT_EQ(delta::to_string("-0.125"_r), "-1/8");
+        EXPECT_EQ(delta::to_string("0.0"_r), "0");
 
-        // Fractions
-        EXPECT_EQ(Rational("5/8"_r).to_string(), "5/8");
-        EXPECT_EQ(Rational("-7/9"_r).to_string(), "-7/9");
-        EXPECT_EQ(Rational("0/1"_r).to_string(), "0");
+        // Обыкновенные дроби
+        EXPECT_EQ(delta::to_string("5/8"_r), "5/8");
+        EXPECT_EQ(delta::to_string("-7/9"_r), "-7/9");
+        EXPECT_EQ(delta::to_string("0/1"_r), "0");
     }
 
     // -------------------------------------------------------------------------
     // 3. Arithmetic
     // -------------------------------------------------------------------------
     TEST_F(RationalTest, Arithmetic) {
+        std::cerr << "Arithmetic test: start" << std::endl;
         // Addition
         Rational sum = "1/2"_r + "1/3"_r;
-        EXPECT_EQ(sum.evaluate().to_string(), "5/6");
+        EXPECT_EQ(delta::to_string(sum), "5/6");
 
         // Subtraction
         Rational diff = "1/2"_r - "1/3"_r;
-        EXPECT_EQ(diff.evaluate().to_string(), "1/6");
+        EXPECT_EQ(delta::to_string(diff), "1/6");
 
         // Multiplication
         Rational prod = "2/3"_r * "3/4"_r;
-        EXPECT_EQ(prod.evaluate().to_string(), "1/2");
+        EXPECT_EQ(delta::to_string(prod), "1/2");
 
         // Division
         Rational quot = "2/3"_r / "4/5"_r;
-        EXPECT_EQ(quot.evaluate().to_string(), "5/6");
+        EXPECT_EQ(delta::to_string(quot), "5/6");
     }
 
     // -------------------------------------------------------------------------
@@ -76,19 +77,19 @@ namespace delta::testing {
     TEST_F(RationalTest, CompoundAssignments) {
         Rational a = "1/2"_r;
         a += "1/3"_r;
-        EXPECT_EQ(a.evaluate().to_string(), "5/6");
+        EXPECT_EQ(delta::to_string(a), "5/6");
 
         Rational b = "1/2"_r;
         b -= "1/3"_r;
-        EXPECT_EQ(b.evaluate().to_string(), "1/6");
+        EXPECT_EQ(delta::to_string(b), "1/6");
 
         Rational c = "2/3"_r;
         c *= "3/4"_r;
-        EXPECT_EQ(c.evaluate().to_string(), "1/2");
+        EXPECT_EQ(delta::to_string(c), "1/2");
 
         Rational d = "2/3"_r;
         d /= "4/5"_r;
-        EXPECT_EQ(d.evaluate().to_string(), "5/6");
+        EXPECT_EQ(delta::to_string(d), "5/6");
     }
 
     // -------------------------------------------------------------------------
@@ -96,7 +97,7 @@ namespace delta::testing {
     // -------------------------------------------------------------------------
     TEST_F(RationalTest, Negation) {
         Rational a = -"1/2"_r;
-        EXPECT_EQ(a.evaluate().to_string(), "-1/2");
+        EXPECT_EQ(delta::to_string(a), "-1/2");
     }
 
     // -------------------------------------------------------------------------
@@ -104,7 +105,7 @@ namespace delta::testing {
     // -------------------------------------------------------------------------
     TEST_F(RationalTest, Abs) {
         Rational a = delta::abs("-1/2"_r);
-        EXPECT_EQ(a.evaluate().to_string(), "1/2");
+        EXPECT_EQ(delta::to_string(a), "1/2");
     }
 
     // -------------------------------------------------------------------------
@@ -124,9 +125,9 @@ namespace delta::testing {
     // -------------------------------------------------------------------------
     TEST_F(RationalTest, ToFromString) {
         Rational r = "123/456"_r;
-        std::string s = r.to_string();
+        std::string s = delta::to_string(r);
         Rational r2(s);
-        EXPECT_EQ(r2.evaluate(), r.evaluate());
+        EXPECT_EQ(r2, r);
     }
 
     // -------------------------------------------------------------------------
@@ -136,7 +137,7 @@ namespace delta::testing {
         ScopedEagerEval eager;
         Rational sum = "2/6"_r + "1/6"_r;
         EXPECT_TRUE(is_reduced(sum));
-        EXPECT_EQ(sum.to_string(), "1/2");
+        EXPECT_EQ(delta::to_string(sum), "1/2");
     }
 
     // -------------------------------------------------------------------------
@@ -149,7 +150,7 @@ namespace delta::testing {
             sum += Rational(1, i);
         }
         // The exact denominator is 2520
-        std::string s = sum.to_string();
+        std::string s = delta::to_string(sum);
         size_t slash = s.find('/');
         ASSERT_NE(slash, std::string::npos);
         std::string den_str = s.substr(slash + 1);
@@ -162,7 +163,7 @@ namespace delta::testing {
     TEST_F(RationalTest, CrossCancellation) {
         Rational a = "99999999999999999999/1"_r;
         Rational b = "1/99999999999999999999"_r;
-        Rational c = (a * b).evaluate();
+        Rational c = (a * b).simplify();
         EXPECT_EQ(c, 1_r);
     }
 
@@ -172,10 +173,10 @@ namespace delta::testing {
     TEST_F(RationalTest, LargePowers) {
         Rational base = "2/3"_r;
         Rational pow10 = delta::pow(base, 10);
-        EXPECT_EQ(pow10.evaluate().to_string(), "1024/59049");
+        EXPECT_EQ(delta::to_string(pow10), "1024/59049");
 
         Rational pow_neg = delta::pow(base, -10);
-        EXPECT_EQ(pow_neg.evaluate().to_string(), "59049/1024");
+        EXPECT_EQ(delta::to_string(pow_neg), "59049/1024");
     }
 
     // -------------------------------------------------------------------------
@@ -191,7 +192,7 @@ namespace delta::testing {
     // -------------------------------------------------------------------------
     TEST_F(RationalTest, ZeroRepresentation) {
         Rational zero = 0_r;
-        EXPECT_EQ(zero.to_string(), "0");
+        EXPECT_EQ(delta::to_string(zero), "0");
     }
 
 } // namespace delta::testing

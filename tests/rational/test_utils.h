@@ -1,24 +1,12 @@
-// tests/rational/test_utils.h
 #pragma once
 
 #include <gtest/gtest.h>
 #include "delta/core/rational.h"
-#include <boost/multiprecision/cpp_int.hpp>
 
 namespace delta::testing {
 
-    /**
-     * @brief Base test fixture for rational arithmetic tests.
-     *
-     * Provides:
-     * - Precision management (save/restore default_eps)
-     * - Helper functions for rational verification
-     */
     class RationalTest : public ::testing::Test {
     protected:
-        // ---------------------------------------------------------------------
-        // Precision management
-        // ---------------------------------------------------------------------
         void SetUp() override {
             old_precision_ = delta::default_eps();
         }
@@ -35,26 +23,30 @@ namespace delta::testing {
         Rational old_precision_;
     };
 
-    // -------------------------------------------------------------------------
-    // Helper: check if a rational is in canonical form (den > 0, gcd(num,den)=1)
-    // -------------------------------------------------------------------------
     inline bool is_reduced(const Rational& r) {
-        Rational ev = r.evaluate(); // ensure non-lazy
-        if (ev == 0_r) return true;
-        std::string s = ev.to_string();
-        size_t slash = s.find('/');
-        if (slash == std::string::npos) return true; // integer
-        std::string num_str = s.substr(0, slash);
-        std::string den_str = s.substr(slash + 1);
-        boost::multiprecision::cpp_int num(num_str);
-        boost::multiprecision::cpp_int den(den_str);
+        Rational imm = r;
+        if (imm.is_lazy()) imm = imm.simplify();
+        if (imm.is_lazy()) return false;
+
+        internal::Value v = imm.eval();
+        boost::multiprecision::cpp_int num, den;
+        if (const auto* s = std::get_if<internal::SmallStorage>(&v)) {
+            internal::SmallStorage norm = *s;
+            norm.normalize();
+            num = internal::to_cpp_int(norm.num);
+            den = internal::to_cpp_int(norm.den);
+        }
+        else {
+            const auto& b = std::get<internal::BigStorage>(v);
+            num = b.num();
+            den = b.den();
+        }
+        if (num == 0) return true;
+        if (den < 0) den = -den;
         if (num < 0) num = -num;
         return boost::multiprecision::gcd(num, den) == 1;
     }
 
-    // -------------------------------------------------------------------------
-    // Macro for comparing two rationals with tolerance (using delta::abs)
-    // -------------------------------------------------------------------------
 #define EXPECT_RATIONAL_NEAR(val, expected, eps) \
         EXPECT_LE(delta::abs((val) - (expected)), (eps))
 

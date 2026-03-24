@@ -1,17 +1,19 @@
-// include/delta/rational/context.h
 #pragma once
 
-#include "delta/rational/rational_fwd.h"   // только fwd, без полного определения
+#include "rational_class.h"
 
 namespace delta::internal {
-    constexpr int MAX_LAZY_DEPTH = 1000;
     inline thread_local bool global_eager_mode = false;
+    // default_eps = 10^-30
+    inline thread_local Rational default_eps_value = Rational("1/1000000000000000000000000000000");
 }
 
 namespace delta {
+
     inline bool eager_mode() {
         return internal::global_eager_mode;
     }
+
     inline void set_eager_mode(bool flag) {
         internal::global_eager_mode = flag;
     }
@@ -26,4 +28,13 @@ namespace delta {
             internal::global_eager_mode = old_;
         }
     };
-}
+
+    inline const Rational& default_eps() {
+        return internal::default_eps_value;
+    }
+
+    inline void set_default_eps(const Rational& eps) {
+        internal::default_eps_value = eps;
+    }
+
+} // namespace delta
