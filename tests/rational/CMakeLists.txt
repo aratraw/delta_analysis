@@ -5,7 +5,7 @@ add_executable(delta_tests_rational
     main_tests_rational.cpp
     "rational_test.cpp"
     "lazy_test.cpp"
-#    "depth_test.cpp"
+    "depth_test.cpp"
 #    "eager_test.cpp"
 #    "batch_test.cpp"
 #    "interval_test.cpp"

@@ -4,11 +4,11 @@
 #include "test_utils.h"
 
 namespace delta::testing {
-
+    class RationalBasicTest : public RationalTest{};
     // -------------------------------------------------------------------------
     // 1. Constructors
     // -------------------------------------------------------------------------
-    TEST_F(RationalTest, Constructors) {
+    TEST_F(RationalBasicTest, Constructors) {
         // Default constructor
         Rational a;
         EXPECT_EQ(delta::to_string(a), "0");
@@ -33,7 +33,7 @@ namespace delta::testing {
     // -------------------------------------------------------------------------
     // 2. String parsing
     // -------------------------------------------------------------------------
-    TEST_F(RationalTest, StringParsing) {
+    TEST_F(RationalBasicTest, StringParsing) {
         // Целые числа
         EXPECT_EQ(delta::to_string("123"_r), "123");
         EXPECT_EQ(delta::to_string("-456"_r), "-456");
@@ -52,7 +52,7 @@ namespace delta::testing {
     // -------------------------------------------------------------------------
     // 3. Arithmetic
     // -------------------------------------------------------------------------
-    TEST_F(RationalTest, Arithmetic) {
+    TEST_F(RationalBasicTest, Arithmetic) {
         std::cerr << "Arithmetic test: start" << std::endl;
         // Addition
         Rational sum = "1/2"_r + "1/3"_r;
@@ -74,7 +74,7 @@ namespace delta::testing {
     // -------------------------------------------------------------------------
     // 4. Compound assignments
     // -------------------------------------------------------------------------
-    TEST_F(RationalTest, CompoundAssignments) {
+    TEST_F(RationalBasicTest, CompoundAssignments) {
         Rational a = "1/2"_r;
         a += "1/3"_r;
         EXPECT_EQ(delta::to_string(a), "5/6");
@@ -95,7 +95,7 @@ namespace delta::testing {
     // -------------------------------------------------------------------------
     // 5. Negation
     // -------------------------------------------------------------------------
-    TEST_F(RationalTest, Negation) {
+    TEST_F(RationalBasicTest, Negation) {
         Rational a = -"1/2"_r;
         EXPECT_EQ(delta::to_string(a), "-1/2");
     }
@@ -103,7 +103,7 @@ namespace delta::testing {
     // -------------------------------------------------------------------------
     // 6. Abs
     // -------------------------------------------------------------------------
-    TEST_F(RationalTest, Abs) {
+    TEST_F(RationalBasicTest, Abs) {
         Rational a = delta::abs("-1/2"_r);
         EXPECT_EQ(delta::to_string(a), "1/2");
     }
@@ -111,7 +111,7 @@ namespace delta::testing {
     // -------------------------------------------------------------------------
     // 7. Comparison operators
     // -------------------------------------------------------------------------
-    TEST_F(RationalTest, Comparison) {
+    TEST_F(RationalBasicTest, Comparison) {
         EXPECT_TRUE(("1/2"_r < "3/4"_r));
         EXPECT_FALSE(("1/2"_r > "3/4"_r));
         EXPECT_TRUE(("1/2"_r == "2/4"_r));
@@ -123,7 +123,7 @@ namespace delta::testing {
     // -------------------------------------------------------------------------
     // 8. to_string roundtrip
     // -------------------------------------------------------------------------
-    TEST_F(RationalTest, ToFromString) {
+    TEST_F(RationalBasicTest, ToFromString) {
         Rational r = "123/456"_r;
         std::string s = delta::to_string(r);
         Rational r2(s);
@@ -133,7 +133,7 @@ namespace delta::testing {
     // -------------------------------------------------------------------------
     // 9. Canonical form (denominator positive, gcd == 1)
     // -------------------------------------------------------------------------
-    TEST_F(RationalTest, CanonicalForm) {
+    TEST_F(RationalBasicTest, CanonicalForm) {
         ScopedEagerEval eager;
         Rational sum = "2/6"_r + "1/6"_r;
         EXPECT_TRUE(is_reduced(sum));
@@ -143,7 +143,7 @@ namespace delta::testing {
     // -------------------------------------------------------------------------
     // 10. Denominator does not explode on chain of additions
     // -------------------------------------------------------------------------
-    TEST_F(RationalTest, DenominatorDoesNotExplode) {
+    TEST_F(RationalBasicTest, DenominatorDoesNotExplode) {
         ScopedEagerEval eager;
         Rational sum = 0_r;
         for (int i = 1; i <= 10; ++i) {
@@ -160,7 +160,7 @@ namespace delta::testing {
     // -------------------------------------------------------------------------
     // 11. Cross‑cancellation (large numbers)
     // -------------------------------------------------------------------------
-    TEST_F(RationalTest, CrossCancellation) {
+    TEST_F(RationalBasicTest, CrossCancellation) {
         Rational a = "99999999999999999999/1"_r;
         Rational b = "1/99999999999999999999"_r;
         Rational c = (a * b).simplify();
@@ -170,7 +170,7 @@ namespace delta::testing {
     // -------------------------------------------------------------------------
     // 12. Large powers (integer exponent)
     // -------------------------------------------------------------------------
-    TEST_F(RationalTest, LargePowers) {
+    TEST_F(RationalBasicTest, LargePowers) {
         Rational base = "2/3"_r;
         Rational pow10 = delta::pow(base, 10);
         EXPECT_EQ(delta::to_string(pow10), "1024/59049");
@@ -182,7 +182,7 @@ namespace delta::testing {
     // -------------------------------------------------------------------------
     // 13. Division by zero throws
     // -------------------------------------------------------------------------
-    TEST_F(RationalTest, DivisionByZero) {
+    TEST_F(RationalBasicTest, DivisionByZero) {
         EXPECT_THROW("1/2"_r / 0_r, std::exception);
         EXPECT_THROW(Rational(1, 0), std::exception);
     }
@@ -190,7 +190,7 @@ namespace delta::testing {
     // -------------------------------------------------------------------------
     // 14. Zero representation
     // -------------------------------------------------------------------------
-    TEST_F(RationalTest, ZeroRepresentation) {
+    TEST_F(RationalBasicTest, ZeroRepresentation) {
         Rational zero = 0_r;
         EXPECT_EQ(delta::to_string(zero), "0");
     }

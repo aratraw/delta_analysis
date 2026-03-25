@@ -235,24 +235,32 @@ namespace delta {
         return Rational(std::make_shared<const internal::ExpressionRoot>(std::move(new_root)));
     }
 
-    inline internal::Value Rational::eval() const {
+    inline Rational Rational::eval() const {
         if (is_immediate()) {
-            if (auto* s = std::get_if<internal::SmallStorage>(&storage_)) {
-                return *s;
-            }
-            else if (auto* b = std::get_if<internal::BigStorage>(&storage_)) {
-                return *b;
-            }
-            else {
+            if (auto* s = std::get_if<internal::SmallStorage>(&storage_))
+                return Rational(*s);
+            else if (auto* b = std::get_if<internal::BigStorage>(&storage_))
+                return Rational(*b);
+            else
                 throw std::logic_error("Rational::eval: unexpected variant state");
-            }
         }
-        // First simplify, then evaluate
         auto simplified = simplify();
-        if (simplified.is_immediate()) {
+        if (simplified.is_immediate())
             return simplified.eval();
-        }
         return simplified.as_lazy()->eval();
+    }
+
+    inline internal::Value Rational::to_value() const {
+        if (is_immediate()) {
+            if (auto* s = std::get_if<internal::SmallStorage>(&storage_))
+                return *s;
+            else if (auto* b = std::get_if<internal::BigStorage>(&storage_))
+                return *b;
+            else
+                throw std::logic_error("Rational::to_value: invalid immediate state");
+        }
+        // ленивый: сначала вычисляем
+        return eval().to_value();
     }
 
     // ----------------------------------------------------------------------------
@@ -297,7 +305,7 @@ namespace delta {
             return internal::to_string(v);
         }
         // Ленивый случай: вычисляем значение и преобразуем
-        return internal::to_string(r.eval());
+        return internal::to_string(r.to_value());
     }
 
 } // namespace delta

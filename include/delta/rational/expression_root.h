@@ -48,6 +48,7 @@ namespace delta::internal {
 
     class ExpressionRoot {
     public:
+        int depth() const noexcept { return nodes_[root_index_].depth; }
         // Public constructors (as per spec)
         explicit ExpressionRoot(Value val);
         ExpressionRoot(LazyOp op, int c0, int c1 = -1,
@@ -82,7 +83,7 @@ namespace delta::internal {
 
         // Simplification and evaluation
         ExpressionRoot simplify() const;
-        Value eval() const;
+        Rational eval() const;
 
         // Structural equality
         friend bool structurally_equal(const ExpressionRoot& a, const ExpressionRoot& b);

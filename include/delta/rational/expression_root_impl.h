@@ -11,6 +11,7 @@
 #include <functional>
 #include <limits>
 #include <unordered_map>
+#include <stack>
 
 namespace delta::internal {
 
@@ -88,38 +89,75 @@ namespace delta::internal {
     // ============================================================================
     // Helper to copy a subtree from a source ExpressionRoot into new vectors
     // ============================================================================
-
     static int copy_subtree(const ExpressionRoot& src,
         int src_idx,
         std::vector<Node>& new_nodes,
         std::vector<Value>& new_values,
         std::unordered_map<int, int>& idx_map) {
-        auto it = idx_map.find(src_idx);
-        if (it != idx_map.end()) return it->second;
+        // Итеративный DFS с явным стеком
+        struct Frame {
+            int src_idx;
+            int state; // 0 = children not processed, 1 = ready to create node
+        };
+        std::stack<Frame> st;
+        st.push({ src_idx, 0 });
 
-        const Node& n = src.nodes()[src_idx];
-        int new_child0 = -1, new_child1 = -1;
-        if (n.child0 != -1) new_child0 = copy_subtree(src, n.child0, new_nodes, new_values, idx_map);
-        if (n.child1 != -1) new_child1 = copy_subtree(src, n.child1, new_nodes, new_values, idx_map);
+        while (!st.empty()) {
+            Frame& f = st.top();
+            auto it = idx_map.find(f.src_idx);
+            if (it != idx_map.end()) {
+                // Уже скопирован
+                st.pop();
+                continue;
+            }
 
-        int new_val_idx = -1;
-        if (n.op == LazyOp::CONST) {
-            new_val_idx = static_cast<int>(new_values.size());
-            new_values.push_back(src.values()[n.value_idx]);
+            const Node& n = src.nodes()[f.src_idx];
+            if (f.state == 0) {
+                // Проверяем детей, которые ещё не скопированы
+                bool need_children = false;
+                if (n.child0 != -1 && idx_map.find(n.child0) == idx_map.end()) {
+                    st.push({ n.child0, 0 });
+                    need_children = true;
+                }
+                if (n.child1 != -1 && idx_map.find(n.child1) == idx_map.end()) {
+                    st.push({ n.child1, 0 });
+                    need_children = true;
+                }
+                if (need_children) {
+                    f.state = 1; // после возврата из детей будем создавать узел
+                    continue;
+                }
+                else {
+                    // Нет детей или все уже скопированы – создаём узел сразу
+                    f.state = 1;
+                }
+            }
+
+            if (f.state == 1) {
+                // Все дети скопированы, создаём новый узел
+                int new_child0 = (n.child0 != -1) ? idx_map[n.child0] : -1;
+                int new_child1 = (n.child1 != -1) ? idx_map[n.child1] : -1;
+
+                int new_val_idx = -1;
+                if (n.op == LazyOp::CONST) {
+                    new_val_idx = static_cast<int>(new_values.size());
+                    new_values.push_back(src.values()[n.value_idx]);
+                }
+                else if (n.op == LazyOp::SQRT || n.op == LazyOp::EXP || n.op == LazyOp::LOG ||
+                    n.op == LazyOp::SIN || n.op == LazyOp::COS || n.op == LazyOp::ACOS ||
+                    n.op == LazyOp::PI || n.op == LazyOp::E) {
+                    new_val_idx = static_cast<int>(new_values.size());
+                    new_values.push_back(src.values()[n.value_idx]);
+                }
+
+                new_nodes.emplace_back(n.op, new_child0, new_child1, new_val_idx, n.approx, n.depth);
+                int new_idx = static_cast<int>(new_nodes.size()) - 1;
+                idx_map[f.src_idx] = new_idx;
+                st.pop();
+            }
         }
-        else if (n.op == LazyOp::SQRT || n.op == LazyOp::EXP || n.op == LazyOp::LOG ||
-            n.op == LazyOp::SIN || n.op == LazyOp::COS || n.op == LazyOp::ACOS ||
-            n.op == LazyOp::PI || n.op == LazyOp::E) {
-            new_val_idx = static_cast<int>(new_values.size());
-            new_values.push_back(src.values()[n.value_idx]);  // copy epsilon
-        }
-
-        new_nodes.emplace_back(n.op, new_child0, new_child1, new_val_idx, n.approx, n.depth);
-        int new_idx = static_cast<int>(new_nodes.size()) - 1;
-        idx_map[src_idx] = new_idx;
-        return new_idx;
+        return idx_map[src_idx];
     }
-
     // ============================================================================
     // Public building methods (immutable)
     // ============================================================================
@@ -228,7 +266,7 @@ namespace delta::internal {
 
         int new_depth = 1 + new_nodes[new_child].depth;
         Interval approx = compute_interval(LazyOp::SQRT, new_nodes[new_child].approx);
-        Value eps_val = eps.eval();
+        Value eps_val = eps.to_value();
         int eps_idx = static_cast<int>(new_values.size());
         new_values.push_back(eps_val);
         new_nodes.emplace_back(LazyOp::SQRT, new_child, -1, eps_idx, approx, new_depth);
@@ -248,7 +286,7 @@ namespace delta::internal {
 
         int new_depth = 1 + new_nodes[new_child].depth;
         Interval approx = compute_interval(LazyOp::EXP, new_nodes[new_child].approx);
-        Value eps_val = eps.eval();
+        Value eps_val = eps.to_value();
         int eps_idx = static_cast<int>(new_values.size());
         new_values.push_back(eps_val);
         new_nodes.emplace_back(LazyOp::EXP, new_child, -1, eps_idx, approx, new_depth);
@@ -268,7 +306,7 @@ namespace delta::internal {
 
         int new_depth = 1 + new_nodes[new_child].depth;
         Interval approx = compute_interval(LazyOp::LOG, new_nodes[new_child].approx);
-        Value eps_val = eps.eval();
+        Value eps_val = eps.to_value();
         int eps_idx = static_cast<int>(new_values.size());
         new_values.push_back(eps_val);
         new_nodes.emplace_back(LazyOp::LOG, new_child, -1, eps_idx, approx, new_depth);
@@ -288,7 +326,7 @@ namespace delta::internal {
 
         int new_depth = 1 + new_nodes[new_child].depth;
         Interval approx = compute_interval(LazyOp::SIN, new_nodes[new_child].approx);
-        Value eps_val = eps.eval();
+        Value eps_val = eps.to_value();
         int eps_idx = static_cast<int>(new_values.size());
         new_values.push_back(eps_val);
         new_nodes.emplace_back(LazyOp::SIN, new_child, -1, eps_idx, approx, new_depth);
@@ -308,7 +346,7 @@ namespace delta::internal {
 
         int new_depth = 1 + new_nodes[new_child].depth;
         Interval approx = compute_interval(LazyOp::COS, new_nodes[new_child].approx);
-        Value eps_val = eps.eval();
+        Value eps_val = eps.to_value();
         int eps_idx = static_cast<int>(new_values.size());
         new_values.push_back(eps_val);
         new_nodes.emplace_back(LazyOp::COS, new_child, -1, eps_idx, approx, new_depth);
@@ -328,7 +366,7 @@ namespace delta::internal {
 
         int new_depth = 1 + new_nodes[new_child].depth;
         Interval approx = compute_interval(LazyOp::ACOS, new_nodes[new_child].approx);
-        Value eps_val = eps.eval();
+        Value eps_val = eps.to_value();
         int eps_idx = static_cast<int>(new_values.size());
         new_values.push_back(eps_val);
         new_nodes.emplace_back(LazyOp::ACOS, new_child, -1, eps_idx, approx, new_depth);
@@ -338,7 +376,7 @@ namespace delta::internal {
 
     // Static constants
     inline ExpressionRoot ExpressionRoot::pi(const Rational& eps) {
-        Value eps_val = eps.eval();
+        Value eps_val = eps.to_value();
         std::vector<Node> nodes;
         std::vector<Value> values;
         int eps_idx = static_cast<int>(values.size());
@@ -349,7 +387,7 @@ namespace delta::internal {
     }
 
     inline ExpressionRoot ExpressionRoot::e(const Rational& eps) {
-        Value eps_val = eps.eval();
+        Value eps_val = eps.to_value();
         std::vector<Node> nodes;
         std::vector<Value> values;
         int eps_idx = static_cast<int>(values.size());
@@ -367,8 +405,8 @@ namespace delta::internal {
         return delta::internal::simplify(*this);
     }
 
-    inline Value ExpressionRoot::eval() const {
-        return evaluate(*this);
+    inline Rational ExpressionRoot::eval() const {
+        return Rational(evaluate(*this));
     }
 
 } // namespace delta::internal

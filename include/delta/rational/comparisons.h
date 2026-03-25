@@ -38,8 +38,8 @@ namespace delta {
         }
 
         // Exact evaluation and comparison
-        internal::Value va = a.eval();
-        internal::Value vb = b.eval();
+        internal::Value va = a.to_value();
+        internal::Value vb = b.to_value();
         return va == vb;
     }
 
@@ -62,8 +62,8 @@ namespace delta {
         if (ia.lower() >= ib.upper()) return false;
 
         // Overlapping intervals → exact evaluation
-        internal::Value va = a.eval();
-        internal::Value vb = b.eval();
+        internal::Value va = a.to_value();
+        internal::Value vb = b.to_value();
         return va < vb;
     }
 

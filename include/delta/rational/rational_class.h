@@ -14,7 +14,7 @@ namespace delta {
 
     class Rational {
     public:
-        explicit Rational(internal::Value val);
+        Rational(internal::Value val);
         // Constructors (all create immediate values)
         Rational() noexcept;
         Rational(absl::int128 num);
@@ -51,7 +51,10 @@ namespace delta {
 
         // Simplification and evaluation
         Rational simplify() const;
-        internal::Value eval() const;
+        Rational eval() const;
+
+        // For Internal Use
+        internal::Value to_value() const;
 
         // Interval estimation
         internal::Interval approx_interval() const noexcept;

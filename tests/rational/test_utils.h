@@ -28,7 +28,7 @@ namespace delta::testing {
         if (imm.is_lazy()) imm = imm.simplify();
         if (imm.is_lazy()) return false;
 
-        internal::Value v = imm.eval();
+        internal::Value v = imm.to_value();
         boost::multiprecision::cpp_int num, den;
         if (const auto* s = std::get_if<internal::SmallStorage>(&v)) {
             internal::SmallStorage norm = *s;

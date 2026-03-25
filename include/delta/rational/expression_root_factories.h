@@ -17,7 +17,7 @@ namespace delta::internal {
             return r.as_lazy();
         }
         // Immediate -> create a CONST node
-        Value v = r.eval(); // НЕПРАВИЛЬНО: Value v = std::visit([](const auto& val) -> Value { return val; }, r.storage_);
+        Value v = r.to_value();
         return std::make_shared<const ExpressionRoot>(v);
     }
 
