@@ -24,6 +24,8 @@ namespace delta {
         explicit Rational(const std::string& s);          // parses "1/2" or "0.125"
         Rational(int num) : Rational(static_cast<absl::int128>(num)) {}
         Rational(int num, int den);
+        // constructor
+        explicit Rational(std::shared_ptr<const internal::ExpressionRoot> root);
 
         // Deleted constructors from floating-point types
         Rational(double) = delete;
@@ -51,7 +53,8 @@ namespace delta {
 
         // Simplification and evaluation
         Rational simplify() const;
-        Rational eval() const;
+        Rational eval(bool skip_simplify = false) const;
+ //       Rational eval() const;
 
         // For Internal Use
         internal::Value to_value() const;
@@ -82,7 +85,7 @@ namespace delta {
         Storage storage_;
 
         // Private constructors (used by eager wrappers and factories)
-        explicit Rational(std::shared_ptr<const internal::ExpressionRoot> root);
+ 
         friend std::string to_string(const Rational& r);
     };
 

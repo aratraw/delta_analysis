@@ -11,6 +11,7 @@
 #include <functional>
 #include <string>
 #include <vector>
+#include <stack>
 
 
 namespace delta::internal {
@@ -709,46 +710,84 @@ namespace delta::internal {
         int root_idx = root.root_index();
 
         std::vector<Value> computed(nodes.size());
+        std::vector<bool> computed_flag(nodes.size(), false);
 
-        std::function<Value(int)> compute = [&](int idx) -> Value {
-            if (!computed[idx].index()) {
-                const Node& node = nodes[idx];
+        // Явный стек для обхода
+        struct Frame {
+            int idx;
+            int state; // 0 = children not processed, 1 = ready to compute
+        };
+        std::stack<Frame> st;
+        st.push({ root_idx, 0 });
+
+        while (!st.empty()) {
+            Frame& f = st.top();
+            int idx = f.idx;
+
+            if (computed_flag[idx]) {
+                st.pop();
+                continue;
+            }
+
+            const Node& node = nodes[idx];
+
+            if (f.state == 0) {
+                // Проверяем детей
+                bool need_children = false;
+                if (node.child0 != -1 && !computed_flag[node.child0]) {
+                    st.push({ node.child0, 0 });
+                    need_children = true;
+                }
+                if (node.child1 != -1 && !computed_flag[node.child1]) {
+                    st.push({ node.child1, 0 });
+                    need_children = true;
+                }
+                if (need_children) {
+                    f.state = 1;
+                    continue;
+                }
+                // Нет детей - вычисляем сразу
+                f.state = 1;
+            }
+
+            if (f.state == 1) {
+                // Все дети вычислены
                 switch (node.op) {
                 case LazyOp::CONST:
                     computed[idx] = values[node.value_idx];
                     break;
                 case LazyOp::ADD:
-                    computed[idx] = eager_add(compute(node.child0), compute(node.child1));
+                    computed[idx] = eager_add(computed[node.child0], computed[node.child1]);
                     break;
                 case LazyOp::SUB:
-                    computed[idx] = eager_sub(compute(node.child0), compute(node.child1));
+                    computed[idx] = eager_sub(computed[node.child0], computed[node.child1]);
                     break;
                 case LazyOp::MUL:
-                    computed[idx] = eager_mul(compute(node.child0), compute(node.child1));
+                    computed[idx] = eager_mul(computed[node.child0], computed[node.child1]);
                     break;
                 case LazyOp::DIV:
-                    computed[idx] = eager_div(compute(node.child0), compute(node.child1));
+                    computed[idx] = eager_div(computed[node.child0], computed[node.child1]);
                     break;
                 case LazyOp::NEG:
-                    computed[idx] = eager_neg(compute(node.child0));
+                    computed[idx] = eager_neg(computed[node.child0]);
                     break;
                 case LazyOp::SQRT:
-                    computed[idx] = eager_sqrt(compute(node.child0), values[node.value_idx]);
+                    computed[idx] = eager_sqrt(computed[node.child0], values[node.value_idx]);
                     break;
                 case LazyOp::EXP:
-                    computed[idx] = eager_exp(compute(node.child0), values[node.value_idx]);
+                    computed[idx] = eager_exp(computed[node.child0], values[node.value_idx]);
                     break;
                 case LazyOp::LOG:
-                    computed[idx] = eager_log(compute(node.child0), values[node.value_idx]);
+                    computed[idx] = eager_log(computed[node.child0], values[node.value_idx]);
                     break;
                 case LazyOp::SIN:
-                    computed[idx] = eager_sin(compute(node.child0), values[node.value_idx]);
+                    computed[idx] = eager_sin(computed[node.child0], values[node.value_idx]);
                     break;
                 case LazyOp::COS:
-                    computed[idx] = eager_cos(compute(node.child0), values[node.value_idx]);
+                    computed[idx] = eager_cos(computed[node.child0], values[node.value_idx]);
                     break;
                 case LazyOp::ACOS:
-                    computed[idx] = eager_acos(compute(node.child0), values[node.value_idx]);
+                    computed[idx] = eager_acos(computed[node.child0], values[node.value_idx]);
                     break;
                 case LazyOp::PI:
                     computed[idx] = eager_pi(values[node.value_idx]);
@@ -759,11 +798,11 @@ namespace delta::internal {
                 default:
                     throw std::logic_error("Unhandled LazyOp in evaluate");
                 }
+                computed_flag[idx] = true;
+                st.pop();
             }
-            return computed[idx];
-            };
+        }
 
-        return compute(root_idx);
+        return computed[root_idx];
     }
-
 } // namespace delta::internal

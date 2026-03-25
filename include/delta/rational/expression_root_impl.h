@@ -1,10 +1,11 @@
+// expression_root_impl.h (modified)
+
 #pragma once
 
 #include "expression_root.h"
 #include "evaluation_core.h"
 #include "simplify.h"
 #include "rational_class.h" 
-
 #include <absl/hash/hash.h>
 #include <algorithm>
 #include <cmath>
@@ -12,11 +13,12 @@
 #include <limits>
 #include <unordered_map>
 #include <stack>
+#include <optional>   // <-- added
 
 namespace delta::internal {
 
     // ============================================================================
-    // Constructors
+    // Constructors (unchanged)
     // ============================================================================
 
     inline ExpressionRoot::ExpressionRoot(Value val) {
@@ -36,7 +38,7 @@ namespace delta::internal {
     }
 
     // ============================================================================
-    // Internal helpers
+    // Internal helpers (unchanged)
     // ============================================================================
 
     inline int ExpressionRoot::add_node(Node node) {
@@ -52,7 +54,7 @@ namespace delta::internal {
     }
 
     // ============================================================================
-    // Hash computation
+    // Hash computation (unchanged)
     // ============================================================================
 
     inline std::size_t ExpressionRoot::compute_hash(const std::vector<Node>& nodes,
@@ -87,8 +89,9 @@ namespace delta::internal {
     }
 
     // ============================================================================
-    // Helper to copy a subtree from a source ExpressionRoot into new vectors
+    // Helper to copy a subtree (unchanged)
     // ============================================================================
+
     static int copy_subtree(const ExpressionRoot& src,
         int src_idx,
         std::vector<Node>& new_nodes,
@@ -158,14 +161,95 @@ namespace delta::internal {
         }
         return idx_map[src_idx];
     }
+
     // ============================================================================
-    // Public building methods (immutable)
+    // New: overflow_handle helpers
+    // ============================================================================
+
+    inline std::optional<std::pair<ExpressionRoot, ExpressionRoot>>
+        overflow_handle(const ExpressionRoot& a, const ExpressionRoot& b, LazyOp op) {
+        int depth = 1 + std::max(a.depth(), b.depth());
+        if (depth <= MAX_LAZY_DEPTH) return std::nullopt;
+
+        ExpressionRoot simp_a = a.simplify();
+        ExpressionRoot simp_b = b.simplify();
+        int new_depth = 1 + std::max(simp_a.depth(), simp_b.depth());
+
+        if (new_depth <= MAX_LAZY_DEPTH) {
+            return std::make_pair(std::move(simp_a), std::move(simp_b));
+        }
+
+        Rational left = Rational(std::make_shared<const ExpressionRoot>(simp_a)).eval(true);
+        Rational right = Rational(std::make_shared<const ExpressionRoot>(simp_b)).eval(true);
+        Rational result;
+        switch (op) {
+        case LazyOp::ADD: result = left + right; break;
+        case LazyOp::SUB: result = left - right; break;
+        case LazyOp::MUL: result = left * right; break;
+        case LazyOp::DIV: result = left / right; break;
+        default:
+            throw std::logic_error("Unsupported binary op in overflow_handle");
+        }
+        ExpressionRoot const_root(result.to_value());
+        return std::make_pair(const_root, const_root);
+    }
+
+    inline std::optional<ExpressionRoot>
+        overflow_handle(const ExpressionRoot& a, LazyOp op) {
+        int depth = 1 + a.depth();
+        if (depth <= MAX_LAZY_DEPTH) return std::nullopt;
+
+        ExpressionRoot simp_a = a.simplify();
+        int new_depth = 1 + simp_a.depth();
+
+        if (new_depth <= MAX_LAZY_DEPTH) {
+            return simp_a;
+        }
+
+        Rational x = Rational(std::make_shared<const ExpressionRoot>(simp_a)).eval(true);
+        Rational result;
+        switch (op) {
+        case LazyOp::NEG: result = -x; break;
+        default:
+            throw std::logic_error("Unsupported unary op in overflow_handle (no eps)");
+        }
+        return ExpressionRoot(result.to_value());
+    }
+
+    inline std::optional<ExpressionRoot>
+        overflow_handle(const ExpressionRoot& a, LazyOp op, const Rational& eps) {
+        int depth = 1 + a.depth();
+        if (depth <= MAX_LAZY_DEPTH) return std::nullopt;
+
+        ExpressionRoot simp_a = a.simplify();
+        int new_depth = 1 + simp_a.depth();
+
+        if (new_depth <= MAX_LAZY_DEPTH) {
+            return simp_a;
+        }
+
+        Rational x = Rational(std::make_shared<const ExpressionRoot>(simp_a)).eval(true);
+        Rational result;
+        switch (op) {
+        case LazyOp::SQRT: result = internal::eager_sqrt(x.to_value(), eps.to_value()); break;
+        case LazyOp::EXP:  result = internal::eager_exp(x.to_value(), eps.to_value()); break;
+        case LazyOp::LOG:  result = internal::eager_log(x.to_value(), eps.to_value()); break;
+        case LazyOp::SIN:  result = internal::eager_sin(x.to_value(), eps.to_value()); break;
+        case LazyOp::COS:  result = internal::eager_cos(x.to_value(), eps.to_value()); break;
+        case LazyOp::ACOS: result = internal::eager_acos(x.to_value(), eps.to_value()); break;
+        default:
+            throw std::logic_error("Unsupported unary op in overflow_handle (with eps)");
+        }
+        return ExpressionRoot(result.to_value());
+    }
+
+    // ============================================================================
+    // Public building methods (modified)
     // ============================================================================
 
     inline ExpressionRoot ExpressionRoot::add(const ExpressionRoot& other) const {
-        // Check depth and simplify if needed
-        if (1 + std::max(nodes_[root_index_].depth, other.nodes_[other.root_index_].depth) > MAX_LAZY_DEPTH) {
-            return simplify().add(other.simplify());
+        if (auto new_operands = overflow_handle(*this, other, LazyOp::ADD)) {
+            return new_operands->first.add(new_operands->second);
         }
 
         std::vector<Node> new_nodes;
@@ -183,9 +267,10 @@ namespace delta::internal {
     }
 
     inline ExpressionRoot ExpressionRoot::sub(const ExpressionRoot& other) const {
-        if (1 + std::max(nodes_[root_index_].depth, other.nodes_[other.root_index_].depth) > MAX_LAZY_DEPTH) {
-            return simplify().sub(other.simplify());
+        if (auto new_operands = overflow_handle(*this, other, LazyOp::SUB)) {
+            return new_operands->first.sub(new_operands->second);
         }
+
         std::vector<Node> new_nodes;
         std::vector<Value> new_values;
         std::unordered_map<int, int> idx_map_this, idx_map_other;
@@ -201,9 +286,10 @@ namespace delta::internal {
     }
 
     inline ExpressionRoot ExpressionRoot::mul(const ExpressionRoot& other) const {
-        if (1 + std::max(nodes_[root_index_].depth, other.nodes_[other.root_index_].depth) > MAX_LAZY_DEPTH) {
-            return simplify().mul(other.simplify());
+        if (auto new_operands = overflow_handle(*this, other, LazyOp::MUL)) {
+            return new_operands->first.mul(new_operands->second);
         }
+
         std::vector<Node> new_nodes;
         std::vector<Value> new_values;
         std::unordered_map<int, int> idx_map_this, idx_map_other;
@@ -219,9 +305,10 @@ namespace delta::internal {
     }
 
     inline ExpressionRoot ExpressionRoot::div(const ExpressionRoot& other) const {
-        if (1 + std::max(nodes_[root_index_].depth, other.nodes_[other.root_index_].depth) > MAX_LAZY_DEPTH) {
-            return simplify().div(other.simplify());
+        if (auto new_operands = overflow_handle(*this, other, LazyOp::DIV)) {
+            return new_operands->first.div(new_operands->second);
         }
+
         std::vector<Node> new_nodes;
         std::vector<Value> new_values;
         std::unordered_map<int, int> idx_map_this, idx_map_other;
@@ -237,9 +324,10 @@ namespace delta::internal {
     }
 
     inline ExpressionRoot ExpressionRoot::neg() const {
-        if (1 + nodes_[root_index_].depth > MAX_LAZY_DEPTH) {
-            return simplify().neg();
+        if (auto new_a = overflow_handle(*this, LazyOp::NEG)) {
+            return new_a->neg();
         }
+
         std::vector<Node> new_nodes;
         std::vector<Value> new_values;
         std::unordered_map<int, int> idx_map;
@@ -253,11 +341,11 @@ namespace delta::internal {
         return ExpressionRoot(std::move(new_nodes), std::move(new_values), new_root);
     }
 
-    // Transcendental functions (unary with eps)
     inline ExpressionRoot ExpressionRoot::sqrt(const Rational& eps) const {
-        if (1 + nodes_[root_index_].depth > MAX_LAZY_DEPTH) {
-            return simplify().sqrt(eps);
+        if (auto new_a = overflow_handle(*this, LazyOp::SQRT, eps)) {
+            return new_a->sqrt(eps);
         }
+
         std::vector<Node> new_nodes;
         std::vector<Value> new_values;
         std::unordered_map<int, int> idx_map;
@@ -275,9 +363,10 @@ namespace delta::internal {
     }
 
     inline ExpressionRoot ExpressionRoot::exp(const Rational& eps) const {
-        if (1 + nodes_[root_index_].depth > MAX_LAZY_DEPTH) {
-            return simplify().exp(eps);
+        if (auto new_a = overflow_handle(*this, LazyOp::EXP, eps)) {
+            return new_a->exp(eps);
         }
+
         std::vector<Node> new_nodes;
         std::vector<Value> new_values;
         std::unordered_map<int, int> idx_map;
@@ -295,9 +384,10 @@ namespace delta::internal {
     }
 
     inline ExpressionRoot ExpressionRoot::log(const Rational& eps) const {
-        if (1 + nodes_[root_index_].depth > MAX_LAZY_DEPTH) {
-            return simplify().log(eps);
+        if (auto new_a = overflow_handle(*this, LazyOp::LOG, eps)) {
+            return new_a->log(eps);
         }
+
         std::vector<Node> new_nodes;
         std::vector<Value> new_values;
         std::unordered_map<int, int> idx_map;
@@ -315,9 +405,10 @@ namespace delta::internal {
     }
 
     inline ExpressionRoot ExpressionRoot::sin(const Rational& eps) const {
-        if (1 + nodes_[root_index_].depth > MAX_LAZY_DEPTH) {
-            return simplify().sin(eps);
+        if (auto new_a = overflow_handle(*this, LazyOp::SIN, eps)) {
+            return new_a->sin(eps);
         }
+
         std::vector<Node> new_nodes;
         std::vector<Value> new_values;
         std::unordered_map<int, int> idx_map;
@@ -335,9 +426,10 @@ namespace delta::internal {
     }
 
     inline ExpressionRoot ExpressionRoot::cos(const Rational& eps) const {
-        if (1 + nodes_[root_index_].depth > MAX_LAZY_DEPTH) {
-            return simplify().cos(eps);
+        if (auto new_a = overflow_handle(*this, LazyOp::COS, eps)) {
+            return new_a->cos(eps);
         }
+
         std::vector<Node> new_nodes;
         std::vector<Value> new_values;
         std::unordered_map<int, int> idx_map;
@@ -355,9 +447,10 @@ namespace delta::internal {
     }
 
     inline ExpressionRoot ExpressionRoot::acos(const Rational& eps) const {
-        if (1 + nodes_[root_index_].depth > MAX_LAZY_DEPTH) {
-            return simplify().acos(eps);
+        if (auto new_a = overflow_handle(*this, LazyOp::ACOS, eps)) {
+            return new_a->acos(eps);
         }
+
         std::vector<Node> new_nodes;
         std::vector<Value> new_values;
         std::unordered_map<int, int> idx_map;
@@ -374,7 +467,7 @@ namespace delta::internal {
         return ExpressionRoot(std::move(new_nodes), std::move(new_values), new_root);
     }
 
-    // Static constants
+    // Static constants (unchanged)
     inline ExpressionRoot ExpressionRoot::pi(const Rational& eps) {
         Value eps_val = eps.to_value();
         std::vector<Node> nodes;
@@ -398,7 +491,7 @@ namespace delta::internal {
     }
 
     // ============================================================================
-    // Public methods that use evaluation_core and simplify
+    // Public methods that use evaluation_core and simplify (unchanged)
     // ============================================================================
 
     inline ExpressionRoot ExpressionRoot::simplify() const {

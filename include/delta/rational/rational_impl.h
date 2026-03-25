@@ -235,7 +235,22 @@ namespace delta {
         return Rational(std::make_shared<const internal::ExpressionRoot>(std::move(new_root)));
     }
 
-    inline Rational Rational::eval() const {
+    //inline Rational Rational::eval() const {
+    //    if (is_immediate()) {
+    //        if (auto* s = std::get_if<internal::SmallStorage>(&storage_))
+    //            return Rational(*s);
+    //        else if (auto* b = std::get_if<internal::BigStorage>(&storage_))
+    //            return Rational(*b);
+    //        else
+    //            throw std::logic_error("Rational::eval: unexpected variant state");
+    //    }
+    //    auto simplified = simplify();
+    //    if (simplified.is_immediate())
+    //        return simplified.eval();
+    //    return simplified.as_lazy()->eval();
+    //}
+
+    inline Rational Rational::eval(bool skip_simplify) const {
         if (is_immediate()) {
             if (auto* s = std::get_if<internal::SmallStorage>(&storage_))
                 return Rational(*s);
@@ -244,10 +259,18 @@ namespace delta {
             else
                 throw std::logic_error("Rational::eval: unexpected variant state");
         }
+
+        if (skip_simplify) {
+            // Не упрощаем, сразу вычисляем ленивое дерево
+            return Rational(internal::evaluate(*as_lazy()));
+        }
+
+        // Обычный путь: сначала упрощаем
         auto simplified = simplify();
         if (simplified.is_immediate())
-            return simplified.eval();
-        return simplified.as_lazy()->eval();
+            return simplified;
+        // Упрощённое выражение всё ещё ленивое → вычисляем без повторного упрощения
+        return simplified.eval(true);
     }
 
     inline internal::Value Rational::to_value() const {
