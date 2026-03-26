@@ -1,21 +1,17 @@
 // include/delta/core/rational.h
 #pragma once
 
-#include "delta/rational/rational_fwd.h"
-#include "delta/rational/interval.h"
-#include "delta/rational/utils.h"
-#include "delta/rational/storage.h"
-#include "delta/rational/expression_root.h"
-#include "delta/rational/evaluation_core.h"
-#include "delta/rational/simplify.h"
-#include "delta/rational/expression_root_impl.h"
+// Основной класс Rational и его реализация
 #include "delta/rational/rational_class.h"
-#include "delta/rational/eager.h"
-#include "delta/rational/expression_root_factories.h"
-#include "delta/rational/rational_impl.h"
-#include "delta/rational/operations.h"
-#include "delta/rational/comparisons.h"
-#include "delta/rational/transcendentals.h"
-#include "delta/rational/context.h"
+
+// Пользовательские литералы (_r)
 #include "delta/rational/literals.h"
+
+// Операторы сравнения (==, !=, <, >, <=, >=)
+#include "delta/rational/comparisons.h"
+
+// Трансцендентные функции (sqrt, exp, log, sin, cos, acos, pi, e, pow)
+#include "delta/rational/transcendentals.h"
+
+// Интеграция с Eigen (опционально)
 #include "delta/rational/eigen_integration.h"

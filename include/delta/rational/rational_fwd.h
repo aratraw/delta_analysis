@@ -13,6 +13,4 @@ namespace delta::internal {
     struct BigStorage;
     class ExpressionRoot;
     class Interval;
-
-    using Value = std::variant<SmallStorage, BigStorage>;
 }

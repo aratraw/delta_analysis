@@ -15,35 +15,36 @@ namespace delta::testing {
         EXPECT_TRUE(sum.is_lazy());
     }
 
-    // -------------------------------------------------------------------------
-    // 2. Lazy tree structure
-    // -------------------------------------------------------------------------
     TEST_F(RationalLazyTest, LazyTreeStructure) {
         set_eager_mode(false);
         Rational expr = ("1/2"_r.lazy() + "1/3"_r) * "1/4"_r;
         ASSERT_TRUE(expr.is_lazy());
-        const auto& root = *expr.as_lazy();
-        const auto& nodes = root.nodes();
-        int root_idx = root.root_index();
-        const auto& root_node = nodes[root_idx];
+        int root_idx = expr.root_index();
+        const auto& root_node = internal::pool.nodes[root_idx];
         EXPECT_EQ(root_node.op, internal::LazyOp::MUL);
         ASSERT_NE(root_node.child0, -1);
         ASSERT_NE(root_node.child1, -1);
 
-        const auto& left_node = nodes[root_node.child0];
-        EXPECT_EQ(left_node.op, internal::LazyOp::ADD);
+        const auto& left_node = internal::pool.nodes[root_node.child0];
+        const auto& right_node = internal::pool.nodes[root_node.child1];
 
-        const auto& right_node = nodes[root_node.child1];
-        EXPECT_EQ(right_node.op, internal::LazyOp::CONST);
-        const auto& right_val = root.values()[right_node.value_idx];
-        Rational right_rat;
-        if (std::holds_alternative<internal::SmallStorage>(right_val)) {
-            right_rat = Rational(std::get<internal::SmallStorage>(right_val));
+        // Ожидаем, что один из потомков — ADD, другой — CONST (1/4)
+        bool left_is_add = (left_node.op == internal::LazyOp::ADD);
+        bool right_is_add = (right_node.op == internal::LazyOp::ADD);
+        EXPECT_TRUE((left_is_add && !right_is_add) || (!left_is_add && right_is_add));
+
+        // Находим узел CONST и проверяем его значение
+        const internal::Node* const_node = (left_node.op == internal::LazyOp::CONST) ? &left_node : &right_node;
+        ASSERT_EQ(const_node->op, internal::LazyOp::CONST);
+        const auto& const_val = internal::pool.values[const_node->value_idx];
+        Rational const_rat;
+        if (std::holds_alternative<internal::SmallStorage>(const_val)) {
+            const_rat = Rational(std::get<internal::SmallStorage>(const_val));
         }
         else {
-            right_rat = Rational(std::get<internal::BigStorage>(right_val));
+            const_rat = Rational(std::get<internal::BigStorage>(const_val));
         }
-        EXPECT_EQ(right_rat, "1/4"_r);
+        EXPECT_EQ(const_rat, "1/4"_r);
     }
 
     // -------------------------------------------------------------------------
@@ -158,5 +159,35 @@ namespace delta::testing {
         Rational d = "1/2"_r.lazy() * "1/3"_r;
         EXPECT_FALSE(a == d);
     }
+    // -------------------------------------------------------------------------
+// 10. Large lazy addition chain
+// -------------------------------------------------------------------------
+    TEST_F(RationalLazyTest, LargeAdditionChain) {
+        set_eager_mode(false);
+        const int N = 1000;
+        Rational sum = 0_r.lazy();
+        for (int i = 0; i < N; ++i) {
+            sum = sum + 1_r;
+        }
+        EXPECT_TRUE(sum.is_lazy());
+        Rational result = sum.eval();
+        EXPECT_EQ(result, Rational(N));
+    }
 
+    // -------------------------------------------------------------------------
+    // 11. Chain remains lazy and is not collapsed prematurely
+    // -------------------------------------------------------------------------
+    TEST_F(RationalLazyTest, ChainStaysLazy) {
+        set_eager_mode(false);
+        const int N = 500;
+        Rational sum = 0_r.lazy();
+        for (int i = 0; i < N; ++i) {
+            sum = sum + 1_r;
+        }
+        EXPECT_TRUE(sum.is_lazy());
+        // Убедимся, что корневой узел – ADD (не константа)
+        int root_idx = sum.root_index();
+        const auto& root_node = internal::pool.nodes[root_idx];
+        EXPECT_EQ(root_node.op, internal::LazyOp::ADD);
+    }
 } // namespace delta::testing

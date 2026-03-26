@@ -1,7 +1,9 @@
+// rational_class.h
 #pragma once
 
 #include "rational_fwd.h"
 #include "storage.h"
+#include "expression_root.h"   // для ExpressionRoot
 
 #include <absl/numeric/int128.h>
 #include <boost/multiprecision/cpp_int.hpp>
@@ -14,60 +16,65 @@ namespace delta {
 
     class Rational {
     public:
+        // Конструктор из Value (для immediate)
         Rational(internal::Value val);
-        // Constructors (all create immediate values)
+
+        // Конструкторы immediate
         Rational() noexcept;
         Rational(absl::int128 num);
         Rational(absl::int128 num, absl::uint128 den);
         explicit Rational(const boost::multiprecision::cpp_int& num);
         Rational(const boost::multiprecision::cpp_int& num, const boost::multiprecision::cpp_int& den);
-        explicit Rational(const std::string& s);          // parses "1/2" or "0.125"
-        Rational(int num) : Rational(static_cast<absl::int128>(num)) {}
-        Rational(int num, int den);
-        // constructor
-        explicit Rational(std::shared_ptr<const internal::ExpressionRoot> root);
+        explicit Rational(const std::string& s);          // парсит "1/2" или "0.125"
+        Rational(int num, int den);   // конструктор от двух int
 
-        // Deleted constructors from floating-point types
-        Rational(double) = delete;
-        Rational(float) = delete;
-        Rational(long double) = delete;
+        // Конструктор для lazy (внутренний) – сигнатура уникальна, так как нет конструктора от одного int
+        explicit Rational(std::size_t root_idx);               // для индекса корня
 
-        // Copy/move defaults
+        // Запрет на float/double
+        //Rational(double) = delete;
+        //Rational(float) = delete;
+        //Rational(long double) = delete;
+
+        // Копирование/перемещение по умолчанию
         Rational(const Rational&) = default;
         Rational(Rational&&) = default;
         Rational& operator=(const Rational&) = default;
         Rational& operator=(Rational&&) = default;
         ~Rational() = default;
 
-        // State queries
+        // Состояние
         bool is_immediate() const noexcept;
         bool is_lazy() const noexcept;
 
-        // Raw accessors (returns nullptr if type does not match)
+        // Доступ к immediate данным
         const internal::SmallStorage* as_small() const noexcept;
         const internal::BigStorage* as_big() const noexcept;
-        const std::shared_ptr<const internal::ExpressionRoot>& as_lazy() const;
 
-        // Conversions
+        // Доступ к lazy (индекс корня)
+        int root_index() const;          // требует is_lazy()
+
+        // Преобразование в lazy (создаёт константу из текущего значения)
         Rational lazy() const;
 
-        // Simplification and evaluation
+        // Упрощение и вычисление
         Rational simplify() const;
         Rational eval(bool skip_simplify = false) const;
- //       Rational eval() const;
 
-        // For Internal Use
+        // Для внутреннего использования
         internal::Value to_value() const;
 
-        // Interval estimation
+        // Интервальная оценка
         internal::Interval approx_interval() const noexcept;
-        // Friend Methods
+
+        // Дружественные операторы
         friend Rational operator+(const Rational&, const Rational&);
         friend Rational operator-(const Rational&, const Rational&);
         friend Rational operator*(const Rational&, const Rational&);
         friend Rational operator/(const Rational&, const Rational&);
         friend Rational operator-(const Rational&);
         friend Rational batch_add(const std::vector<Rational>&);
+
         // Дружественные функции из transcendentals.h
         friend Rational sqrt(const Rational&, const Rational&);
         friend Rational exp(const Rational&, const Rational&);
@@ -78,16 +85,18 @@ namespace delta {
         friend Rational pi(const Rational&);
         friend Rational e(const Rational&);
         friend Rational pow(const Rational&, int);
+
     private:
         using Storage = std::variant<internal::SmallStorage,
             internal::BigStorage,
-            std::shared_ptr<const internal::ExpressionRoot>>;
+            int>;   // int для lazy
         Storage storage_;
 
-        // Private constructors (used by eager wrappers and factories)
- 
         friend std::string to_string(const Rational& r);
     };
 
+    // Включение реализаций
+
 
 } // namespace delta
+#include "rational_impl.h"

@@ -1,8 +1,10 @@
+// comparisons.h
 #pragma once
 
 #include "rational_class.h"
-#include "simplify.h"          // for structurally_equal
-#include "evaluation_core.h"   // for Value comparison (operator==, operator<)
+#include "expression_root.h"   // для ExpressionRoot
+#include "simplify.h"          // для internal::structurally_equal
+#include "evaluation_core.h"   // для сравнения Value
 
 namespace delta {
 
@@ -10,16 +12,19 @@ namespace delta {
     //  Equality
     // ----------------------------------------------------------------------------
     inline bool operator==(const Rational& a, const Rational& b) {
-        // Same object (including same shared_ptr)
+        // Same object
         if (&a == &b) return true;
 
         // Both lazy: structural comparison
         if (a.is_lazy() && b.is_lazy()) {
-            const auto& root_a = *a.as_lazy();
-            const auto& root_b = *b.as_lazy();
+            int idx_a = a.root_index();
+            int idx_b = b.root_index();
 
-            // Same shared_ptr? Actually if they point to the same object, the pointers are equal
-            if (a.as_lazy() == b.as_lazy()) return true;
+            // Same root index? (было сравнение shared_ptr)
+            if (idx_a == idx_b) return true;
+
+            ExpressionRoot root_a(idx_a);
+            ExpressionRoot root_b(idx_b);
 
             // If hashes match, do full structural equality
             if (root_a.hash() == root_b.hash()) {
@@ -34,7 +39,7 @@ namespace delta {
         internal::Interval ia = a.approx_interval();
         internal::Interval ib = b.approx_interval();
         if (!ia.overlaps(ib)) {
-            return false; // non‑overlapping intervals → cannot be equal
+            return false;
         }
 
         // Exact evaluation and comparison
