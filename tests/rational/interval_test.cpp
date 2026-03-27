@@ -2,12 +2,13 @@
 #include <gtest/gtest.h>
 #include <limits>
 #include "delta/rational/interval.h"
+#include "test_utils.h"
 
 namespace delta::testing {
 
     using internal::Interval;
 
-    class IntervalTest : public ::testing::Test {
+    class IntervalTest : public RationalTest {
     protected:
         const double inf = std::numeric_limits<double>::infinity();
     };
@@ -35,8 +36,7 @@ namespace delta::testing {
         // Expected [1.5, 3.0] but extended by one ulp outward
         EXPECT_LE(c.lower(), 1.5);
         EXPECT_GE(c.upper(), 3.0);
-        // Check that it is strictly extended (at least one side is not exactly the theoretical bound)
-        // Not strictly required; we just check that it contains the theoretical interval.
+        // Check that it contains the theoretical interval.
         EXPECT_GE(c.lower(), 1.5 - std::numeric_limits<double>::epsilon());
         EXPECT_LE(c.upper(), 3.0 + std::numeric_limits<double>::epsilon());
     }
@@ -108,21 +108,6 @@ namespace delta::testing {
     TEST_F(IntervalTest, Comparison) {
         Interval a(1.0, 2.0);
         Interval b(3.0, 4.0);
-        EXPECT_TRUE(a < b);
-        EXPECT_FALSE(a > b);
-        EXPECT_FALSE(a <= b);  // 2.0 > 3.0, so not <=
-        EXPECT_TRUE(a >= b);   // 1.0 < 3.0, so false, but wait, a >= b means a.lower >= b.upper? Actually the operator definitions in interval.h: a < b returns hi < other.lo. So a < b is true. a >= b returns lo >= other.hi, which is false. So we need to check accordingly.
-        // Actually the operators are defined in interval.h as:
-        //   bool operator<(const Interval& other) const { return hi < other.lo; }
-        //   bool operator<=(const Interval& other) const { return hi <= other.lo; }
-        //   bool operator>(const Interval& other) const { return lo > other.hi; }
-        //   bool operator>=(const Interval& other) const { return lo >= other.hi; }
-        // So for a=(1,2) and b=(3,4):
-        //   a < b : 2 < 3 → true
-        //   a > b : 1 > 4 → false
-        //   a <= b: 2 <= 3 → true
-        //   a >= b: 1 >= 4 → false
-        // Let's adjust the test.
         EXPECT_TRUE(a < b);
         EXPECT_FALSE(a > b);
         EXPECT_TRUE(a <= b);

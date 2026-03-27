@@ -17,7 +17,7 @@ namespace delta {
         }
         ExpressionRoot root = x.is_lazy() ? ExpressionRoot(x.root_index())
             : ExpressionRoot::make_const(x.to_value());
-        return Rational(static_cast<std::size_t>(root.sqrt(eps).root_index()));
+        return Rational::from_lazy_index(root.sqrt(eps).root_index());
     }
 
     inline Rational exp(const Rational& x, const Rational& eps = default_eps()) {
@@ -26,7 +26,7 @@ namespace delta {
         }
         ExpressionRoot root = x.is_lazy() ? ExpressionRoot(x.root_index())
             : ExpressionRoot::make_const(x.to_value());
-        return Rational(static_cast<std::size_t>(root.exp(eps).root_index()));
+        return Rational::from_lazy_index(root.exp(eps).root_index());
     }
 
     inline Rational log(const Rational& x, const Rational& eps = default_eps()) {
@@ -38,7 +38,7 @@ namespace delta {
         }
         ExpressionRoot root = x.is_lazy() ? ExpressionRoot(x.root_index())
             : ExpressionRoot::make_const(x.to_value());
-        return Rational(static_cast<std::size_t>(root.log(eps).root_index()));
+        return Rational::from_lazy_index(root.log(eps).root_index());
     }
 
     inline Rational sin(const Rational& x, const Rational& eps = default_eps()) {
@@ -47,7 +47,7 @@ namespace delta {
         }
         ExpressionRoot root = x.is_lazy() ? ExpressionRoot(x.root_index())
             : ExpressionRoot::make_const(x.to_value());
-        return Rational(static_cast<std::size_t>(root.sin(eps).root_index()));
+        return Rational::from_lazy_index(root.sin(eps).root_index());
     }
 
     inline Rational cos(const Rational& x, const Rational& eps = default_eps()) {
@@ -56,7 +56,7 @@ namespace delta {
         }
         ExpressionRoot root = x.is_lazy() ? ExpressionRoot(x.root_index())
             : ExpressionRoot::make_const(x.to_value());
-        return Rational(static_cast<std::size_t>(root.cos(eps).root_index()));
+        return Rational::from_lazy_index(root.cos(eps).root_index());
     }
 
     inline Rational acos(const Rational& x, const Rational& eps = default_eps()) {
@@ -69,21 +69,21 @@ namespace delta {
         }
         ExpressionRoot root = x.is_lazy() ? ExpressionRoot(x.root_index())
             : ExpressionRoot::make_const(x.to_value());
-        return Rational(static_cast<std::size_t>(root.acos(eps).root_index()));
+        return Rational::from_lazy_index(root.acos(eps).root_index());
     }
 
     inline Rational pi(const Rational& eps = default_eps()) {
         if (internal::global_eager_mode) {
             return eager_pi(eps);
         }
-        return Rational(static_cast<std::size_t>(ExpressionRoot::pi(eps).root_index()));
+        return Rational::from_lazy_index(ExpressionRoot::pi(eps).root_index());
     }
 
     inline Rational e(const Rational& eps = default_eps()) {
         if (internal::global_eager_mode) {
             return eager_e(eps);
         }
-        return Rational(static_cast<std::size_t>(ExpressionRoot::e(eps).root_index()));
+        return Rational::from_lazy_index(ExpressionRoot::e(eps).root_index());
     }
 
     inline Rational pow(const Rational& base, int exponent) {

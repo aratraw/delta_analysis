@@ -1,0 +1,322 @@
+SURVIVAL INSTRUCTION FOR RATIONAL CORE: A DEEP DIVE INTO 4 STRAIGHT DAYS OF DEBUGGING
+================================================================================
+
+1. ARCHITECTURAL PRINCIPLES
+---------------------------
+1.1 Node Pool
+   - Use std::vector<Node> and std::vector<Value> for contiguous memory and cache locality.
+   - Use int32_t indices instead of pointers (children, references).
+   - Use inline thread_local NodePool pool for thread-isolated, lock-free storage.
+
+1.2 Hash Consing (Interning)
+   - Maintain three caches:
+       * value_cache   : Value → index (for constants)
+       * binary_cache  : (op, left, right) → index (for ADD, MUL)
+       * unary_cache   : (op, child, value_idx) → index (for NEG, RECIP, transcendental)
+   - Always canonicalize keys before lookup (normalize numbers, order operands).
+
+1.3 Hashing
+   - Hash must be consistent with equality.
+   - For Value: normalize via normalize_to_cpp_int(v) → hash (num, den) as cpp_int.
+   - For Node: combine hash of children, operation, value_idx.
+   - Invariant: if a == b, then hash(a) == hash(b) — critical for absl containers.
+
+1.4 Canonicalization
+   - Numbers: normalized on construction (den > 0, fraction reduced).
+   - Binary ADD/MUL: children ordered by hash.
+   - SUB and DIV: transform to ADD/MUL with NEG/RECIP.
+
+2. API DESIGN
+-------------
+2.1 Rational Constructors (Immediate)
+   - Rational() = default;
+   - Rational(absl::int128 num);
+   - Rational(absl::int128 num, absl::uint128 den);
+   - explicit Rational(const cpp_int& num);
+   - Rational(const cpp_int& num, const cpp_int& den);
+   - explicit Rational(const std::string& s);
+   - Rational(int num, int den);
+   - Explicit constructors for int, long long, unsigned long long (to intercept literals).
+   - Delete float/double constructors.
+
+2.2 Lazy Creation (no ambiguous constructor)
+   - Use static factory: static Rational from_lazy_index(std::size_t root_idx);
+   - Never use a constructor from size_t.
+
+2.3 State Queries
+   - bool is_immediate() const noexcept;
+   - bool is_lazy() const noexcept;
+
+2.4 Accessors
+   - const SmallStorage* as_small() const noexcept;
+   - const BigStorage* as_big() const noexcept;
+   - int root_index() const;  // requires is_lazy()
+
+2.5 Operators
+   - Implement +, -, *, /, unary - in rational_impl.h.
+   - Rule: if both immediate → eager_*, else build lazy tree.
+   - Use Rational::from_lazy_index to create lazy results, never direct constructor.
+
+3. ALGORITHMS
+-------------
+3.1 Building Expressions
+   - ExpressionRoot is a thin wrapper over int (root index).
+   - Factories: make_const, make_unary, make_binary.
+   - Arithmetic: add, mul, sub (via add(neg(...))), div (via mul(recip(...))).
+   - Transcendentals: sqrt, exp, log, sin, cos, acos with eps.
+
+3.2 Evaluation (eval)
+   - Iterative post‑order with explicit stack.
+   - Local cache: std::vector<std::optional<Value>> cache(n).
+   - Special case for leaf-less nodes (PI, E) — compute directly.
+
+3.3 Simplification (simplify)
+   - Iterative post‑order with cache of simplified indices.
+   - Rules:
+       * Constant folding: compute through eager.
+       * Unary: NEG(NEG(x)), RECIP(RECIP(x)), EXP(LOG(x)), LOG(EXP(x)).
+       * Binary: x+0, x*1, x*0, x+(-x), x*(1/x).
+
+4. MEMORY MANAGEMENT
+--------------------
+4.1 Pool Growth
+   - Nodes are never deleted; pool only grows. Acceptable for up to thousands of nodes.
+   - For long-running apps: implement garbage collection (copy reachable nodes to new pool).
+
+4.2 Thread Safety
+   - inline thread_local NodePool pool → each thread has its own, no locks.
+
+5. ERROR HANDLING
+-----------------
+5.1 Domain Errors
+   - Division by zero → std::domain_error.
+   - sqrt of negative, log of non-positive → std::domain_error.
+
+5.2 Hash Invariants
+   - Must hold: if a == b then hash(a) == hash(b). Violations cause assertion failures in absl debug builds.
+
+6. KEY LESSONS LEARNED
+----------------------
+1. Constructors are a source of ambiguity. Use factory methods when multiple creation paths exist.
+2. Hashing and equality must be a unified system. Always normalize before hashing if objects can be equal in non-normalized form.
+3. Prefer iterative traversals over recursion. Stack depth is limited, expression depth can be arbitrary.
+4. Thread-local pools are simple and lock-free.
+5. Canonicalize at every level: numbers, nodes, cache keys.
+6. Tests are a mirror of architecture. If a test expects a specific child order, the API is fragile.
+
+7. FINAL CODE STRUCTURE (≈3000 lines)
+-------------------------------------
+- node_pool.h         : pool, interning, hashing (≈400)
+- expression_root.h   : wrapper over index (≈150)
+- rational_class.h    : Rational declaration (≈120)
+- rational_impl.h     : all methods, operators (≈700)
+- evaluate_impl.h     : iterative evaluation (≈150)
+- simplify_impl.h     : iterative simplification (≈250)
+- transcendentals.h   : sqrt, exp, log, sin, cos, acos, pi, e (≈100)
+- comparisons.h       : ==, !=, <, >, <=, >= (≈100)
+- evaluation_core.h   : eager arithmetic (≈800)
+- others (storage.h, interval.h, utils.h, context.h, literals.h) (≈600)
+
+8. FINAL THOUGHTS
+-----------------
+This codebase now serves as a reference implementation for lazy rational arithmetic with:
+- Linear construction time.
+- Interning of constants and sub-expressions.
+- Thread‑local pools for lock‑free concurrency.
+- No recursion.
+- Consistent hashing and equality.
+- Clean separation between immediate and lazy modes.
+
+The lessons documented here saved 4 days of debugging. Follow them, or repeat the pain.
+
+CONCRETE LESSONS LEARNED (THE BLOODY DETAILS)
+=============================================
+
+LESSON 1: NEVER, EVER, EVER USE A CONSTRUCTOR FROM std::size_t FOR LAZY OBJECTS
+--------------------------------------------------------------------------------
+The Disaster:
+    Rational(int root_idx) // constructor from int
+    vs
+    Rational(std::size_t root_idx) // lazy constructor
+
+What Happened:
+    Rational(0)   // ambiguous: could be immediate zero or lazy index 0
+    Rational(1)   // ambiguous: could be immediate one or lazy index 1
+    The compiler picked the lazy constructor because size_t was "more special"
+    → immediate zero became a lazy expression → vector subscript out of range
+
+The Fix:
+    Delete all single-argument constructors that accept integer types.
+    Use static factory: static Rational from_lazy_index(std::size_t root_idx).
+
+Golden Rule:
+    If a type can be constructed in fundamentally different ways (immediate value vs lazy reference),
+    use a factory method for the less common case. Constructors are for "normal" construction.
+
+LESSON 2: HASH FUNCTIONS MUST BE PERFECTLY CONSISTENT WITH EQUALITY
+-------------------------------------------------------------------
+The Disaster:
+    Value can be SmallStorage(2,4) or BigStorage(1,2) after normalization.
+    operator== normalizes both to (1,2) and says they are equal.
+    hash(2,4) != hash(1,2) → absl flat_hash_map fires assertion.
+
+The Fix:
+    template <typename H>
+    H AbslHashValue(H h, const Value& v) {
+        auto [num, den] = normalize_to_cpp_int(v); // always canonical representation
+        return H::combine(std::move(h), num, den);
+    }
+
+Golden Rule:
+    Hash must be computed from the canonical representation of the object,
+    not from the raw storage. Otherwise, equal objects will have different hashes,
+    breaking hash-based containers.
+
+LESSON 3: NORMALIZATION IS NOT OPTIONAL FOR VALUES IN CACHES
+------------------------------------------------------------
+The Disaster:
+    SmallStorage(2,4) with reduced=false was inserted into value_cache.
+    Later, SmallStorage(1,2) with reduced=true was compared.
+    operator== normalized, but hash on raw storage → mismatch.
+
+The Fix:
+    Every Value entering the cache must be normalized:
+    - In add_value(), normalize before lookup and insertion.
+    - In eager_* functions, normalize results before returning.
+
+Golden Rule:
+    If an object has a "reduced" flag, never trust it when it enters a global cache.
+    Normalize at the entry point, always.
+
+LESSON 4: NEVER NORMALIZE INSIDE HASH FUNCTION WITHOUT NORMALIZING THE STORED VALUE
+------------------------------------------------------------------------------------
+The Disaster:
+    AbslHashValue normalized on the fly, but the stored Value remained non-normalized.
+    Next lookup: hash(normalized copy) ≠ hash(stored raw) → not found → duplicate inserted.
+
+The Fix:
+    Normalize at insertion time, store normalized. Hash function can then assume normalized.
+
+Golden Rule:
+    Normalize once at the point of insertion, not on every hash call.
+    Otherwise, you create a "phantom key" that never matches.
+
+LESSON 5: WHEN YOU CHANGE THE API, GREP EVERYTHING, THEN GREP AGAIN
+--------------------------------------------------------------------
+The Disaster:
+    Changed Rational(std::size_t) → Rational::from_lazy_index.
+    Updated rational_impl.h, but forgot transcendentals.h and lazy_test.cpp.
+    Result: some calls still used Rational(static_cast<size_t>(...)) → ambiguous.
+
+The Fix:
+    After API change: grep -r "Rational(static_cast<size_t>" and kill all occurrences.
+    Then compile, fix errors, grep again.
+
+Golden Rule:
+    API changes are like nuclear waste: they contaminate everything. Use grep, sed, and static analysis.
+
+LESSON 6: IMMEDIATE AND LAZY MUST BE TOTALLY SEPARATED IN THE TYPE SYSTEM
+--------------------------------------------------------------------------
+The Disaster:
+    Same type (Rational) could be immediate or lazy, but constructors made it ambiguous.
+    There was no way to tell the compiler "I want an immediate zero" vs "I want a lazy index 0".
+
+The Fix:
+    Immediate: Rational(absl::int128(0)) — explicit conversion.
+    Lazy: Rational::from_lazy_index(0) — factory.
+
+Golden Rule:
+    If a type has two fundamentally different modes of existence,
+    either use different types (immediate_rational vs lazy_rational)
+    or use factory methods to disambiguate. Never rely on implicit conversions.
+
+LESSON 7: RECURSION IS THE ENEMY OF DEEP TREES
+-----------------------------------------------
+The Disaster:
+    Recursive evaluate() could overflow stack on deep chains (1000+ nodes).
+
+The Fix:
+    Iterative post‑order traversal with explicit stack and local cache.
+
+Golden Rule:
+    In lazy evaluation, expression depth is arbitrary. Never recurse.
+    Always use iterative algorithms with explicit data structures.
+
+LESSON 8: THREAD-LOCAL IS CHEAPER THAN LOCKS
+---------------------------------------------
+The Disaster:
+    Global pool with mutex would kill performance in multi-threaded code.
+
+The Fix:
+    inline thread_local NodePool pool — each thread has its own independent pool.
+
+Golden Rule:
+    If data does not need to be shared across threads, use thread_local.
+    It's lock-free, cache-local, and simpler than mutexes.
+
+LESSON 9: TESTS THAT EXPECT A SPECIFIC ORDER ARE BRITTLE
+---------------------------------------------------------
+The Disaster:
+    test LazyTreeStructure expected left child = ADD, right child = CONST.
+    After canonicalization (operands sorted), order could swap → test failed.
+
+The Fix:
+    Test should accept both orders: one child is ADD, the other is CONST.
+
+Golden Rule:
+    Tests should verify invariants, not implementation details.
+    If the implementation may change order, the test must be order-agnostic.
+
+LESSON 10: DEBUGGING HASH MAPS IS A NIGHTMARE, SO GET THE HASH RIGHT
+---------------------------------------------------------------------
+The Disaster:
+    absl::flat_hash_map would crash with "hash/eq functors are inconsistent"
+    after hours of debugging, because Value::operator== and Value::hash disagreed.
+
+The Fix:
+    Make operator== and hash both work on canonical representation.
+    Test with asserts in debug mode: assert((a == b) == (hash(a) == hash(b))).
+
+Golden Rule:
+    Hash-based containers are unforgiving. Before using them, ensure that
+    the hash function is a true mathematical function consistent with equality.
+    Test this invariant in debug builds.
+
+LESSON 11: KEEP THE CORE SMALL, BUT NOT TOO SMALL
+--------------------------------------------------
+The Disaster:
+    3000 lines felt like too much, but trying to shrink further caused spaghetti.
+
+The Fix:
+    Accept that a full-featured rational library needs ~3000 lines.
+    Each line should have a clear purpose; no duplication.
+
+Golden Rule:
+    Code size is not the enemy. Duplication and complexity are the enemy.
+    3000 lines of well-structured, readable code is better than 1000 lines of cryptic macros.
+
+LESSON 12: DOCUMENT THE LESSONS IMMEDIATELY, OR FORGET THEM
+------------------------------------------------------------
+The Disaster:
+    After fixing a bug, we moved on, only to repeat it weeks later.
+
+The Fix:
+    Write these lessons down. Now.
+
+Golden Rule:
+    If you don't document a hard-won lesson, you will learn it again.
+    Write it down, or suffer.
+
+SUMMARY: THE FOUR DEADLY SINS WE COMMITTED
+==========================================
+1. Ambiguous constructor from integer → fixed with factory method.
+2. Inconsistent hash and equality → fixed by hashing canonical representation.
+3. Storing non-normalized values in cache → fixed by normalizing on insertion.
+4. Incomplete API migration → fixed by systematic grep.
+
+These are not theoretical mistakes. They are concrete, line‑by‑line errors
+that cost hours of debugging. Never make them again.
+
+
+---
+Now I'll go have a smoke. Well-earned.

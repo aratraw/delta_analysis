@@ -120,6 +120,11 @@ namespace delta {
 
     inline Rational::Rational(absl::int128 num) : storage_(internal::SmallStorage(num)) {}
 
+    // Явные конструкторы для целых типов
+    inline Rational::Rational(int num) : Rational(static_cast<absl::int128>(num)) {}
+    inline Rational::Rational(long long num) : Rational(static_cast<absl::int128>(num)) {}
+    inline Rational::Rational(unsigned long long num) : Rational(static_cast<absl::int128>(num)) {}
+
     inline Rational::Rational(absl::int128 num, absl::uint128 den) {
         if (den == 0) {
             throw std::domain_error("Denominator cannot be zero");
@@ -237,7 +242,11 @@ namespace delta {
         }
     }
 
-    inline Rational::Rational(std::size_t root_idx) : storage_(static_cast<int>(root_idx)) {}
+    inline Rational Rational::from_lazy_index(std::size_t root_idx) {
+        Rational r;
+        r.storage_ = static_cast<int>(root_idx);
+        return r;
+    }
 
     // ----------------------------------------------------------------------------
     // State queries
@@ -276,7 +285,7 @@ namespace delta {
         if (is_lazy()) return *this;
         internal::Value val = to_value();
         ExpressionRoot root = ExpressionRoot::make_const(val);
-        return Rational(static_cast<std::size_t>(root.root_index()));
+        return Rational::from_lazy_index(root.root_index());
     }
 
     // ----------------------------------------------------------------------------
@@ -292,7 +301,7 @@ namespace delta {
         if (node.op == internal::LazyOp::CONST) {
             return Rational(internal::pool.values[node.value_idx]);
         }
-        return Rational(static_cast<std::size_t>(new_root));
+        return Rational::from_lazy_index(new_root);
     }
 
     inline Rational Rational::eval(bool skip_simplify) const {
@@ -358,7 +367,7 @@ namespace delta {
             : ExpressionRoot::make_const(a.to_value());
         ExpressionRoot right = b.is_lazy() ? ExpressionRoot(b.root_index())
             : ExpressionRoot::make_const(b.to_value());
-        return Rational(static_cast<std::size_t>(left.add(right).root_index()));
+        return Rational::from_lazy_index(left.add(right).root_index());
     }
 
     inline Rational operator-(const Rational& a, const Rational& b) {
@@ -369,7 +378,7 @@ namespace delta {
             : ExpressionRoot::make_const(a.to_value());
         ExpressionRoot right = b.is_lazy() ? ExpressionRoot(b.root_index())
             : ExpressionRoot::make_const(b.to_value());
-        return Rational(static_cast<std::size_t>(left.sub(right).root_index()));
+        return Rational::from_lazy_index(left.sub(right).root_index());
     }
 
     inline Rational operator*(const Rational& a, const Rational& b) {
@@ -380,7 +389,7 @@ namespace delta {
             : ExpressionRoot::make_const(a.to_value());
         ExpressionRoot right = b.is_lazy() ? ExpressionRoot(b.root_index())
             : ExpressionRoot::make_const(b.to_value());
-        return Rational(static_cast<std::size_t>(left.mul(right).root_index()));
+        return Rational::from_lazy_index(left.mul(right).root_index());
     }
 
     inline Rational operator/(const Rational& a, const Rational& b) {
@@ -391,7 +400,7 @@ namespace delta {
             : ExpressionRoot::make_const(a.to_value());
         ExpressionRoot right = b.is_lazy() ? ExpressionRoot(b.root_index())
             : ExpressionRoot::make_const(b.to_value());
-        return Rational(static_cast<std::size_t>(left.div(right).root_index()));
+        return Rational::from_lazy_index(left.div(right).root_index());
     }
 
     inline Rational operator-(const Rational& a) {
@@ -399,7 +408,7 @@ namespace delta {
             return eager_neg(a);
         }
         ExpressionRoot root(a.root_index());
-        return Rational(static_cast<std::size_t>(root.neg().root_index()));
+        return Rational::from_lazy_index(root.neg().root_index());
     }
 
     // ----------------------------------------------------------------------------
@@ -530,7 +539,7 @@ namespace delta {
             };
 
         ExpressionRoot root = build_tree(0, static_cast<int>(terms.size()) - 1);
-        return Rational(static_cast<std::size_t>(root.root_index()));
+        return Rational::from_lazy_index(root.root_index());
     }
 
     // ----------------------------------------------------------------------------

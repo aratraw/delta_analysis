@@ -23,18 +23,21 @@ namespace delta {
         Rational() noexcept;
         Rational(absl::int128 num);
         Rational(absl::int128 num, absl::uint128 den);
+
+        // Явные конструкторы для целых типов (чтобы избежать неоднозначности)
+        Rational(int num);
+        Rational(long long num);
+        Rational(unsigned long long num);
+
+        // Конструктор от cpp_int – explicit
         explicit Rational(const boost::multiprecision::cpp_int& num);
         Rational(const boost::multiprecision::cpp_int& num, const boost::multiprecision::cpp_int& den);
+
         explicit Rational(const std::string& s);          // парсит "1/2" или "0.125"
         Rational(int num, int den);   // конструктор от двух int
 
-        // Конструктор для lazy (внутренний) – сигнатура уникальна, так как нет конструктора от одного int
-        explicit Rational(std::size_t root_idx);               // для индекса корня
-
-        // Запрет на float/double
-        //Rational(double) = delete;
-        //Rational(float) = delete;
-        //Rational(long double) = delete;
+        // Фабричный метод для создания ленивого объекта по индексу
+        static Rational from_lazy_index(std::size_t root_idx);
 
         // Копирование/перемещение по умолчанию
         Rational(const Rational&) = default;
@@ -96,7 +99,5 @@ namespace delta {
     };
 
     // Включение реализаций
-
-
 } // namespace delta
 #include "rational_impl.h"
