@@ -593,4 +593,13 @@ namespace delta {
         return ExpressionRoot(node_idx);
     }
 
+
+    inline const Rational& default_eps() {
+        static Rational cache(internal::default_eps_value);
+        return cache;
+    }
+
+    inline void set_default_eps(const Rational& eps) {
+        internal::default_eps_value = eps.to_value();
+    }
 } // namespace delta

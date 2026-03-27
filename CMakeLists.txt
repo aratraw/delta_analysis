@@ -81,9 +81,11 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
 # Для MSVC включаем /std:c++20 и /permissive- для строгого соответствия стандарту
-if(MSVC)
-    add_compile_options(/std:c++20 /permissive-)
-endif()
+#if(MSVC)
+#    add_compile_options(/std:c++20 /permissive-)
+#        add_compile_options(/showIncludes-)
+#        set(CMAKE_MSVC_SHOW_INCLUDES OFF CACHE BOOL "" FORCE)
+#endif()
 
 # Добавляем определение макроса для тестов
 add_compile_definitions($<$<CONFIG:Debug>:_DEBUG>)

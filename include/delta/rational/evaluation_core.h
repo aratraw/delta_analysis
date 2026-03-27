@@ -121,7 +121,9 @@ namespace delta::internal {
                     // Check overflow for numerator
                     absl::int128 num = sa_norm.num + sb_norm.num;
                     if (!would_overflow_add(sa_norm.num, sb_norm.num)) {
-                        return SmallStorage(num, den);
+                        SmallStorage res(num, den);
+                        res.normalize();                     // <-- added
+                        return res;
                     }
                     // fallback to BigStorage
                 }
@@ -244,7 +246,7 @@ namespace delta::internal {
             s.normalize();
             if (s.num == 0) throw std::domain_error("Division by zero");
             // reciprocal: den/num, with sign handling
-            absl::int128 num_recip = static_cast<absl::int128>(s.den);  // явное приведение
+            absl::int128 num_recip = static_cast<absl::int128>(s.den);
             absl::uint128 den_recip = (s.num < 0) ? static_cast<absl::uint128>(-s.num) : static_cast<absl::uint128>(s.num);
             if (s.num < 0) num_recip = -num_recip;
             SmallStorage recip(num_recip, den_recip);
@@ -267,7 +269,9 @@ namespace delta::internal {
 
     inline Value eager_neg(const Value& a) {
         if (const auto* s = std::get_if<SmallStorage>(&a)) {
-            return SmallStorage(-(s->num), s->den);
+            SmallStorage res(-(s->num), s->den);
+            res.normalize();                 // <-- added
+            return res;
         }
         const auto& b = std::get<BigStorage>(a);
         return BigStorage(-b.num(), b.den());
@@ -305,11 +309,66 @@ namespace delta::internal {
         if (digits_needed < 1) digits_needed = 1;
         if (digits_needed > 100) digits_needed = 100;
 
-        std::string s = f.str(digits_needed, std::ios_base::fixed);
+        // Гарантированно получаем строку без научной нотации
+        std::string s = f.str(0, std::ios_base::fixed);
         size_t dot = s.find('.');
-        std::string integer_part = s.substr(0, dot);
-        std::string fractional_part = s.substr(dot + 1);
-        boost::multiprecision::cpp_int num(integer_part + fractional_part);
+        std::string integer_part, fractional_part;
+        if (dot == std::string::npos) {
+            integer_part = s;
+            fractional_part = "";
+        }
+        else {
+            integer_part = s.substr(0, dot);
+            fractional_part = s.substr(dot + 1);
+        }
+
+        // Обрезаем или дополняем дробную часть до digits_needed
+        if (fractional_part.size() > static_cast<size_t>(digits_needed)) {
+            fractional_part = fractional_part.substr(0, digits_needed);
+        }
+        else if (fractional_part.size() < static_cast<size_t>(digits_needed)) {
+            fractional_part.append(digits_needed - fractional_part.size(), '0');
+        }
+
+        // Убираем ведущие нули целой части, сохраняя знак
+        bool negative = false;
+        if (!integer_part.empty() && integer_part[0] == '-') {
+            negative = true;
+            integer_part = integer_part.substr(1);
+        }
+        size_t non_zero = integer_part.find_first_not_of('0');
+        if (non_zero != std::string::npos) {
+            integer_part = integer_part.substr(non_zero);
+        }
+        else {
+            integer_part = "0";
+        }
+        if (negative && integer_part != "0") {
+            integer_part = "-" + integer_part;
+        }
+
+        // Собираем строку числителя
+        std::string num_str;
+        if (integer_part == "0" || integer_part == "-0") {
+            num_str = fractional_part;
+            if (num_str.empty()) num_str = "0";
+        }
+        else {
+            num_str = integer_part + fractional_part;
+        }
+
+        // Удаляем ведущие нули (кроме единственного нуля)
+        if (num_str.size() > 1 && num_str[0] == '0') {
+            size_t first_nonzero = num_str.find_first_not_of('0');
+            if (first_nonzero != std::string::npos) {
+                num_str = num_str.substr(first_nonzero);
+            }
+            else {
+                num_str = "0";
+            }
+        }
+
+        boost::multiprecision::cpp_int num(num_str);
         boost::multiprecision::cpp_int den(1);
         for (size_t i = 0; i < fractional_part.size(); ++i) den *= 10;
         boost::multiprecision::cpp_int g = boost::multiprecision::gcd(num, den);
@@ -317,7 +376,6 @@ namespace delta::internal {
         den /= g;
         return BigStorage(num, den);
     }
-
     // Fast transcendental implementations (via high‑precision float)
     inline Value fast_sqrt(const Value& x, const Value& eps) {
         HighPrecFloat fx = to_high_prec(x);

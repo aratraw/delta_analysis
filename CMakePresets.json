@@ -10,6 +10,9 @@
       "cacheVariables": {
         "CMAKE_C_COMPILER": "cl.exe",
         "CMAKE_CXX_COMPILER": "cl.exe",
+        "CMAKE_MSVC_SHOW_INCLUDES": "OFF",
+        "CMAKE_DEPENDS_USE_COMPILER": "OFF",
+        "CMAKE_NINJA_FORCE_RESPONSE_FILE": "ON",
         "CMAKE_TOOLCHAIN_FILE": "$env{VCPKG_ROOT}/scripts/buildsystems/vcpkg.cmake",
         "VCPKG_TARGET_TRIPLET": "x64-windows"
       },

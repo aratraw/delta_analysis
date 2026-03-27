@@ -1,4 +1,4 @@
-// simplify.h
+    // simplify.h
 #pragma once
 
 #include "expression_root.h"          // для delta::ExpressionRoot
