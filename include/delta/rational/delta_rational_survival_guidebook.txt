@@ -320,3 +320,74 @@ that cost hours of debugging. Never make them again.
 
 ---
 Now I'll go have a smoke. Well-earned.
+
+---
+
+Rational Library Mode Behavior (Final Specification)
+====================================================
+
+1. DEFAULT BEHAVIOR – IMMEDIATE
+--------------------------------
+All constructors create immediate objects by default.
+- Rational a = 1_r;        → immediate
+- Rational b = "1/2"_r;    → immediate
+- Rational c(1, 2);        → immediate
+
+This ensures maximum performance for hot loops, mesh calculations,
+and intermediate computations where lazy evaluation is not required.
+
+2. ARITHMETIC OF TWO IMMEDIATE NUMBERS → IMMEDIATE
+---------------------------------------------------
+If both operands are immediate, the result is also immediate:
+- a + b, a - b, a * b, a / b  → immediate
+- No nodes are created in the pool.
+- No lazy tree overhead.
+
+This is the fast path optimized for performance-critical code.
+
+3. LAZY EVALUATION – EXPLICIT ONLY
+-----------------------------------
+Lazy trees are built only when explicitly requested:
+- .lazy() converts an immediate into a constant node
+- If at least one operand is lazy, operators build a lazy tree
+- Example: a.lazy() + b  → lazy tree (even if b is immediate)
+
+This gives the programmer full control over where lazy evaluation is used.
+
+4. ScopedEagerEval – TEMPORARY FORCED EAGER MODE
+-------------------------------------------------
+ScopedEagerEval temporarily forces immediate evaluation for all operations
+within the block, regardless of operand types.
+- Useful for numerical verification, debugging, or quick approximate results
+- After exiting the block, the previous mode is restored
+
+Example:
+    set_eager_mode(false);  // normal behavior
+    {
+        ScopedEagerEval guard;  // inside: forced eager mode
+        Rational sum = a.lazy() + b;  // evaluated immediately
+        EXPECT_FALSE(sum.is_lazy());
+    }
+    // After block: normal behavior restored
+
+5. TRANSCENDENTAL FUNCTIONS
+---------------------------
+- In eager mode (global_eager_mode == true or ScopedEagerEval active):
+  The function is evaluated immediately using fast/slow path based on epsilon.
+- In lazy mode (global_eager_mode == false and not inside ScopedEagerEval):
+  A lazy tree node is created (SQRT, EXP, LOG, SIN, COS, ACOS, PI, E).
+
+6. SUMMARY OF MODES
+-------------------
+| Scenario                                    | Result        |
+|---------------------------------------------|---------------|
+| Both operands immediate (normal mode)       | immediate     |
+| At least one operand lazy (normal mode)     | lazy          |
+| Inside ScopedEagerEval block                | immediate     |
+| global_eager_mode = true                    | immediate     |
+
+This design ensures:
+- Optimal performance by default
+- Explicit control over lazy evaluation
+- Easy numerical verification via ScopedEagerEval
+- Predictable, documented behavior

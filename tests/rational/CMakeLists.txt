@@ -5,12 +5,11 @@ add_executable(delta_tests_rational
     main_tests_rational.cpp
     "rational_test.cpp"
     "lazy_test.cpp"
-    "eager_test.cpp"
-#    "batch_test.cpp"
     "interval_test.cpp"
-#    "transcendentals_test.cpp"
-#   "eigen_integration_test.cpp"
-#    "performance_test.cpp"
+    "transcendentals_test.cpp"
+    "eager_test.cpp"
+    "batch_test.cpp"
+    "performance_test.cpp"
     )
 
 target_include_directories(delta_tests_rational PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/..)

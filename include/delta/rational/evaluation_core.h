@@ -301,7 +301,6 @@ namespace delta::internal {
         HighPrecFloat den = static_cast<HighPrecFloat>(b.den());
         return num / den;
     }
-
     inline Value to_rational_with_eps(const HighPrecFloat& f, const Value& eps) {
         HighPrecFloat eps_f = to_high_prec(eps);
         if (eps_f <= 0) throw std::domain_error("Epsilon must be positive");
@@ -309,28 +308,18 @@ namespace delta::internal {
         if (digits_needed < 1) digits_needed = 1;
         if (digits_needed > 100) digits_needed = 100;
 
-        // Гарантированно получаем строку без научной нотации
-        std::string s = f.str(0, std::ios_base::fixed);
+        // Теперь передаём нужную точность
+        std::string s = f.str(digits_needed, std::ios_base::fixed);
         size_t dot = s.find('.');
-        std::string integer_part, fractional_part;
-        if (dot == std::string::npos) {
-            integer_part = s;
-            fractional_part = "";
-        }
-        else {
-            integer_part = s.substr(0, dot);
-            fractional_part = s.substr(dot + 1);
-        }
+        std::string integer_part = s.substr(0, dot);
+        std::string fractional_part = s.substr(dot + 1);
 
-        // Обрезаем или дополняем дробную часть до digits_needed
+        // Оставляем только первые digits_needed знаков (они уже там)
         if (fractional_part.size() > static_cast<size_t>(digits_needed)) {
             fractional_part = fractional_part.substr(0, digits_needed);
         }
-        else if (fractional_part.size() < static_cast<size_t>(digits_needed)) {
-            fractional_part.append(digits_needed - fractional_part.size(), '0');
-        }
 
-        // Убираем ведущие нули целой части, сохраняя знак
+        // Убираем ведущие нули целой части (для нормализации)
         bool negative = false;
         if (!integer_part.empty() && integer_part[0] == '-') {
             negative = true;
@@ -347,7 +336,7 @@ namespace delta::internal {
             integer_part = "-" + integer_part;
         }
 
-        // Собираем строку числителя
+        // Формируем числитель
         std::string num_str;
         if (integer_part == "0" || integer_part == "-0") {
             num_str = fractional_part;
@@ -425,12 +414,11 @@ namespace delta::internal {
         HighPrecFloat e_val("2.71828182845904523536028747135266249775724709369995");
         return to_rational_with_eps(e_val, eps);
     }
-
     // ============================================================================
-    // Slow path (exact rational series/Newton)
-    // ============================================================================
+// Slow path (exact rational series/Newton) – based on deprecated rational.h
+// ============================================================================
 
-    // Helper: compute ln(2) with given precision using arctanh(1/3) series
+// Helper: compute ln(2) with given precision using arctanh(1/3) series
     inline Value slow_ln2(const Value& eps) {
         Value one = SmallStorage(absl::int128(1));
         Value three = SmallStorage(absl::int128(3));

@@ -33,12 +33,20 @@ namespace delta::testing {
         Interval a(1.0, 2.0);
         Interval b(0.5, 1.0);
         Interval c = a + b;
-        // Expected [1.5, 3.0] but extended by one ulp outward
+        // Expected theoretical interval [1.5, 3.0]
+        // Due to outward rounding, c.lower() <= 1.5 and c.upper() >= 3.0
         EXPECT_LE(c.lower(), 1.5);
         EXPECT_GE(c.upper(), 3.0);
-        // Check that it contains the theoretical interval.
-        EXPECT_GE(c.lower(), 1.5 - std::numeric_limits<double>::epsilon());
-        EXPECT_LE(c.upper(), 3.0 + std::numeric_limits<double>::epsilon());
+
+        // Additionally, ensure the result is within one ulp of the bounds
+        double lower_bound = 1.5;
+        double upper_bound = 3.0;
+        double next_after_upper = std::nextafter(upper_bound, std::numeric_limits<double>::infinity());
+        double prev_before_lower = std::nextafter(lower_bound, -std::numeric_limits<double>::infinity());
+
+        // The computed interval must be contained in [prev_before_lower, next_after_upper]
+        EXPECT_GE(c.lower(), prev_before_lower);
+        EXPECT_LE(c.upper(), next_after_upper);
     }
 
     // -------------------------------------------------------------------------

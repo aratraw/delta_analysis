@@ -1,4 +1,4 @@
-// include/delta/core/rational.h
+// include/delta/core/rational_deprecated.h
 /**
  * @file rational.h
  * 
