@@ -2,10 +2,12 @@
   "name": "delta-analysis",
   "version": "0.1.0",
   "dependencies": [
+    "abseil",
     "eigen3",
     "fmt",
     "boost-core",
     "boost-multiprecision",
     "gtest",
-    "benchmark"  ]
+    "benchmark"
+  ]
 }
