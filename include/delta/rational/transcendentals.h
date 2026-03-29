@@ -118,4 +118,13 @@ namespace delta {
         return result;
     }
 
+
+    inline Rational pow(const Rational& base, const Rational& exponent, const Rational& eps = default_eps()) {
+        if (internal::global_eager_mode || (base.is_immediate() && exponent.is_immediate())) {
+            return eager_pow(base, exponent, eps);
+        }
+        ExpressionRoot base_root = base.is_lazy() ? ExpressionRoot(base.root_index()) : ExpressionRoot::make_const(base.to_value());
+        ExpressionRoot exp_root = exponent.is_lazy() ? ExpressionRoot(exponent.root_index()) : ExpressionRoot::make_const(exponent.to_value());
+        return Rational::from_lazy_index(base_root.pow(exp_root, eps).root_index());
+    }
 } // namespace delta

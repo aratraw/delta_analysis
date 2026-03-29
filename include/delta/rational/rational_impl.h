@@ -112,6 +112,13 @@ namespace delta {
         return Rational(res);
     }
 
+    inline Rational eager_pow(const Rational& base, const Rational& exponent, const Rational& eps) {
+        internal::Value vbase = base.to_value();
+        internal::Value vexp = exponent.to_value();
+        internal::Value veps = eps.to_value();
+        internal::Value res = internal::eager_pow(vbase, vexp, veps);
+        return Rational(res);
+    }
     // ----------------------------------------------------------------------------
     // Constructors
     // ----------------------------------------------------------------------------
@@ -610,5 +617,13 @@ namespace delta {
 
     inline void set_default_eps(const Rational& eps) {
         internal::default_eps_value = eps.to_value();
+    }
+    inline double Rational::to_double() const {
+        return internal::to_double(to_value());
+    }
+
+    inline ExpressionRoot ExpressionRoot::pow(const ExpressionRoot& exponent, const Rational& eps) const {
+        internal::Value eps_val = eps.to_value();
+        return make_binary_with_eps(internal::LazyOp::POW, *this, exponent, eps_val);
     }
 } // namespace delta

@@ -53,7 +53,7 @@ namespace delta::internal {
     enum class LazyOp : uint8_t {
         CONST, ADD, MUL, NEG, RECIP,
         SQRT, EXP, LOG, SIN, COS, ACOS,
-        PI, E
+        PI, E, POW
     };
 
     // ----------------------------------------------------------------------------
@@ -92,6 +92,15 @@ namespace delta::internal {
         bool operator==(const UnaryKey&) const = default;
     };
 
+    // Ключ для тернарных операций (например, POW с eps)
+    struct TernaryKey {
+        LazyOp op;
+        int32_t left;
+        int32_t right;
+        int32_t value_idx;
+        bool operator==(const TernaryKey&) const = default;
+    };
+
     // Хешеры с использованием absl::HashOf
     struct BinaryKeyHash {
         size_t operator()(const BinaryKey& k) const {
@@ -105,6 +114,12 @@ namespace delta::internal {
         }
     };
 
+    struct TernaryKeyHash {
+        size_t operator()(const TernaryKey& k) const {
+            return absl::HashOf(k.op, k.left, k.right, k.value_idx);
+        }
+    };
+
     // ----------------------------------------------------------------------------
     // NodePool – thread‑local пул узлов и значений
     // ----------------------------------------------------------------------------
@@ -114,6 +129,7 @@ namespace delta::internal {
         absl::flat_hash_map<Value, int> value_cache;
         absl::flat_hash_map<BinaryKey, int, BinaryKeyHash> binary_cache;
         absl::flat_hash_map<UnaryKey, int, UnaryKeyHash> unary_cache;
+        absl::flat_hash_map<TernaryKey, int, TernaryKeyHash> ternary_cache; // для POW
     };
 
     inline thread_local NodePool pool;
@@ -124,7 +140,9 @@ namespace delta::internal {
     int add_value(const Value& v);
     int add_const(const Value& v);
     int get_binary_node(LazyOp op, int left, int right);
+    int get_binary_node(LazyOp op, int left, int right, int value_idx); // устаревшая, не использовать для POW
     int get_unary_node(LazyOp op, int child, int value_idx = -1);
+    int get_pow_node(int left, int right, int value_idx);                // специально для POW
     Interval compute_interval(LazyOp op, const Interval& a, const Interval& b = Interval());
     uint64_t combine_hash(LazyOp op, uint64_t h0, uint64_t h1 = 0, int64_t extra = 0);
     uint64_t compute_hash_const(const Value& v);
@@ -174,6 +192,45 @@ namespace delta::internal {
         int idx = static_cast<int>(pool.nodes.size());
         pool.nodes.push_back(node);
         pool.binary_cache[key] = idx;
+        return idx;
+    }
+
+    // ВНИМАНИЕ: эта перегрузка не использует value_idx в ключе,
+    // поэтому не подходит для операций, где value_idx влияет на семантику (например, POW).
+    // Для POW используйте get_pow_node.
+    inline int get_binary_node(LazyOp op, int left, int right, int value_idx) {
+        if (op == LazyOp::ADD || op == LazyOp::MUL) {
+            if (pool.nodes[left].hash > pool.nodes[right].hash)
+                std::swap(left, right);
+            else if (pool.nodes[left].hash == pool.nodes[right].hash && left > right)
+                std::swap(left, right);
+        }
+        BinaryKey key{ op, left, right };
+        auto it = pool.binary_cache.find(key);
+        if (it != pool.binary_cache.end()) return it->second;
+
+        int depth = 1 + std::max(pool.nodes[left].depth, pool.nodes[right].depth);
+        Interval approx = compute_interval(op, pool.nodes[left].approx, pool.nodes[right].approx);
+        uint64_t hash = combine_hash(op, pool.nodes[left].hash, pool.nodes[right].hash, value_idx);
+        Node node(op, left, right, value_idx, depth, approx, hash);
+        int idx = static_cast<int>(pool.nodes.size());
+        pool.nodes.push_back(node);
+        pool.binary_cache[key] = idx;
+        return idx;
+    }
+
+    inline int get_pow_node(int left, int right, int value_idx) {
+        TernaryKey key{ LazyOp::POW, left, right, value_idx };
+        auto it = pool.ternary_cache.find(key);
+        if (it != pool.ternary_cache.end()) return it->second;
+
+        int depth = 1 + std::max(pool.nodes[left].depth, pool.nodes[right].depth);
+        Interval approx = compute_interval(LazyOp::POW, pool.nodes[left].approx, pool.nodes[right].approx);
+        uint64_t hash = combine_hash(LazyOp::POW, pool.nodes[left].hash, pool.nodes[right].hash, value_idx);
+        Node node(LazyOp::POW, left, right, value_idx, depth, approx, hash);
+        int idx = static_cast<int>(pool.nodes.size());
+        pool.nodes.push_back(node);
+        pool.ternary_cache[key] = idx;
         return idx;
     }
 
@@ -249,6 +306,12 @@ namespace delta::internal {
         }
         case LazyOp::PI:   return Interval(M_PI);
         case LazyOp::E:    return Interval(M_E);
+        case LazyOp::POW: {
+            // Грубая оценка: для положительных оснований
+            double lo = std::pow(a.lower(), b.lower());
+            double hi = std::pow(a.upper(), b.upper());
+            return Interval(lo, hi);
+        }
         default: return Interval();
         }
     }

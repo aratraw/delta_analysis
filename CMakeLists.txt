@@ -96,7 +96,6 @@ add_subdirectory("tests/rational")
 #add_subdirectory("tests/calculus")
 #add_subdirectory("tests/regulative_ideas")
 #add_subdirectory("tests/geometry")
-
 #add_subdirectory("tests/numerical")
 #add_subdirectory("tests/solvers")
 #add_subdirectory("examples/arbitrary_regulative_ideas")

@@ -391,3 +391,197 @@ This design ensures:
 - Explicit control over lazy evaluation
 - Easy numerical verification via ScopedEagerEval
 - Predictable, documented behavior
+
+---
+NEW LESSONS FROM THE TRENCHES (ADDED AFTER THE GREAT CUBE ROOT DEBACLE)
+========================================================================
+
+LESSON 13: FAST PATH IS NOT ALWAYS ACCURATE – KNOW YOUR OPERATION'S CONDITION NUMBER
+-------------------------------------------------------------------------------------
+The Disaster:
+    For eps = 1e-30, fast_nth_root using cpp_dec_float_100 gave insufficient precision
+    for cube root (n=3). 1/3 is not exactly representable in binary, and pow(fx, 1/n)
+    accumulates error. The result had error ~1e-19, while required was 1e-28.
+
+The Fix:
+    - Use fast path (through cpp_dec_float_100) ONLY for square root (n=2), where 1/2 is exact.
+    - For n>2, always use Newton's method with rational arithmetic, regardless of eps.
+
+Golden Rule:
+    Never assume that a floating-point approximation of a transcendental operation
+    meets a user-specified epsilon without rigorous error analysis. When in doubt,
+    use the exact (slow) path. Speed is worthless if the answer is wrong.
+
+LESSON 14: INFINITE SERIES MUST NOT BE CUT OFF BY AN ARBITRARY ITERATION LIMIT
+-------------------------------------------------------------------------------
+The Disaster:
+    slow_exp, slow_log, slow_sin, slow_cos, slow_pi had const size_t max_iter = 10000.
+    For eps = 1e-30 and certain arguments, convergence may require >10000 terms.
+    The loop would stop by limit, not by precision, giving wrong result.
+
+The Fix:
+    Remove max_iter entirely, rely solely on is_less(term, eps). Add a safety guard only
+    to detect divergence, not to limit convergence.
+
+Golden Rule:
+    A series that converges to a limit must be allowed to run until the desired precision
+    is achieved, not until a hardcoded iteration count. Respect the user's epsilon.
+
+LESSON 15: DO NOT HARDCODE EXPECTED VALUES IN TESTS FOR TRANSCENDENTAL FUNCTIONS
+---------------------------------------------------------------------------------
+The Disaster:
+    Test EagerPowHighPrecision used a hardcoded Rational constant for 5^(1/3) with only
+    19 decimal digits of precision. The actual result had 1e-19 error, but required
+    tolerance was 1e-28. The test failed because the "expected" value was not accurate enough.
+
+The Fix:
+    Compute the expected value on the fly inside the test using a high‑precision
+    floating‑point library (boost::multiprecision::cpp_dec_float_100) with 100 digits,
+    then convert to Rational via string. This guarantees the reference is more accurate
+    than the tolerance.
+
+Golden Rule:
+    For tests of transcendental functions, never hardcode decimal approximations.
+    Either compute the reference using a trusted high‑precision library, or use
+    relative tolerances with a precomputed high‑accuracy value (100+ digits).
+
+LESSON 16: FUNCTIONS MUST RESPECT THE REQUESTED EPSILON – NOT BE TOO PRECISE, NOT TOO ROUGH
+-------------------------------------------------------------------------------------------
+The Disaster:
+    In some earlier function (before this chat), we added an extra safety margin of 5-10 digits
+    when converting from high‑precision float to Rational. This caused a test like:
+        Rational high = sqrt(2, 1e-30);
+        Rational low  = sqrt(2, 1e-2);
+        EXPECT_GT(abs(high - low), 1e-6);
+    to fail because low was computed with far higher precision than requested (due to extra digits).
+    The test expected a difference of at least 1e-6, but got a difference of ~1e-30 because
+    both calls returned essentially the same high‑precision result.
+
+The Fix:
+    Remove any artificial extra precision in the fast path. The parameter eps must be the
+    target error bound, not a lower bound. If the user asks for 1e-2, we must compute with
+    error ≈ 1e-2, not 1e-30. Extra digits may be added only for internal guarding, but the
+    final result must be rounded/truncated to the requested tolerance.
+
+Golden Rule:
+    A function that accepts an epsilon parameter must return a result whose error is
+    *at most* epsilon, but also not *much less* than epsilon if that would violate
+    the expected behavior (e.g., when testing that lower precision is faster or yields
+    a different value). Always respect the user's precision request.
+
+LESSON 17: HYBRID THRESHOLD MUST BE ADJUSTED PER OPERATION, NOT GLOBAL
+-----------------------------------------------------------------------
+The Disaster:
+    HYBRID_THRESHOLD = 1e-35 was chosen globally. For sqrt, fast path with cpp_dec_float_100
+    is accurate even for eps=1e-30. For cbrt, it is not. A single threshold cannot serve
+    all operations.
+
+The Fix:
+    Make the decision per operation:
+        - sqrt: use fast path if to_double(eps) >= 1e-35 (safe)
+        - nth_root (n>2): never use fast path (or only for very large eps like 1e-10)
+        - exp/log/sin/cos: fast path with cpp_dec_float_100 is generally safe.
+
+Golden Rule:
+    A global threshold is a code smell. Each transcendental function should have its own
+    heuristic for switching between fast approximate and slow exact paths.
+
+LESSON 18: to_double() ON VERY SMALL RATIONALS CAN BE DENORMAL OR ZERO
+-----------------------------------------------------------------------
+The Disaster:
+    compute_extra_digits calls to_double(eps) to compute log10. For eps = 1e-30,
+    to_double returns ~1e-30 (subnormal) – still fine. But for eps = 1e-100,
+    to_double may underflow to 0.0, causing log10(0) → -inf and extra_digits nonsense.
+
+The Fix:
+    In compute_extra_digits, if eps_double <= 0, return a large safety margin (e.g., 100).
+    Also, avoid relying on to_double for very small eps; use cpp_dec_float_100 to compute
+    digits_needed directly.
+
+Golden Rule:
+    Converting arbitrary‑precision rationals to double is lossy and can underflow/overflow.
+    Use high‑precision arithmetic for decisions that depend on extremely small values.
+
+SUMMARY OF THE LATEST BLOODY DETAILS
+====================================
+- Fast path is not universally accurate; square root is safe, cube root is not.
+- Infinite series must not be limited by arbitrary iteration counts; respect epsilon.
+- Test expectations must be computed with higher precision than the tolerance.
+- Functions must respect the requested epsilon – not too rough, not too precise.
+- Hybrid thresholds must be per operation.
+- Double conversion can underflow for tiny eps; use high‑precision arithmetic.
+- Hardcoded decimals in tests are evil.
+
+These lessons cost another day of debugging but finally made the library robust
+for the full range of eps from 1e-35 to 1e-30 and beyond.
+
+---
+LESSON 19: WHEN COMPOSING FUNCTIONS, PASS A STRICTER EPSILON TO SUBCOMPUTATIONS
+-------------------------------------------------------------------------------
+The Disaster:
+    In eager_pow(base, exp, eps) for rational exponent p/q, we need to compute:
+        result = exp((p/q) * log(base))
+    If we call eager_log(base, eps) and eager_exp(..., eps), the error from log
+    and exp can accumulate. The final error may exceed eps even if each individual
+    function respects eps.
+
+The Fix:
+    Always pass a stricter epsilon to subcomputations:
+        internal_eps = eps / (p * 1000)   (safety factor 1000)
+    Similarly, for nth_root, we call internal functions with eps/1000.
+
+Golden Rule:
+    When a function F(x, eps) calls other transcendental functions G(y, eps_internal),
+    eps_internal must be significantly smaller than eps (e.g., eps / 1000 or eps / (p*1000)).
+    The safety factor should account for:
+        - Number of composed functions
+        - Magnitude of intermediate values (amplification factors)
+        - Desired final error bound
+    Never pass the same eps to subcomputations, or the final error will be ~ n * eps,
+    potentially exceeding the user's tolerance.
+
+Example from our code:
+    Value internal_eps = eager_div(eps, SmallStorage(1000));
+    Value log_base = eager_log(base, internal_eps);
+    Value result = eager_exp(p_log_div_q, internal_eps);
+
+This ensures that the final error is dominated by the outermost approximation,
+not by the accumulation of inner errors.
+
+Consequence for users:
+    The library may be slightly slower when computing composed functions because
+    it asks for higher precision internally. This is intentional and correct.
+---
+LESSON 20: WHEN IN DOUBT – USE COUT (AND TO_STRING, NEVER TO_DOUBLE)
+---------------------------------------------------------------------
+The Disaster:
+    For hours (or days), we stared at failing tests for pow(5, 1/3) with eps=1e-30.
+    We tried to infer from error messages, from EXPECT_LE output, from to_double()
+    conversions. Nothing made sense because to_double() hid the true precision
+    (both values printed the same in double: 1.7099759466766970561).
+
+The Fix:
+    Finally, we added:
+        std::cout << "val = " << delta::to_string(val) << "\n";
+        std::cout << "expected = " << delta::to_string(expected) << "\n";
+        std::cout << "diff = " << delta::to_string(diff) << "\n";
+    And immediately saw the truth: expected had only 19 decimal digits,
+    while val had hundreds. The test was comparing a high‑precision result
+    against a low‑precision hardcoded constant.
+
+Golden Rule:
+    When debugging numerical code, never trust:
+        - Debugger watch windows (they often truncate)
+        - Implicit conversions to double (they lose precision)
+        - EXPECT_EQ / EXPECT_LE output from test frameworks (they show truncated hex dumps)
+    Instead:
+        - Print full rational values using to_string()
+        - Print with high precision: std::setprecision(20) if using double
+        - For containers, dump key elements with full precision
+    cout (or any stream) with to_string() is your magnifying glass.
+    Use it liberally, then remove or guard with #ifdef DEBUG.
+
+Corollary:
+    If a test fails and you cannot see why, the first step is not to change the algorithm.
+    The first step is to print the actual values in their full glory.
+    You cannot fix what you cannot see.

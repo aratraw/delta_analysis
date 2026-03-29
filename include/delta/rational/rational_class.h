@@ -46,6 +46,9 @@ namespace delta {
         Rational& operator=(Rational&&) = default;
         ~Rational() = default;
 
+        //вывод в double
+        double to_double() const;
+
         // Состояние
         bool is_immediate() const noexcept;
         bool is_lazy() const noexcept;

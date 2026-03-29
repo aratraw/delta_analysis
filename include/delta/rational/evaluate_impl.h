@@ -26,6 +26,7 @@ namespace delta::internal {
         case LazyOp::ACOS:  return eager_acos(left, eps);
         case LazyOp::PI:    return eager_pi(eps);
         case LazyOp::E:     return eager_e(eps);
+        case LazyOp::POW:   return eager_pow(left, right, eps);
         default:
             throw std::logic_error("compute_node: unknown LazyOp");
         }

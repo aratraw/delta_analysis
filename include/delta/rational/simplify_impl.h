@@ -217,6 +217,72 @@ namespace delta::internal {
                         new_idx = add_const(Value(SmallStorage(1)));
                 }
             }
+            else if (node.op == LazyOp::POW) {
+                // Структурные правила
+                if (is_const1 && is_one(values[nodes[child1_simp].value_idx]))
+                    new_idx = child0_simp;                          // x^1 → x
+                else if (is_const1 && is_zero(values[nodes[child1_simp].value_idx]))
+                    new_idx = add_const(Value(SmallStorage(1)));   // x^0 → 1
+                else if (is_const0 && is_one(values[nodes[child0_simp].value_idx]))
+                    new_idx = add_const(Value(SmallStorage(1)));   // 1^y → 1
+                else if (is_const0 && is_zero(values[nodes[child0_simp].value_idx]) && is_positive(values[nodes[child1_simp].value_idx]))
+                    new_idx = add_const(Value(SmallStorage(0)));   // 0^positive → 0
+                // НОВОЕ ПРАВИЛО: x^(1/2) → sqrt(x)
+                else if (is_const1) {
+                    const Value& exp_val = values[nodes[child1_simp].value_idx];
+                    Value one = SmallStorage(1);
+                    Value two = SmallStorage(2);
+                    Value half = eager_div(one, two);
+                    if (exp_val == half) {
+                        int sqrt_node = get_unary_node(LazyOp::SQRT, child0_simp, node.value_idx);
+                        simplified_idx[idx] = sqrt_node;
+                        st.pop();
+                        continue;
+                    }
+                }
+                // Дополнительные упрощения (можно расширять):
+                // (a^b)^c → a^(b*c) если a > 0 или показатели целые
+                else if (child0_simp != -1 && nodes[child0_simp].op == LazyOp::POW &&
+                    nodes[child0_simp].value_idx == -1) {
+                    // Внутренний POW не имеет своего eps (т.е. это не POW с eps, а просто степень)
+                    int a = nodes[child0_simp].child0;
+                    int b = nodes[child0_simp].child1;
+                    int c = child1_simp;
+                    // Проверяем, что b и c константы (целые)
+                    if (b != -1 && c != -1 && nodes[b].op == LazyOp::CONST && nodes[c].op == LazyOp::CONST) {
+                        Value vb = values[nodes[b].value_idx];
+                        Value vc = values[nodes[c].value_idx];
+                        // Пока упрощаем только для целых показателей (чтобы избежать сложностей)
+                        bool b_int = false, c_int = false;
+                        if (const auto* sb = std::get_if<SmallStorage>(&vb)) {
+                            SmallStorage sb_norm = *sb;
+                            sb_norm.normalize();
+                            if (sb_norm.den == 1) b_int = true;
+                        }
+                        else if (const auto* bb = std::get_if<BigStorage>(&vb)) {
+                            if (bb->den() == 1) b_int = true;
+                        }
+                        if (const auto* sc = std::get_if<SmallStorage>(&vc)) {
+                            SmallStorage sc_norm = *sc;
+                            sc_norm.normalize();
+                            if (sc_norm.den == 1) c_int = true;
+                        }
+                        else if (const auto* bc = std::get_if<BigStorage>(&vc)) {
+                            if (bc->den() == 1) c_int = true;
+                        }
+                        if (b_int && c_int) {
+                            Value vprod = eager_mul(vb, vc);
+                            int prod_idx = add_const(vprod);
+                            // Создаём новый узел a^(b*c) с тем же eps, что и у внешнего POW
+                            int new_pow = get_pow_node(a, prod_idx, node.value_idx);
+                            simplified_idx[idx] = new_pow;
+                            st.pop();
+                            continue;
+                        }
+                    }
+                }
+                // a^(b+c) → a^b * a^c, если b и c константы (можно добавить позже)
+            }
 
             if (new_idx != idx) {
                 simplified_idx[idx] = new_idx;
@@ -224,20 +290,29 @@ namespace delta::internal {
                 continue;
             }
 
-            // 2. Constant folding для бинарных операций (только ADD и MUL)
-            if (is_const0 && is_const1 && is_algebraic(node.op)) {
-                Value left = values[nodes[child0_simp].value_idx];
-                Value right = values[nodes[child1_simp].value_idx];
-                Value eps = node.value_idx != -1 ? values[node.value_idx] : Value{};
-                Value const_result = compute_node(node.op, left, right, eps);
-                int const_node = add_const(const_result);
-                simplified_idx[idx] = const_node;
-                st.pop();
-                continue;
+            // 2. Constant folding для бинарных операций
+            if (is_const0 && is_const1) {
+                // Для ADD и MUL используем compute_node, для POW тоже, но с осторожностью
+                if (node.op == LazyOp::ADD || node.op == LazyOp::MUL || node.op == LazyOp::POW) {
+                    Value left = values[nodes[child0_simp].value_idx];
+                    Value right = values[nodes[child1_simp].value_idx];
+                    Value eps = node.value_idx != -1 ? values[node.value_idx] : Value{};
+                    Value const_result = compute_node(node.op, left, right, eps);
+                    int const_node = add_const(const_result);
+                    simplified_idx[idx] = const_node;
+                    st.pop();
+                    continue;
+                }
             }
 
             // 3. Ничего не упростилось – создаём новый узел
-            int new_binary = get_binary_node(node.op, child0_simp, child1_simp);
+            int new_binary;
+            if (node.op == LazyOp::POW) {
+                new_binary = get_pow_node(child0_simp, child1_simp, node.value_idx);
+            }
+            else {
+                new_binary = get_binary_node(node.op, child0_simp, child1_simp);
+            }
             simplified_idx[idx] = new_binary;
             st.pop();
         }

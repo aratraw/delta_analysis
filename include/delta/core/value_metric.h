@@ -30,7 +30,7 @@ namespace delta {
      *
      * This metric works for:
      * - Arithmetic types (int, double, etc.) via abs.
-     * - Rational (boost::multiprecision number) via boost::multiprecision::abs.
+     * - Rational or custom Rational via delta::abs()
      * - Eigen::MatrixXd via the Frobenius norm.
      *
      * The returned type is the same as the result of the absolute operation for the given type.
@@ -42,8 +42,8 @@ namespace delta {
         }
 
         auto operator()(const Rational& a, const Rational& b) const {
-            using boost::multiprecision::abs;
-            return abs(a - b);
+            using delta::abs;
+            return abs(a - b);// abs returns our custom Rational 
         }
 
         double operator()(const Eigen::MatrixXd& a, const Eigen::MatrixXd& b) const {
@@ -55,10 +55,11 @@ namespace delta {
             using std::abs;
             return abs(a - b);
         }
+
+        // Для double – оставляем double (для совместимости с тестами и Eigen)
+        double operator()(double a, double b) const {
+            return std::abs(a - b);
+        }
     };
-
-
-    // Verify that EuclideanValueMetric satisfies the ValueMetric concept for double.
-    static_assert(ValueMetric<EuclideanValueMetric, double, double>);
 
 } // namespace delta

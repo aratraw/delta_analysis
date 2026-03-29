@@ -54,6 +54,15 @@ namespace delta {
             return ExpressionRoot(node_idx);
         }
 
+        //generally for POW
+        static ExpressionRoot make_binary_with_eps(internal::LazyOp op, const ExpressionRoot& left,
+            const ExpressionRoot& right, const internal::Value& eps) {
+            int val_idx = internal::add_value(eps);
+            int left_idx = left.root_index();
+            int right_idx = right.root_index();
+            int node_idx = internal::get_binary_node(op, left_idx, right_idx, val_idx);
+            return ExpressionRoot(node_idx);
+        }
         // ------------------------------------------------------------------------
         // Арифметические операции
         // ------------------------------------------------------------------------
@@ -81,6 +90,7 @@ namespace delta {
             return make_unary(internal::LazyOp::RECIP, *this);
         }
 
+        ExpressionRoot pow(const ExpressionRoot& exponent, const Rational& eps) const;
         // ------------------------------------------------------------------------
         // Трансцендентные функции и константы (объявления)
         // ------------------------------------------------------------------------
@@ -90,6 +100,7 @@ namespace delta {
         ExpressionRoot sin(const Rational& eps) const;
         ExpressionRoot cos(const Rational& eps) const;
         ExpressionRoot acos(const Rational& eps) const;
+ 
 
         static ExpressionRoot pi(const Rational& eps);
         static ExpressionRoot e(const Rational& eps);

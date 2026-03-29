@@ -414,11 +414,11 @@ namespace delta::testing {
         }
 
         void TearDown() override {
-            delta::default_eps_value() = old_precision_;
+            delta::default_eps() = old_precision_;
         }
 
         static void set_precision(const Rational& eps) {
-            delta::default_eps_value() = eps;
+            delta::default_eps() = eps;
         }
 
     private:
