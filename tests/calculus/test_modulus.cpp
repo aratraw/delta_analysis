@@ -1,7 +1,7 @@
 // tests/calculus/test_modulus.cpp
 #include <gtest/gtest.h>
-#include <cmath>
 #include "test_fixtures.h"
+#include "delta/rational/transcendentals.h"   // delta::sqrt, delta::abs, delta::pow, delta::log
 
 namespace delta::testing {
 
@@ -24,7 +24,7 @@ namespace delta::testing {
         // test the Rational version
         PowerModulus<Rational> mod_r(2_r, Rational(3, 2)); // 2 * delta^1.5
         // we expect approximate equality
-        EXPECT_NEAR(mod_r(4_r).convert_to<double>(), 2.0 * std::pow(4.0, 1.5), 1e-12);
+        EXPECT_NEAR(mod_r(4_r).to_double(), 2.0 * std::pow(4.0, 1.5), 1e-12);
     }
 
     /**
@@ -33,7 +33,7 @@ namespace delta::testing {
     TEST_F(ModulusTest, LogarithmicModulus) {
         LogarithmicModulus<double> mod(1.0, 2.0);
         double delta = 0.1;
-        double expected = 1.0 / std::pow(abs(std::log(delta)), 2.0);
+        double expected = 1.0 / std::pow(std::abs(std::log(delta)), 2.0);
         EXPECT_NEAR(mod(delta), expected, 1e-12);
         EXPECT_TRUE(std::isinf(mod(0.0)));
     }
@@ -82,7 +82,7 @@ namespace delta::testing {
 
         for (int n = 0; n < 5; ++n) {
             const auto& grid = path_->current_grid();
-            bool ok = check_continuity_level(grid, func, vm, mod, 1e-12);
+            bool ok = check_continuity_level(grid, func, vm, mod, Rational(1, 1000000000000));
             EXPECT_TRUE(ok) << "Failed at level " << n;
             if (n < 4) path_->advance(func);
         }
@@ -99,7 +99,7 @@ namespace delta::testing {
 
         for (int n = 0; n < 5; ++n) {
             const auto& grid = path_->current_grid();
-            bool ok = check_continuity_level(grid, func, vm, mod, 1e-12);
+            bool ok = check_continuity_level(grid, func, vm, mod, Rational(1, 1000000000000));
             EXPECT_TRUE(ok) << "Failed at level " << n;
             if (n < 4) path_->advance(func);
         }
@@ -109,9 +109,9 @@ namespace delta::testing {
      * @test Square root function f(x)=√x (Hölder with α=0.5).
      */
     TEST_F(ContinuityModulusTest, SqrtWithHolderModulus) {
+        ScopedEagerEval eager;
         auto func = [](const Addr& x) -> Rational {
-            double val = std::sqrt(x.convert_to<double>());
-            return Rational(static_cast<int64_t>(val * 1e12), 1e12); // approximation
+            return delta::sqrt(x);   // use exact rational sqrt with default eps
             };
         ValMetric vm;
 
@@ -119,7 +119,7 @@ namespace delta::testing {
 
         for (int n = 0; n < 10; ++n) {
             const auto& grid = path_->current_grid();
-            bool ok = check_continuity_level(grid, func, vm, mod, 1e-6);
+            bool ok = check_continuity_level(grid, func, vm, mod, Rational(1, 1000000));
             EXPECT_TRUE(ok) << "Failed at level " << n;
             if (n < 9) path_->advance(func);
         }
@@ -129,9 +129,9 @@ namespace delta::testing {
      * @test Square root with a linear modulus should fail.
      */
     TEST_F(ContinuityModulusTest, SqrtFailsWithLinearModulus) {
+        ScopedEagerEval eager;
         auto func = [](const Addr& x) -> Rational {
-            double val = std::sqrt(x.convert_to<double>());
-            return Rational(static_cast<int64_t>(val * 1e12), 1e12);
+            return delta::sqrt(x);
             };
         ValMetric vm;
 
@@ -140,7 +140,7 @@ namespace delta::testing {
         bool all_ok = true;
         for (int n = 0; n < 10; ++n) {
             const auto& grid = path_->current_grid();
-            bool ok = check_continuity_level(grid, func, vm, mod, 1e-6);
+            bool ok = check_continuity_level(grid, func, vm, mod, Rational(1, 1000000));
             if (!ok) all_ok = false;
             if (n < 9) path_->advance(func);
         }
@@ -203,8 +203,7 @@ namespace delta::testing {
         ListGrid<Addr, Compare> grid0({ -1_r, 0_r, 1_r });
         auto path = make_midpoint_path(grid0);
         auto func = [](const Addr& x) -> Rational {
-            double xd = x.convert_to<double>();
-            return Rational(static_cast<int64_t>(abs(xd) * 1e12), 1e12);
+            return delta::abs(x);
             };
 
         std::vector<ListGrid<Addr, Compare>> grids;

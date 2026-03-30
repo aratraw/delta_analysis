@@ -65,7 +65,7 @@ namespace delta::calculus {
         Distance max_osc = max_oscillation(grid, std::forward<Func>(func), vm);
         Distance delta_n = max_gap(grid);
         Distance bound = modulus(delta_n);
-        Distance tol = Distance(tolerance); // преобразуем tolerance в Distance (работает благодаря добавленному конструктору)
+        Distance tol = tolerance;
         return max_osc <= bound + tol;
     }
 

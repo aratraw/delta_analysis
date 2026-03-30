@@ -36,7 +36,7 @@ namespace delta::testing {
         for (std::size_t n = 0; n < levels; ++n) {
             result.push_back(left);
             Rational mid = (left + right) / 2;
-            if (mid.convert_to<double>() <= target) {
+            if (mid.to_double() <= target) {
                 left = mid;
             }
             else {
@@ -73,8 +73,8 @@ namespace delta::testing {
         for (std::size_t i = 1; i < seq_vals.size(); ++i) {
             Rational diff = seq_vals[i] - seq_vals[i - 1];
             if (diff < 0) diff = -diff;
-            double expected_max = 2.0 / pow2(i).convert_to<double>();
-            EXPECT_LE(diff.convert_to<double>(), expected_max + 1e-12);
+            double expected_max = 2.0 / pow2(i).to_double();
+            EXPECT_LE(diff.to_double(), expected_max + 1e-12);
         }
 
         // Create a sequence of right endpoints (left + interval length)

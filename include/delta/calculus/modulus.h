@@ -6,7 +6,9 @@
 #include <type_traits>
 #include <cstddef>
 #include <limits>
+#include <stdexcept>
 #include "delta/core/rational.h"
+#include "delta/rational/transcendentals.h"
 
 namespace delta::calculus {
 
@@ -114,7 +116,6 @@ namespace delta::calculus {
          * @return Rational approximation of C * δ^α.
          */
         Rational operator()(Rational delta) const {
-            //SHOULD MAYBE REWRITE IT TO ACTUALLY USE RATIONAL WHEN TESTS SETTLE??
             double d = delta.to_double();
             double a = alpha_.to_double();
             double c = C_.to_double();
@@ -153,6 +154,7 @@ namespace delta::calculus {
             if (delta <= 0) return std::numeric_limits<T>::infinity();
             using std::log;
             using std::pow;
+            using std::abs;
             return C_ / pow(abs(log(delta)), p_);
         }
 
@@ -160,8 +162,29 @@ namespace delta::calculus {
         T C_, p_;
     };
 
-    // A Rational specialisation of LogarithmicModulus can be added if needed.
-    // TOTALLY IS NEEDED. AFTER TESTS SETTLE, LEAVE FULLY DOUBLE SPEC AS LEGACY REDUNDANT CODE FOR GOOD MEASURE
-    // BUT IMPLEMENT RATIONAL SPEC AND USE IT WHERE NEEDED INSTEAD OF PETTY DOUBLE.
+    /**
+     * @brief Specialisation of LogarithmicModulus for Rational.
+     *
+     * Uses rational transcendental functions from delta:: namespace
+     * (log, abs, pow) with default epsilon.
+     */
+    template<>
+    class LogarithmicModulus<Rational> {
+    public:
+        LogarithmicModulus(Rational C, Rational p) : C_(C), p_(p) {}
+
+        Rational operator()(Rational delta) const {
+            if (delta <= 0) {
+                throw std::domain_error("LogarithmicModulus: delta must be positive");
+            }
+            Rational log_delta = delta::log(delta);
+            Rational abs_log = delta::abs(log_delta);
+            Rational pow_log = delta::pow(abs_log, p_);
+            return C_ / pow_log;
+        }
+
+    private:
+        Rational C_, p_;
+    };
 
 } // namespace delta::calculus

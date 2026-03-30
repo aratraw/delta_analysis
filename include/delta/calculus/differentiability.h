@@ -7,9 +7,10 @@
 #include <stdexcept>
 #include "modulus.h"
 #include "delta/core/regulative_idea.h"
+#include "delta/core/rational.h"
 
 namespace delta::calculus {
-
+    using delta::abs;
     /**
      * @brief Find the index of an address in a grid.
      *
@@ -127,9 +128,10 @@ namespace delta::calculus {
             Distance bound = modulus(delta_n);   // modulus must return a Distance
 
             // Convert to double for tolerance comparison
-            double left_error = abs((left_dq - D).template convert_to<double>());
-            double right_error = abs((right_dq - D).template convert_to<double>());
-            double bound_d = bound.template convert_to<double>();
+            // А НЕ КОСТЫЛЬНО ЛИ ЗДЕСЬ ИСПОЛЬЗОВАТЬ ДАБЛЫ ДЛЯ СЕРЬЁЗНОЙ РАЦИОНАЛЬНОЙ БИБЛИОТЕКИ-ТО?
+            double left_error = delta::abs(left_dq - D).to_double();
+            double right_error = delta::abs(right_dq - D).to_double();
+            double bound_d = bound.to_double();
 
             if (left_error > bound_d + tolerance || right_error > bound_d + tolerance) {
                 return false;

@@ -191,50 +191,63 @@ namespace delta {
             else {
                 std::string int_part = s.substr(0, dot);
                 std::string frac_part = s.substr(dot + 1);
+                // Если дробная часть пустая (случай "123.") — считаем её "0"
                 if (frac_part.empty()) frac_part = "0";
                 size_t decimal_places = frac_part.length();
-                std::string frac_trimmed = frac_part;
-                size_t first_nonzero = frac_trimmed.find_first_not_of('0');
-                if (first_nonzero != std::string::npos)
-                    frac_trimmed = frac_trimmed.substr(first_nonzero);
-                else
-                    frac_trimmed = "0";
-                std::string num_str;
-                if (int_part == "0" || int_part.empty()) {
-                    num_str = frac_trimmed;
+
+                // Обрабатываем знак
+                bool negative = false;
+                if (!int_part.empty() && int_part[0] == '-') {
+                    negative = true;
+                    int_part = int_part.substr(1);
+                }
+
+                // Удаляем ведущие нули из целой части (но не из дробной)
+                if (int_part.empty()) int_part = "0";
+                size_t int_start = int_part.find_first_not_of('0');
+                if (int_start != std::string::npos) int_part = int_part.substr(int_start);
+                else int_part = "0";
+
+                // Формируем числитель как целую часть + дробную часть
+                std::string numerator_str = int_part + frac_part;
+
+                // Удаляем ведущие нули из объединённой строки (кроме случая, когда она вся нули)
+                size_t num_start = numerator_str.find_first_not_of('0');
+                if (num_start != std::string::npos) {
+                    numerator_str = numerator_str.substr(num_start);
                 }
                 else {
-                    bool negative = false;
-                    if (!int_part.empty() && int_part[0] == '-') {
-                        negative = true;
-                        int_part = int_part.substr(1);
-                    }
-                    num_str = int_part + frac_trimmed;
-                    size_t num_start = num_str.find_first_not_of('0');
-                    if (num_start != std::string::npos)
-                        num_str = num_str.substr(num_start);
-                    if (negative) num_str = "-" + num_str;
+                    numerator_str = "0";
                 }
-                if (num_str.empty() || num_str == "0") num_str = "0";
-                boost::multiprecision::cpp_int den = 1;
-                for (size_t i = 0; i < decimal_places; ++i) den *= 10;
-                boost::multiprecision::cpp_int num(num_str);
-                boost::multiprecision::cpp_int g = boost::multiprecision::gcd(num, den);
-                num /= g; den /= g;
-                if (num <= internal::to_cpp_int((std::numeric_limits<absl::int128>::max)()) &&
-                    den <= internal::to_cpp_int((std::numeric_limits<absl::uint128>::max)())) {
+
+                // Восстанавливаем знак, если число не нуль
+                if (negative && numerator_str != "0") {
+                    numerator_str = "-" + numerator_str;
+                }
+
+                // Знаменатель: 10^(decimal_places)
+                boost::multiprecision::cpp_int denominator = 1;
+                for (size_t i = 0; i < decimal_places; ++i) denominator *= 10;
+
+                boost::multiprecision::cpp_int numerator(numerator_str);
+                boost::multiprecision::cpp_int g = boost::multiprecision::gcd(numerator, denominator);
+                numerator /= g;
+                denominator /= g;
+
+                // Выбираем SmallStorage или BigStorage
+                if (numerator <= internal::to_cpp_int((std::numeric_limits<absl::int128>::max)()) &&
+                    denominator <= internal::to_cpp_int((std::numeric_limits<absl::uint128>::max)())) {
                     storage_ = internal::SmallStorage(
-                        internal::int128_from_string(num.str()),
-                        internal::uint128_from_string(den.str())
+                        internal::int128_from_string(numerator.str()),
+                        internal::uint128_from_string(denominator.str())
                     );
                 }
                 else {
-                    storage_ = internal::BigStorage(num, den);
+                    storage_ = internal::BigStorage(numerator, denominator);
                 }
             }
         }
     }
-
     inline Rational::Rational(internal::Value val) {
         if (std::holds_alternative<internal::SmallStorage>(val)) {
             auto s = std::get<internal::SmallStorage>(std::move(val));

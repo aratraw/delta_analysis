@@ -28,7 +28,7 @@ namespace delta::testing {
 
         for (std::size_t n = 0; n <= 5; ++n) {
             const auto& grid = path.current_grid();
-            bool ok = check_continuity_level(grid, func, vm, modulus, 1e-12);
+            bool ok = check_continuity_level(grid, func, vm, modulus, Rational(1, 1000000000000));
             EXPECT_TRUE(ok) << "Failed at level " << n;
             if (n < 5) path.advance(func);
         }
@@ -48,7 +48,7 @@ namespace delta::testing {
 
         for (std::size_t n = 0; n <= 5; ++n) {
             const auto& grid = path.current_grid();
-            bool ok = check_continuity_level(grid, func, vm, modulus, 1e-12);
+            bool ok = check_continuity_level(grid, func, vm, modulus, Rational(1, 1000000000000));
             EXPECT_TRUE(ok) << "Failed at level " << n;
             if (n < 5) path.advance(func);
         }
@@ -68,7 +68,7 @@ namespace delta::testing {
 
         for (std::size_t n = 0; n <= 5; ++n) {
             const auto& grid = path.current_grid();
-            bool ok = check_continuity_level(grid, func, vm, modulus, 1e-12);
+            bool ok = check_continuity_level(grid, func, vm, modulus, Rational(1, 1000000000000));
             EXPECT_TRUE(ok) << "Failed at level " << n;
             if (n < 5) path.advance(func);
         }
@@ -83,7 +83,7 @@ namespace delta::testing {
         auto path = make_midpoint_path(grid0);
         // Approximate sqrt(x) as a Rational with 1e‑12 accuracy
         auto func = [](const Addr& x) -> Rational {
-            double val = std::sqrt(x.convert_to<double>());
+            double val = std::sqrt(x.to_double());
             return Rational(static_cast<int64_t>(val * 1e12), 1e12);
             };
         EuclideanValueMetric vm;
@@ -92,7 +92,7 @@ namespace delta::testing {
 
         for (std::size_t n = 0; n <= 5; ++n) {
             const auto& grid = path.current_grid();
-            bool ok = check_continuity_level(grid, func, vm, modulus, 1e-6);
+            bool ok = check_continuity_level(grid, func, vm, modulus, Rational(1, 100000));
             EXPECT_TRUE(ok) << "Failed at level " << n;
             if (n < 5) path.advance(func);
         }

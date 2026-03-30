@@ -32,13 +32,12 @@ namespace delta::testing {
      */
     TEST_F(RationalEmbeddingTest, DifferentRepresentationsSameRational) {
         // Constant sequence for 3
-        auto seq1 = std::make_shared<FundamentalSequence>(
-            [](std::size_t) { return 3_r; }, Rational(0), Rational(1, 2), 0);
-
+        auto seq1 = std::make_shared<FundamentalSequence<ExponentialModulus>>(
+            [](std::size_t) { return 3_r; }, ExponentialModulus(Rational(0), Rational(1, 2)), 0);
         // Sequence converging to 3: 3 + 1/2^n
-        auto seq2 = std::make_shared<FundamentalSequence>(
+        auto seq2 = std::make_shared<FundamentalSequence<ExponentialModulus>>(
             [](std::size_t n) { return 3_r + Rational(1) / pow2(n); },
-            Rational(1), Rational(1, 2), 0);
+            ExponentialModulus(Rational(1), Rational(1, 2)), 0);
 
         RealNumber r1(seq1);
         RealNumber r2(seq2);
