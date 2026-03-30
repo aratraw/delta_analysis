@@ -18,6 +18,7 @@
 #include <string>
 #include <variant>
 #include <functional>
+#include <type_traits>
 
 namespace delta {
     // ----------------------------------------------------------------------------
@@ -677,5 +678,70 @@ namespace delta {
     inline ExpressionRoot ExpressionRoot::pow(const ExpressionRoot& exponent, const Rational& eps) const {
         internal::Value eps_val = eps.to_value();
         return make_binary_with_eps(internal::LazyOp::POW, *this, exponent, eps_val);
+    }
+
+    // ----------------------------------------------------------------------------
+    // convert_to<T> functionality
+    // ----------------------------------------------------------------------------
+    template<typename T>
+    inline T Rational::convert_to() const {
+        if constexpr (std::is_same_v<T, double>) {
+            return to_double();
+        }
+        else if constexpr (std::is_same_v<T, int>) {
+            Rational v = eval();
+            if (v.denominator() != 1) {
+                throw std::domain_error("Rational::convert_to<int>: not an integer");
+            }
+            if (auto* s = v.as_small()) {
+                internal::SmallStorage norm = *s;
+                norm.normalize();
+                absl::int128 num = norm.num;
+                if (num < std::numeric_limits<int>::min() || num > std::numeric_limits<int>::max()) {
+                    throw std::overflow_error("Rational::convert_to<int>: value out of int range");
+                }
+                return static_cast<int>(num);
+            }
+            else if (auto* b = v.as_big()) {
+                const auto& num = b->num();
+                if (num > std::numeric_limits<int>::max()) {
+                    throw std::overflow_error("Rational::convert_to<int>: value out of int range (positive)");
+                }
+                if (num < std::numeric_limits<int>::min()) {
+                    throw std::overflow_error("Rational::convert_to<int>: value out of int range (negative)");
+                }
+                return static_cast<int>(num.convert_to<long long>());
+            }
+            throw std::logic_error("Rational::convert_to<int>: invalid state");
+        }
+        else if constexpr (std::is_same_v<T, long long>) {
+            Rational v = eval();
+            if (v.denominator() != 1) {
+                throw std::domain_error("Rational::convert_to<long long>: not an integer");
+            }
+            if (auto* s = v.as_small()) {
+                internal::SmallStorage norm = *s;
+                norm.normalize();
+                absl::int128 num = norm.num;
+                if (num < std::numeric_limits<long long>::min() || num > std::numeric_limits<long long>::max()) {
+                    throw std::overflow_error("Rational::convert_to<long long>: value out of long long range");
+                }
+                return static_cast<long long>(num);
+            }
+            else if (auto* b = v.as_big()) {
+                const auto& num = b->num();
+                if (num > std::numeric_limits<long long>::max()) {
+                    throw std::overflow_error("Rational::convert_to<long long>: value out of range (positive)");
+                }
+                if (num < std::numeric_limits<long long>::min()) {
+                    throw std::overflow_error("Rational::convert_to<long long>: value out of range (negative)");
+                }
+                return static_cast<long long>(num.convert_to<long long>());
+            }
+            throw std::logic_error("Rational::convert_to<long long>: invalid state");
+        }
+        else {
+            static_assert(sizeof(T) == 0, "convert_to not supported for this type");
+        }
     }
 } // namespace delta

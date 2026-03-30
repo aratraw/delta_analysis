@@ -49,6 +49,10 @@ namespace delta {
         //вывод в double
         double to_double() const;
 
+        /// Convert to arithmetic type T (int, double, etc.)
+        template<typename T>
+        T convert_to() const;
+
         // Состояние
         bool is_immediate() const noexcept;
         bool is_lazy() const noexcept;

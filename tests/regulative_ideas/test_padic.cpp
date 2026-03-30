@@ -67,7 +67,7 @@ namespace delta::testing {
         PowerModulus<Rational> modulus(0_r, 1_r);
         for (int n = 0; n < 5; ++n) {
             const auto& grid = path_->current_grid();
-            bool ok = check_continuity_level(grid, func, value_metric_, modulus, 1e-12);
+            bool ok = check_continuity_level(grid, func, value_metric_, modulus, Rational(1, 1000000000000));
             EXPECT_TRUE(ok) << "Failed at level " << n;
             if (n < 4) path_->advance(func);
         }
@@ -82,7 +82,7 @@ namespace delta::testing {
         PowerModulus<Rational> modulus(0_r, 1_r);
         for (int n = 0; n < 5; ++n) {
             const auto& grid = path_->current_grid();
-            bool ok = check_continuity_level(grid, func, value_metric_, modulus, 1e-12);
+            bool ok = check_continuity_level(grid, func, value_metric_, modulus, Rational(1, 1000000000000));
             EXPECT_TRUE(ok) << "Failed at level " << n;
             if (n < 4) path_->advance(func);
         }
@@ -100,8 +100,8 @@ namespace delta::testing {
     TEST_F(PAdicPathTest2, DivisibilityFunction) {
         // Function: 1 if x is an integer divisible by p, else 0.
         auto func = [](const Addr& x) -> Rational {
-            int num = numerator(x).convert_to<int>();
-            int den = denominator(x).convert_to<int>();
+            int num = x.numerator().convert_to<int>();
+            int den = x.denominator().convert_to<int>();
             // For simplicity, consider only integers (denominator == 1).
             if (den == 1) {
                 return (num % 2 == 0) ? Rational(1) : Rational(0);
@@ -113,7 +113,7 @@ namespace delta::testing {
         PowerModulus<Rational> modulus(1_r, 1_r);
         for (int n = 0; n < 3; ++n) {
             const auto& grid = path_->current_grid();
-            check_continuity_level(grid, func, value_metric_, modulus, 1e-12);
+            check_continuity_level(grid, func, value_metric_, modulus, Rational(1, 1000000000000));
             path_->advance(func);
         }
         // Reaching this point means no exception was thrown.
