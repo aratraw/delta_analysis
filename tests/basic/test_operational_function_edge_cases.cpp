@@ -146,7 +146,7 @@ namespace delta::testing {
         OperationalFunction<Addr, Matrix, decltype(grid)> func(
             grid, [](const Addr& x) {
                 Matrix m(2, 2);
-                m.setConstant(x.convert_to<double>());
+                m.setConstant(x.to_double());
                 return m;
             });
 

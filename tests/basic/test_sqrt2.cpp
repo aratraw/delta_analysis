@@ -43,7 +43,7 @@ TEST_F(Sqrt2Test, DyadicApproximation) {
         Addr diff = left_endpoints[i] - left_endpoints[i - 1];
         // The difference should decrease roughly as 2/2^i
         double expected = 2.0 / (1 << i);
-        EXPECT_LE(diff.convert_to<double>(), expected + 1e-12);
+        EXPECT_LE(diff.to_double(), 2.0 / (1 << i) + 1e-12);
     }
 
     // Invariant: all grids are sorted

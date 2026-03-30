@@ -269,6 +269,45 @@ namespace delta {
     }
 
     // ----------------------------------------------------------------------------
+    // Numerator/Denominator querries
+    // ----------------------------------------------------------------------------
+
+
+    inline Rational Rational::numerator() const {
+        if (is_immediate()) {
+            if (auto* s = std::get_if<internal::SmallStorage>(&storage_)) {
+                internal::SmallStorage norm = *s;
+                norm.normalize();
+                return Rational(internal::to_cpp_int(norm.num));
+            }
+            else if (auto* b = std::get_if<internal::BigStorage>(&storage_)) {
+                return Rational(b->num());
+            }
+        }
+        else {
+            return eval().numerator();
+        }
+        throw std::logic_error("Rational::numerator: invalid state");
+    }
+
+    inline Rational Rational::denominator() const {
+        if (is_immediate()) {
+            if (auto* s = std::get_if<internal::SmallStorage>(&storage_)) {
+                internal::SmallStorage norm = *s;
+                norm.normalize();
+                return Rational(internal::to_cpp_int(norm.den));
+            }
+            else if (auto* b = std::get_if<internal::BigStorage>(&storage_)) {
+                return Rational(b->den());
+            }
+        }
+        else {
+            return eval().denominator();
+        }
+        throw std::logic_error("Rational::denominator: invalid state");
+    }
+
+    // ----------------------------------------------------------------------------
     // Raw accessors
     // ----------------------------------------------------------------------------
 

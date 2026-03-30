@@ -56,6 +56,9 @@ namespace delta {
         // Доступ к immediate данным
         const internal::SmallStorage* as_small() const noexcept;
         const internal::BigStorage* as_big() const noexcept;
+        // Доступ к числителю и знаменателю
+        Rational numerator() const;
+        Rational denominator() const;
 
         // Доступ к lazy (индекс корня)
         int root_index() const;          // требует is_lazy()

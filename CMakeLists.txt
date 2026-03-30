@@ -92,7 +92,7 @@ add_compile_definitions($<$<CONFIG:Debug>:_DEBUG>)
 
 # Add subdirectories for tests, examples, and benchmarks
 add_subdirectory("tests/rational")
-#add_subdirectory("tests/basic")
+add_subdirectory("tests/basic")
 #add_subdirectory("tests/calculus")
 #add_subdirectory("tests/regulative_ideas")
 #add_subdirectory("tests/geometry")

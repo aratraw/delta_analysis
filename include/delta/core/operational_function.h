@@ -12,6 +12,7 @@
 #include "uniform_grid.h"
 #include "grid_concept.h"
 #include "grid_refine.h"
+#include "rational.h"
 
 namespace delta {
 
@@ -29,20 +30,22 @@ namespace delta {
          * @throws std::runtime_error if addr is not exactly on the grid (non‑integer index).
          * @throws std::out_of_range if the computed index is out of bounds.
          */
+         //КОММЕНТАРИЙ: КАКОГО ЧЁРТА ОПЕРАЦИОННАЯ ФУНКЦИЯ ТРЕБУЕТ ДЛЯ АДРЕСА ЗНАМЕНАТЕЛЬ?
+         // А ЕСЛИ МЫ ХОТИМ ОПЕРАЦИОННУЮ ФУНКЦИЮ, ОПРЕДЕЛЁННУЮ НА ПОЛЕ БИНАРНЫХ СТРОК ИЛИ МАТРИЦ?!
+         // КОГДА ТЕСТЫ ПОЗЕЛЕНЕЮТ - РАЗОБРАТЬСЯ И ПРИ НЕОБХОДИМОСТИ ПЕРЕПИСАТЬ НАХРЕН НОРМАЛЬНО. КАРАУЛ!
         template<typename Addr, typename Grid>
         std::size_t uniform_index(const Addr& addr, const Grid& grid) {
             auto idx = (addr - grid.start()) / grid.step();
-            if (denominator(idx) != 1) {
+            if (idx.denominator() != Rational(1)) {
                 throw std::runtime_error("Address does not belong to uniform grid (non-integer index)");
             }
-            std::size_t uidx = static_cast<std::size_t>(numerator(idx));
+            std::size_t uidx = static_cast<std::size_t>(idx.numerator().to_double());
             if (uidx >= grid.size()) {
                 throw std::out_of_range("Index out of bounds");
             }
             return uidx;
         }
     }
-
     // -------------------------------------------------------------------------
     // Primary template (for arbitrary grids) – uses std::map with a comparator
     // -------------------------------------------------------------------------

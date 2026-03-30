@@ -1,3 +1,4 @@
+//test_operators_edge_cases.cpp
 #include <gtest/gtest.h>
 #include "../test_fixtures.h"
 
@@ -90,7 +91,7 @@ namespace delta::testing {
      *       For level 1, the generator returns 1/3, so the result should be at 1/3.
      */
     TEST_F(DynamicLambdaOperatorTest, LevelDependent) {
-        auto gen = [](std::size_t level) { return 1.0 / (level + 2); };
+        auto gen = [](std::size_t level) { return Rational(1) / Rational(level + 2); };
         DynamicLambdaOperator op(gen);
         auto info0 = make_info(0_r, 1_r, 0_r, 0_r, 1_r, 0);
         auto info1 = make_info(0_r, 1_r, 0_r, 0_r, 1_r, 1);

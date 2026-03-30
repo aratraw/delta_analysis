@@ -31,7 +31,6 @@ namespace delta::testing {
     using AddrMetric = EuclideanMetric;
     using ValMetric = EuclideanValueMetric;
     using Compare = std::less<Addr>;
-    using delta::operator""_r;
 
     /**
      * @class DeltaTest
@@ -48,15 +47,15 @@ namespace delta::testing {
         // Precision management (inherit from DeltaTest, but we add convenience)
         // -------------------------------------------------------------------------
         void SetUp() override {
-            old_precision_ = delta::default_eps();
+            old_precision_ = default_eps();
         }
 
         void TearDown() override {
-            delta::default_eps() = old_precision_;
+            set_default_eps(old_precision_);
         }
 
         static void set_precision(const Rational& eps) {
-            delta::default_eps() = eps;
+            set_default_eps(eps);
         }
         //if something breaks miserably - blame these usings.
         using Addr = testing::Addr;

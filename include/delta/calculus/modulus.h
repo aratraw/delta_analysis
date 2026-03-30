@@ -114,11 +114,12 @@ namespace delta::calculus {
          * @return Rational approximation of C * δ^α.
          */
         Rational operator()(Rational delta) const {
-            double d = delta.convert_to<double>();
-            double a = alpha_.convert_to<double>();
-            double c = C_.convert_to<double>();
+            //SHOULD MAYBE REWRITE IT TO ACTUALLY USE RATIONAL WHEN TESTS SETTLE??
+            double d = delta.to_double();
+            double a = alpha_.to_double();
+            double c = C_.to_double();
             double result = c * std::pow(d, a);
-            return Rational(result);   // approximate, acceptable for tests
+            return Rational(std::to_string(result));
         }
 
     private:
@@ -160,5 +161,7 @@ namespace delta::calculus {
     };
 
     // A Rational specialisation of LogarithmicModulus can be added if needed.
+    // TOTALLY IS NEEDED. AFTER TESTS SETTLE, LEAVE FULLY DOUBLE SPEC AS LEGACY REDUNDANT CODE FOR GOOD MEASURE
+    // BUT IMPLEMENT RATIONAL SPEC AND USE IT WHERE NEEDED INSTEAD OF PETTY DOUBLE.
 
 } // namespace delta::calculus
