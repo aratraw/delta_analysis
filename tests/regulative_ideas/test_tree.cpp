@@ -1,4 +1,4 @@
-//tests/regulative_ideas/test_tree.cpp
+// tests/regulative_ideas/test_tree.cpp
 #include <gtest/gtest.h>
 #include "../test_fixtures.h"
 #include "delta/core/tree_grid.h"
@@ -28,19 +28,25 @@ namespace delta::testing {
      * near 0.5, and that it stabilises (changes slowly) in subsequent levels.
      */
     TEST_F(TreePathTest, DirichletIntegral) {
-        TreeDeltaPath<double> path;
-        auto func = [](const std::string& addr) -> double {
-            if (addr.empty()) return 0.0;
-            return (addr.back() == '0') ? 0.0 : 1.0;
+        TreeDeltaPath<Rational> path;
+        auto func = [](const std::string& addr) -> Rational {
+            if (addr.empty()) return 0_r;
+            return (addr.back() == '0') ? 0_r : 1_r;
             };
 
-        double prev = 0.0;
+        Rational prev = 0_r;
+        Rational half = Rational(1, 2);
+        Rational tolerance = Rational(1, 10); // 0.1
+
         for (int level = 0; level <= 5; ++level) {
-            double integral = calculus::tree_riemann_sum(path, func);
+            auto integral = calculus::tree_riemann_sum(path, func);
             if (level > 0) {
-                EXPECT_NEAR(integral, 0.5, 0.1);
+                EXPECT_RATIONAL_NEAR(integral, half, tolerance);
                 if (level > 1) {
-                    EXPECT_NEAR(integral, prev, 0.2);
+                    // Change should be small
+                    Rational change = integral - prev;
+                    if (change < 0) change = -change;
+                    EXPECT_LE(change, Rational(2, 10)); // 0.2
                 }
             }
             prev = integral;
@@ -53,7 +59,7 @@ namespace delta::testing {
      * @brief Verify that a newly constructed TreeDeltaPath contains only the root node.
      */
     TEST_F(TreePathTest, LevelZeroGrid) {
-        TreeDeltaPath<double> path; // level = 0
+        TreeDeltaPath<Rational> path; // level = 0
         const auto& grid = path.current_grid();
         EXPECT_EQ(grid.size(), 1);
         EXPECT_EQ(grid[0], "");
@@ -65,15 +71,15 @@ namespace delta::testing {
      *        at every refinement level.
      */
     TEST_F(TreePathTest, ConstantFunctionIntegral) {
-        TreeDeltaPath<double> path;
-        auto func = [](const std::string&) { return 2.5; };
+        TreeDeltaPath<Rational> path;
+        auto func = [](const std::string&) { return Rational(5, 2); }; // 2.5
 
-        double prev = 0.0;
+        Rational prev = 0_r;
         for (int level = 0; level <= 5; ++level) {
-            double integral = calculus::tree_riemann_sum(path, func);
-            EXPECT_DOUBLE_EQ(integral, 2.5);
+            Rational integral = calculus::tree_riemann_sum(path, func);
+            EXPECT_EQ(integral, Rational(5, 2));
             if (level > 0) {
-                EXPECT_DOUBLE_EQ(integral, prev);
+                EXPECT_EQ(integral, prev);
             }
             prev = integral;
             path.advance();
@@ -89,19 +95,24 @@ namespace delta::testing {
      * computed integral is near 0.5 and that consecutive integrals are close.
      */
     TEST_F(TreePathTest, LeftHalfCharacteristic) {
-        TreeDeltaPath<double> path;
-        auto func = [](const std::string& addr) -> double {
-            if (addr.empty()) return 0.0;
-            return (addr.back() == '0') ? 1.0 : 0.0;
+        TreeDeltaPath<Rational> path;
+        auto func = [](const std::string& addr) -> Rational {
+            if (addr.empty()) return 0_r;
+            return (addr.back() == '0') ? 1_r : 0_r;
             };
 
-        double prev = 0.0;
+        Rational prev = 0_r;
+        Rational half = Rational(1, 2);
+        Rational tolerance = Rational(1, 10); // 0.1
+
         for (int level = 1; level <= 5; ++level) {
             path.advance();
-            double integral = calculus::tree_riemann_sum(path, func);
-            EXPECT_NEAR(integral, 0.5, 0.1);
+            Rational integral = calculus::tree_riemann_sum(path, func);
+            EXPECT_RATIONAL_NEAR(integral, half, tolerance);
             if (level > 1) {
-                EXPECT_NEAR(integral, prev, 0.2);
+                Rational change = integral - prev;
+                if (change < 0) change = -change;
+                EXPECT_LE(change, Rational(2, 10)); // 0.2
             }
             prev = integral;
         }
@@ -115,19 +126,24 @@ namespace delta::testing {
      * Symmetric to LeftHalfCharacteristic; also should converge to 0.5.
      */
     TEST_F(TreePathTest, RightHalfCharacteristic) {
-        TreeDeltaPath<double> path;
-        auto func = [](const std::string& addr) -> double {
-            if (addr.empty()) return 0.0;
-            return (addr.back() == '1') ? 1.0 : 0.0;
+        TreeDeltaPath<Rational> path;
+        auto func = [](const std::string& addr) -> Rational {
+            if (addr.empty()) return 0_r;
+            return (addr.back() == '1') ? 1_r : 0_r;
             };
 
-        double prev = 0.0;
+        Rational prev = 0_r;
+        Rational half = Rational(1, 2);
+        Rational tolerance = Rational(1, 10); // 0.1
+
         for (int level = 1; level <= 5; ++level) {
             path.advance();
-            double integral = calculus::tree_riemann_sum(path, func);
-            EXPECT_NEAR(integral, 0.5, 0.1);
+            Rational integral = calculus::tree_riemann_sum(path, func);
+            EXPECT_RATIONAL_NEAR(integral, half, tolerance);
             if (level > 1) {
-                EXPECT_NEAR(integral, prev, 0.2);
+                Rational change = integral - prev;
+                if (change < 0) change = -change;
+                EXPECT_LE(change, Rational(2, 10)); // 0.2
             }
             prev = integral;
         }

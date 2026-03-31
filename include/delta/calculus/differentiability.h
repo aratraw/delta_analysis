@@ -107,14 +107,14 @@ namespace delta::calculus {
      * @param D          Expected derivative value.
      * @param modulus    Modulus of convergence (called with the maximum gap of each grid).
      * @param first_level The first level at which addr appears (inclusive).
-     * @param tolerance  Additional tolerance for floating‑point comparisons (default 1e-12).
+     * @param tolerance  Additional tolerance for comparisons (default 1e-12).
      * @return true if the differentiability condition holds for all levels n >= first_level.
      */
     template<typename Grid, typename Func, typename Distance, typename Addr, typename Mod>
         requires SubtractableAddress<Addr>
     bool check_differentiability(const std::vector<Grid>& grids, const Addr& addr,
         Func&& func, const Distance& D, const Mod& modulus,
-        std::size_t first_level, double tolerance = 1e-12) {
+        std::size_t first_level, const Rational& tolerance = Rational(1, 1000000000000)) {
         for (std::size_t n = first_level; n < grids.size(); ++n) {
             const auto& grid = grids[n];
             std::ptrdiff_t idx = find_address_index(grid, addr);
@@ -126,14 +126,9 @@ namespace delta::calculus {
 
             Distance delta_n = max_gap(grid);
             Distance bound = modulus(delta_n);   // modulus must return a Distance
-
-            // Convert to double for tolerance comparison
-            // А НЕ КОСТЫЛЬНО ЛИ ЗДЕСЬ ИСПОЛЬЗОВАТЬ ДАБЛЫ ДЛЯ СЕРЬЁЗНОЙ РАЦИОНАЛЬНОЙ БИБЛИОТЕКИ-ТО?
-            double left_error = delta::abs(left_dq - D).to_double();
-            double right_error = delta::abs(right_dq - D).to_double();
-            double bound_d = bound.to_double();
-
-            if (left_error > bound_d + tolerance || right_error > bound_d + tolerance) {
+            // Теперь сравниваем рациональные числа напрямую
+            if (delta::abs(left_dq - D) > bound + tolerance ||
+                delta::abs(right_dq - D) > bound + tolerance) {
                 return false;
             }
         }

@@ -244,11 +244,12 @@ namespace delta {
      * the length of the longest common prefix.
      */
     struct StringUltrametric {
-        double operator()(const std::string& a, const std::string& b) const {
-            if (a == b) return 0.0;
+        Rational operator()(const std::string& a, const std::string& b) const {
+            if (a == b) return Rational(0);
             size_t common = 0;
             while (common < a.size() && common < b.size() && a[common] == b[common]) ++common;
-            return std::pow(2.0, -static_cast<double>(common));
+            // 2^{-common} = 1 / 2^{common}
+            return Rational(1) / delta::pow(Rational(2), static_cast<int>(common));
         }
     };
 
@@ -267,16 +268,16 @@ namespace delta {
     template<int p>
     struct PAdicMetric {
         static_assert(p >= 2, "p must be a prime");
-        double operator()(const Rational& a, const Rational& b) const {
+        Rational operator()(const Rational& a, const Rational& b) const {
             Rational diff = a - b;
-            if (diff == 0) return 0.0;
+            if (diff == 0) return Rational(0);
             int v = 0;
             Rational r = diff;
             while (r % p == 0) {
                 ++v;
                 r /= p;
             }
-            return std::pow(static_cast<double>(p), -v);
+            return Rational(1) / delta::pow(Rational(p), v);
         }
     };
 
@@ -286,8 +287,8 @@ namespace delta {
      */
     struct DiscreteMetric {
         template<typename T>
-        double operator()(const T& a, const T& b) const {
-            return (a == b) ? 0.0 : 1.0;
+        Rational operator()(const T& a, const T& b) const {
+            return (a == b) ? Rational(0) : Rational(1);
         }
     };
 

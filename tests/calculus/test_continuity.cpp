@@ -79,14 +79,16 @@ namespace delta::testing {
      *       The modulus ω(δ)=√δ should be satisfied (within tolerance).
      */
     TEST_F(ContinuityTest, SqrtFunction) {
+        ScopedEagerEval eval;
         ListGrid<Addr, Compare> grid0({ 0_r, 1_r });
         auto path = make_midpoint_path(grid0);
-        // Approximate sqrt(x) as a Rational with 1e‑12 accuracy
+
+        // Use exact rational sqrt from delta::sqrt
         auto func = [](const Addr& x) -> Rational {
-            double val = std::sqrt(x.to_double());
-            return Rational(static_cast<int64_t>(val * 1e12), 1e12);
+            return delta::sqrt(x);
             };
         EuclideanValueMetric vm;
+
         // Modulus of continuity for sqrt: ω(δ) = √δ (C=1, α=0.5)
         PowerModulus<Rational> modulus(1_r, Rational(1, 2));
 

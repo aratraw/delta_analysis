@@ -39,7 +39,7 @@ namespace delta {
             if (idx.denominator() != Rational(1)) {
                 throw std::runtime_error("Address does not belong to uniform grid (non-integer index)");
             }
-            std::size_t uidx = static_cast<std::size_t>(idx.numerator().to_double());
+            std::size_t uidx = static_cast<std::size_t>(idx.numerator().convert_to<long long>());
             if (uidx >= grid.size()) {
                 throw std::out_of_range("Index out of bounds");
             }

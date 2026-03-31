@@ -1,4 +1,4 @@
-//tests/regulative_ideas/test_padic.cpp
+// tests/regulative_ideas/test_padic.cpp
 #include <gtest/gtest.h>
 #include "../test_fixtures.h"
 #include "delta/calculus/continuity.h"
@@ -164,6 +164,7 @@ namespace delta::testing {
         Addr x = 1_r / 2_r;
         Distance D = 1_r;
         PowerModulus<Rational> modulus(0_r, 1_r); // zero modulus because error is zero
+        Rational tolerance = Rational(1, 1000000000000); // 1e-12 as Rational
 
         std::size_t first_level = 0;
         for (; first_level < grids.size(); ++first_level) {
@@ -171,7 +172,7 @@ namespace delta::testing {
         }
         ASSERT_LT(first_level, grids.size());
 
-        bool diff = check_differentiability(grids, x, func, D, modulus, first_level, 1e-12);
+        bool diff = check_differentiability(grids, x, func, D, modulus, first_level, tolerance);
         EXPECT_TRUE(diff);
     }
 

@@ -103,26 +103,11 @@ namespace delta::calculus {
     template<>
     class PowerModulus<Rational> {
     public:
-        /**
-         * @brief Construct a power modulus with Rational parameters.
-         * @param C     Coefficient (Rational).
-         * @param alpha Exponent (Rational).
-         */
         PowerModulus(Rational C, Rational alpha) : C_(C), alpha_(alpha) {}
-
-        /**
-         * @brief Evaluate approximately using double arithmetic.
-         * @param delta Step size (Rational).
-         * @return Rational approximation of C * δ^α.
-         */
         Rational operator()(Rational delta) const {
-            double d = delta.to_double();
-            double a = alpha_.to_double();
-            double c = C_.to_double();
-            double result = c * std::pow(d, a);
-            return Rational(std::to_string(result));
+            // Используем точное возведение в рациональную степень через delta::pow
+            return C_ * delta::pow(delta, alpha_, delta::default_eps());
         }
-
     private:
         Rational C_, alpha_;
     };

@@ -35,8 +35,9 @@ namespace delta::testing {
         Addr x = 1_r / 2_r;
         Dist D = 1_r;
         PowerModulus<Rational> modulus(0_r, 1_r);
+        Rational tolerance = Rational(1, 1000000000000);
 
-        bool diff = check_differentiability(grids, x, func, D, modulus, 1);
+        bool diff = check_differentiability(grids, x, func, D, modulus, 1, tolerance);
         EXPECT_TRUE(diff);
     }
 
@@ -61,8 +62,9 @@ namespace delta::testing {
         Addr x = 1_r / 2_r;
         Dist D = 1_r; // 2 * 0.5
         PowerModulus<Rational> modulus(1_r, 1_r);
+        Rational tolerance = Rational(1, 1000000000000);
 
-        bool diff = check_differentiability(grids, x, func, D, modulus, 1);
+        bool diff = check_differentiability(grids, x, func, D, modulus, 1, tolerance);
         EXPECT_TRUE(diff);
     }
 
@@ -87,6 +89,7 @@ namespace delta::testing {
         Addr x = 1_r / 4_r;
         Dist D = 1_r / 2_r; // 2 * 0.25
         PowerModulus<Rational> modulus(1_r, 1_r);
+        Rational tolerance = Rational(1, 1000000000000);
 
         std::size_t first_level = 0;
         for (; first_level < grids.size(); ++first_level) {
@@ -94,7 +97,7 @@ namespace delta::testing {
         }
         ASSERT_LT(first_level, grids.size());
 
-        bool diff = check_differentiability(grids, x, func, D, modulus, first_level);
+        bool diff = check_differentiability(grids, x, func, D, modulus, first_level, tolerance);
         EXPECT_TRUE(diff);
     }
 
@@ -119,8 +122,9 @@ namespace delta::testing {
         Addr x = 0_r;
         Dist D = 0_r;
         PowerModulus<Rational> modulus(1_r, 1_r);
+        Rational tolerance = Rational(1, 1000000000000);
 
-        bool diff = check_differentiability(grids, x, func, D, modulus, 0);
+        bool diff = check_differentiability(grids, x, func, D, modulus, 0, tolerance);
         EXPECT_FALSE(diff);
     }
 
