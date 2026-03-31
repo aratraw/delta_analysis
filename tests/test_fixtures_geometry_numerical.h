@@ -7,12 +7,18 @@
 #include <iomanip>
 #include <sstream>
 #include "test_fixtures.h"
+#include "delta/core/rational.h"
 #include "delta/geometry/simplicial_complex.h"
 #include "delta/geometry/constructive_core.h"
 #include "delta/geometry/product_regulative.h"
+#include "delta/geometry/matrix_field.h"
+#include "delta/geometry/tensor_field.h"
+#include "delta/numerical/discrete_operators.h"
 
 namespace delta::testing {
-
+    using namespace delta;
+    using namespace delta::geometry;
+    using namespace delta::numerical;
     /**
      * @brief Test fixture for Stage 0 geometry modules.
      *
@@ -119,7 +125,6 @@ namespace delta::testing {
             return mesh.triangle_at(idx);
         }
 
-        // Получение тетраэдра по индексу (только при Dim >= 3)
         template<int Dim>
         std::enable_if_t<Dim >= 3, Tetrahedron<Dim>> tetrahedron_at(const Complex<Dim>& mesh, std::size_t idx) const {
             return mesh.tetrahedron_at(idx);
@@ -185,7 +190,6 @@ namespace delta::testing {
         // Operations on points and vectors - перегрузки для 2D и 3D
         static Vector<2> point_minus_point(const Eigen::Matrix<Scalar, 2, 1>& a,
             const Eigen::Matrix<Scalar, 2, 1>& b) {
-            // Вызываем оператор- из constructive_core.h, который возвращает Vector
             return delta::geometry::operator-(a, b);
         }
         static Vector<3> point_minus_point(const Eigen::Matrix<Scalar, 3, 1>& a,
@@ -250,16 +254,14 @@ namespace delta::testing {
         }
 
         // -------------------------------------------------------------------------
-        // ProductDeltaPath proxies - ИСПРАВЛЕНО
+        // ProductDeltaPath proxies
         // -------------------------------------------------------------------------
-
-        // Определяем конкретные типы путей для тестов
         using Path1D = delta::DeltaPath<
             Rational,                                   // Addr
             Rational,                                   // Value
             Rational,                                   // Distance
-            delta::LessBetweenness,           // Betweenness
-            delta::EuclideanMetric,           // Metric
+            delta::LessBetweenness,                     // Betweenness
+            delta::EuclideanMetric,                     // Metric
             delta::EuclideanValueMetric,                // ValueMetric
             delta::StaticStrategy<delta::MidpointOperator>,  // Strategy
             std::less<Rational>                         // Compare
@@ -270,7 +272,6 @@ namespace delta::testing {
         // Тип функции для 2D продукта: принимает массив адресов, возвращает массив значений
         using Path2DFunc = std::function<std::array<Rational, 2>(const std::array<Rational, 2>&)>;
 
-        // Прокси-методы для ProductPath - ТЕПЕРЬ С ФУНКЦИЕЙ
         static void product_path_advance(Path2D& path, const Path2DFunc& func) {
             path.advance(func);
         }
@@ -350,7 +351,6 @@ namespace delta::testing {
             Eigen::Matrix<Scalar, Dim, 1> p;
             for (int i = 0; i < Dim; ++i) {
                 double d = dist(rng);
-                // Преобразуем double в строку с максимальной точностью, затем в Rational
                 std::stringstream ss;
                 ss << std::setprecision(std::numeric_limits<double>::max_digits10) << d;
                 p(i) = Scalar(ss.str());
@@ -359,11 +359,10 @@ namespace delta::testing {
         }
 
         // -------------------------------------------------------------------------
-        // Stage 1 Fixture Updates: Tensor Fiels, Matrix Fields,
+        // Stage 1 Fixture Updates: Tensor Fields, Matrix Fields,
         // Discrete Operators, Integrals, Dual Complex.
         // -------------------------------------------------------------------------
 
-        // Tensor Field Fixture Components
         // Сравнение двух Eigen-матриц одинакового размера
         template<typename Derived>
         static bool matrix_near(const Eigen::MatrixBase<Derived>& A,
@@ -414,11 +413,11 @@ namespace delta::testing {
         }
 
         void TearDown() override {
-            delta::default_eps() = old_precision_;
+            delta::set_default_eps(old_precision_);
         }
 
         static void set_precision(const Rational& eps) {
-            delta::default_eps() = eps;
+            delta::set_default_eps(eps);
         }
 
     private:

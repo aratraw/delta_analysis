@@ -4,11 +4,7 @@
 #include "delta/geometry/constructive_core.h"
 #include "../test_fixtures_geometry_numerical.h"
 
-namespace delta::geometry::testing {
-
-    using delta::testing::GeometryNumericalTest;
-    using delta::operator""_r;
-    using delta::detail::abs;  // для использования в тестах
+namespace delta::testing {
 
     /**
      * @class ConstructiveCoreTest
@@ -157,41 +153,41 @@ namespace delta::geometry::testing {
 
         // p = (0.125, 0.5) both non-zero, v = (0.125, 0) -> result (0.25, 0.5) both non-zero
         Point2 p1;
-        p1 << 0.125_r, 0.5_r;
-        Vector2 v1(0.125_r, 0_r);
+        p1 << "0.125"_r, "0.5"_r;
+        Vector2 v1("0.125"_r, 0_r);
 
         auto result1 = point_plus_vector(p1, v1);
         ASSERT_TRUE(result1.has_value());
-        EXPECT_EQ((*result1)(0), 0.25_r);
-        EXPECT_EQ((*result1)(1), 0.5_r);
+        EXPECT_EQ((*result1)(0), "0.25"_r);
+        EXPECT_EQ((*result1)(1), "0.5"_r);
         EXPECT_TRUE(is_in_K(*result1));
 
         // p = (0.125, 0.5), v = (0.125, 0.125) -> result (0.25, 0.625)
-        Vector2 v1b(0.125_r, 0.125_r);
+        Vector2 v1b("0.125"_r, "0.125"_r);
         auto result1b = point_plus_vector(p1, v1b);
         ASSERT_TRUE(result1b.has_value());
-        EXPECT_EQ((*result1b)(0), 0.25_r);
-        EXPECT_EQ((*result1b)(1), 0.625_r);
+        EXPECT_EQ((*result1b)(0), "0.25"_r);
+        EXPECT_EQ((*result1b)(1), "0.625"_r);
         EXPECT_TRUE(is_in_K(*result1b));
 
         // p = (0.125, 0.5), v = (0.1, 0) -> result (0.225, 0.5)
         // 0.225 = 9/40, which has denominator 40 = 2^3 * 5 -> finite decimal, so in K
-        Vector2 v1c(0.1_r, 0_r);
+        Vector2 v1c("0.1"_r, 0_r);
         auto result1c = point_plus_vector(p1, v1c);
         ASSERT_TRUE(result1c.has_value());
-        EXPECT_EQ((*result1c)(0), 0.225_r);
-        EXPECT_EQ((*result1c)(1), 0.5_r);
+        EXPECT_EQ((*result1c)(0), "0.225"_r);
+        EXPECT_EQ((*result1c)(1), "0.5"_r);
         EXPECT_TRUE(is_in_K(*result1c));
 
         // 3D case
         Point3 p3d;
-        p3d << 0.125_r, 0.25_r, 0.375_r;
-        Vector3 v3d(0.125_r, 0.125_r, 0.125_r);
+        p3d << "0.125"_r, "0.25"_r, "0.375"_r;
+        Vector3 v3d("0.125"_r, "0.125"_r, "0.125"_r);
         auto result3d = point_plus_vector(p3d, v3d);
         ASSERT_TRUE(result3d.has_value());
-        EXPECT_EQ((*result3d)(0), 0.25_r);
-        EXPECT_EQ((*result3d)(1), 0.375_r);
-        EXPECT_EQ((*result3d)(2), 0.5_r);
+        EXPECT_EQ((*result3d)(0), "0.25"_r);
+        EXPECT_EQ((*result3d)(1), "0.375"_r);
+        EXPECT_EQ((*result3d)(2), "0.5"_r);
         EXPECT_TRUE(is_in_K(*result3d));
     }
 
@@ -200,31 +196,31 @@ namespace delta::geometry::testing {
 
         // p = (0.125, 0.5), v = (-0.125, 0) -> result (0, 0.5) contains zero
         Point2 p1;
-        p1 << 0.125_r, 0.5_r;
-        Vector2 v1(-0.125_r, 0_r);
+        p1 << "0.125"_r, "0.5"_r;
+        Vector2 v1("-0.125"_r, 0_r);
 
         auto result1 = point_plus_vector(p1, v1);
         EXPECT_FALSE(result1.has_value());
 
         // p = (0.125, 0.5), v = (0, -0.5) -> result (0.125, 0) contains zero
-        Vector2 v2(0_r, -0.5_r);
+        Vector2 v2(0_r, "-0.5"_r);
         auto result2 = point_plus_vector(p1, v2);
         EXPECT_FALSE(result2.has_value());
 
         // p = (0.125, 0.5), v = (-0.125, -0.5) -> result (0, 0) contains zeros
-        Vector2 v3(-0.125_r, -0.5_r);
+        Vector2 v3("-0.125"_r, "-0.5"_r);
         auto result3 = point_plus_vector(p1, v3);
         EXPECT_FALSE(result3.has_value());
 
         // p = (0.125, 0.5), v = (0.125, -0.5) -> result (0.25, 0) contains zero
-        Vector2 v4(0.125_r, -0.5_r);
+        Vector2 v4("0.125"_r, "-0.5"_r);
         auto result4 = point_plus_vector(p1, v4);
         EXPECT_FALSE(result4.has_value());
 
         // 3D case with zero
         Point3 p3d;
-        p3d << 0.125_r, 0.25_r, 0.375_r;
-        Vector3 v3d(-0.125_r, -0.25_r, 0_r);  // third coordinate unchanged (non-zero), but second becomes zero
+        p3d << "0.125"_r, "0.25"_r, "0.375"_r;
+        Vector3 v3d("-0.125"_r, "-0.25"_r, 0_r);  // third coordinate unchanged (non-zero), but second becomes zero
         auto result3d = point_plus_vector(p3d, v3d);
         EXPECT_FALSE(result3d.has_value());
     }
@@ -279,11 +275,11 @@ namespace delta::geometry::testing {
 
     TEST_F(ConstructiveCoreTest, IsInK) {
         // Points with all non-zero coordinates should be in K
-        Point2 p1; p1 << 0.125_r, 0.5_r;
-        Point2 p2; p2 << 0.25_r, 0.75_r;
-        Point2 p3; p3 << 0.1_r, 0.2_r;
-        Point2 p4; p4 << 0.2_r, 0.4_r;
-        Point3 p5; p5 << 0.125_r, 0.25_r, 0.375_r;
+        Point2 p1; p1 << "0.125"_r, "0.5"_r;
+        Point2 p2; p2 << "0.25"_r, "0.75"_r;
+        Point2 p3; p3 << "0.1"_r, "0.2"_r;
+        Point2 p4; p4 << "0.2"_r, "0.4"_r;
+        Point3 p5; p5 << "0.125"_r, "0.25"_r, "0.375"_r;
 
         EXPECT_TRUE(is_in_K(p1));
         EXPECT_TRUE(is_in_K(p2));
@@ -292,12 +288,12 @@ namespace delta::geometry::testing {
         EXPECT_TRUE(is_in_K(p5));
 
         // Points with any zero coordinate should NOT be in K
-        Point2 p6; p6 << 0_r, 0.5_r;
-        Point2 p7; p7 << 0.125_r, 0_r;
+        Point2 p6; p6 << 0_r, "0.5"_r;
+        Point2 p7; p7 << "0.125"_r, 0_r;
         Point2 p8; p8 << 0_r, 0_r;
-        Point3 p9; p9 << 0_r, 0.25_r, 0.375_r;
-        Point3 p10; p10 << 0.125_r, 0_r, 0.375_r;
-        Point3 p11; p11 << 0.125_r, 0.25_r, 0_r;
+        Point3 p9; p9 << 0_r, "0.25"_r, "0.375"_r;
+        Point3 p10; p10 << "0.125"_r, 0_r, "0.375"_r;
+        Point3 p11; p11 << "0.125"_r, "0.25"_r, 0_r;
         Point3 p12; p12 << 0_r, 0_r, 0_r;
 
         EXPECT_FALSE(is_in_K(p6));
@@ -321,26 +317,26 @@ namespace delta::geometry::testing {
         // Shifts by dyadic rationals should preserve K
 
         Point2 p;
-        p << 0.125_r, 0.5_r;  // both coordinates in K
+        p << "0.125"_r, "0.5"_r;  // both coordinates in K
 
         // Shift by dyadic vector (0.125, 0.25) -> (0.25, 0.75) both in K
-        Vector2 v_dyadic(0.125_r, 0.25_r);
+        Vector2 v_dyadic("0.125"_r, "0.25"_r);
         auto result = point_plus_vector(p, v_dyadic);
         ASSERT_TRUE(result.has_value());
         EXPECT_TRUE(is_in_K(*result));
-        EXPECT_EQ((*result)(0), 0.25_r);
-        EXPECT_EQ((*result)(1), 0.75_r);
+        EXPECT_EQ((*result)(0), "0.25"_r);
+        EXPECT_EQ((*result)(1), "0.75"_r);
 
         // Another dyadic shift
-        Vector2 v_dyadic2(0.0625_r, 0.125_r);  // 1/16, 1/8
+        Vector2 v_dyadic2("0.0625"_r, "0.125"_r);  // 1/16, 1/8
         result = point_plus_vector(p, v_dyadic2);
         ASSERT_TRUE(result.has_value());
         EXPECT_TRUE(is_in_K(*result));
-        EXPECT_EQ((*result)(0), 0.1875_r);  // 3/16
-        EXPECT_EQ((*result)(1), 0.625_r);   // 5/8
+        EXPECT_EQ((*result)(0), "0.1875"_r);  // 3/16
+        EXPECT_EQ((*result)(1), "0.625"_r);   // 5/8
 
         // Shift that would produce zero should not preserve K
-        Vector2 v_to_zero(-0.125_r, -0.5_r);
+        Vector2 v_to_zero("-0.125"_r, "-0.5"_r);
         result = point_plus_vector(p, v_to_zero);
         EXPECT_FALSE(result.has_value());
     }
@@ -396,7 +392,7 @@ namespace delta::geometry::testing {
 
         // The approximations get closer to the true value
         // but never reach it exactly
-        Rational true_inv_sqrt2 = delta::sqrt(0.5_r);  // computed with high precision
+        Rational true_inv_sqrt2 = delta::sqrt("0.5"_r);  // computed with high precision
 
         // The last approximation should be close
         Rational error = abs(approximations.back() - true_inv_sqrt2);
@@ -410,27 +406,27 @@ namespace delta::geometry::testing {
     TEST_F(ConstructiveCoreTest, NegativeCoordinates) {
         // Points with negative coordinates can still be in K
         Point2 p_neg;
-        p_neg << -0.125_r, 0.5_r;
+        p_neg << "-0.125"_r, "0.5"_r;
         EXPECT_TRUE(is_in_K(p_neg));
 
         Point2 p_neg2;
-        p_neg2 << -0.125_r, -0.5_r;
+        p_neg2 << "-0.125"_r, "-0.5"_r;
         EXPECT_TRUE(is_in_K(p_neg2));
 
         // Zero still excluded even if negative elsewhere
         Point2 p_with_zero;
-        p_with_zero << -0.125_r, 0_r;
+        p_with_zero << "-0.125"_r, 0_r;
         EXPECT_FALSE(is_in_K(p_with_zero));
 
         // Vector operations with negatives
         Point2 p;
-        p << -0.125_r, 0.5_r;
-        Vector2 v(0.25_r, -0.25_r);
+        p << "-0.125"_r, "0.5"_r;
+        Vector2 v("0.25"_r, "-0.25"_r);
 
         auto result = point_plus_vector(p, v);
         ASSERT_TRUE(result.has_value());
-        EXPECT_EQ((*result)(0), 0.125_r);
-        EXPECT_EQ((*result)(1), 0.25_r);
+        EXPECT_EQ((*result)(0), "0.125"_r);
+        EXPECT_EQ((*result)(1), "0.25"_r);
         EXPECT_TRUE(is_in_K(*result));
     }
 
@@ -479,4 +475,4 @@ namespace delta::geometry::testing {
         EXPECT_FALSE(is_representable<10>(one_seventh));
     }
 
-} // namespace delta::geometry::testing
+} // namespace delta::testing

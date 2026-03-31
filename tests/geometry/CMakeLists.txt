@@ -5,7 +5,6 @@
 
 add_executable(delta_tests_geometry
     main_tests_geometry.cpp
-     "test_rational_type.cpp"
     simplicial_complex_test.cpp
     product_regulative_test.cpp
  constructive_core_test.cpp

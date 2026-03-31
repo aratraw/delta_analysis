@@ -4,11 +4,7 @@
 #include "delta/geometry/simplicial_complex.h"
 #include "../test_fixtures_geometry_numerical.h"
 
-namespace delta::geometry::testing {
-
-    using delta::testing::GeometryNumericalTest;
-    using delta::operator""_r;
-
+namespace delta::testing{
     /**
      * @class SimplicialComplexTest
      * @brief Tests for SimplicialComplex using proxy methods from fixture.
@@ -460,9 +456,9 @@ namespace delta::geometry::testing {
         delta::EuclideanMetric metric;
 
         // Check edge lengths
-        EXPECT_RATIONAL_NEAR(edge_length(mesh, 0, metric), 1.0_r, "0.000000000001"_r);  // (0,0)-(1,0)
-        EXPECT_RATIONAL_NEAR(edge_length(mesh, 1, metric), delta::sqrt(2.0_r), "0.000000000001"_r);  // (1,0)-(0,1)
-        EXPECT_RATIONAL_NEAR(edge_length(mesh, 2, metric), 1.0_r, "0.000000000001"_r);  // (0,1)-(0,0)
+        EXPECT_RATIONAL_NEAR(edge_length(mesh, 0, metric), 1_r, "0.000000000001"_r);  // (0,0)-(1,0)
+        EXPECT_RATIONAL_NEAR(edge_length(mesh, 1, metric), delta::sqrt(2_r), "0.000000000001"_r);  // (1,0)-(0,1)
+        EXPECT_RATIONAL_NEAR(edge_length(mesh, 2, metric), 1_r, "0.000000000001"_r);  // (0,1)-(0,0)
     }
 
     TEST_F(SimplicialComplexTest, CellVolumeTriangle) {
@@ -480,7 +476,7 @@ namespace delta::geometry::testing {
 
         // Area of right triangle = 0.5
         Scalar area = cell_volume(mesh, 0, metric);
-        EXPECT_RATIONAL_NEAR(area, 0.5_r, "0.000000000001"_r);
+        EXPECT_RATIONAL_NEAR(area, "0.5"_r, "0.000000000001"_r);
     }
 
     TEST_F(SimplicialComplexTest, CellVolumeTetrahedron) {
@@ -627,4 +623,4 @@ namespace delta::geometry::testing {
         EXPECT_EQ(actual_triangles, expected_triangles);
     }
 
-} // namespace delta::geometry::testing
+} // namespace delta::testing

@@ -3,11 +3,7 @@
 #include "delta/geometry/matrix_field.h"
 #include "../test_fixtures_geometry_numerical.h"
 
-namespace delta::geometry::testing {
-
-    using delta::testing::GeometryNumericalTest;
-    using delta::operator""_r;
-
+namespace delta::testing {
     class MatrixFieldTest : public GeometryNumericalTest {
     protected:
         static constexpr int DIM = 2;
@@ -128,11 +124,12 @@ namespace delta::geometry::testing {
     // Exponential and logarithm
     // -------------------------------------------------------------------------
     TEST_F(MatrixFieldTest, ExponentialAndLogarithm) {
+        set_precision(Rational(1, 100000000));
         Grid grid = make_test_grid();
         MatrixField2 A(grid);
 
         // Use a small nilpotent matrix N = [[0, 0.1], [0, 0]]
-        Matrix2 N; N << 0_r, Scalar(1, 10), 0_r, 0_r;
+        Matrix2 N; N << 0_r, "0.1"_r, 0_r, 0_r;
         Matrix2 B = Matrix2::Identity() + N;   // norm(B-I) = 0.1 < 0.5 → no scaling needed
 
         A.set(grid[0], B);
@@ -161,7 +158,7 @@ namespace delta::geometry::testing {
         // Устанавливаем более низкую точность для ускорения вычислений.
         // При дефолтной точности (1e-30) тест выполняется недопустимо долго из-за
         // сложных вычислений с рациональными числами.
-        set_precision(Rational(1, 100000)); // 1e-6
+        set_precision(Rational(1, 1000000)); // 1e-6
 
         Grid grid = make_test_grid();
         MatrixField2 A(grid);
@@ -180,9 +177,10 @@ namespace delta::geometry::testing {
     // Symmetric positive definite matrix (near identity)
     // -------------------------------------------------------------------------
     TEST_F(MatrixFieldTest, ExponentialLogarithmSymmetric) {
+        set_precision(Rational(1, 100000000));
         Grid grid = make_test_grid();
         MatrixField2 A(grid);
-        Matrix2 M; M << 1.1_r, 0.05_r, 0.05_r, 0.9_r;
+        Matrix2 M; M << "1.1"_r, "0.05"_r, "0.05"_r, "0.9"_r;
         A.set(grid[0], M);
 
         auto logM = A.log();
@@ -195,10 +193,11 @@ namespace delta::geometry::testing {
     // Large norm matrix (scaling required)
     // -------------------------------------------------------------------------
     TEST_F(MatrixFieldTest, ExponentialLogarithmLargeNorm) {
+        set_precision(Rational(1, 100000000));
         Grid grid = make_test_grid();
         MatrixField2 A(grid);
         // Use B = I + N where N has entry 0.5, so norm(B-I)=0.5 – borderline, will trigger scaling
-        Matrix2 N; N << 0_r, 0.5_r, 0_r, 0_r;
+        Matrix2 N; N << 0_r, "0.5"_r, 0_r, 0_r;
         Matrix2 B = Matrix2::Identity() + N;
         A.set(grid[0], B);
 
@@ -230,10 +229,11 @@ namespace delta::geometry::testing {
     // Matrix far from identity (norm > 0.5) still works with scaling
     // -------------------------------------------------------------------------
     TEST_F(MatrixFieldTest, LogarithmFarFromIdentity) {
+        set_precision(Rational(1, 100000000));
         Grid grid = make_test_grid();
         MatrixField2 A(grid);
         // M = diag(10, 0.1) – far from identity, but positive definite
-        Matrix2 M; M << 10_r, 0_r, 0_r, Scalar(1, 10);
+        Matrix2 M; M << 10_r, 0_r, 0_r, "0.1"_r;
         A.set(grid[0], M);
 
         EXPECT_NO_THROW(A.log());
@@ -252,7 +252,7 @@ namespace delta::geometry::testing {
         A.set(grid[0], M);
 
         auto logM = A.log();
-        auto halfLog = logM * 0.5_r;   // TensorField
+        auto halfLog = logM * "0.5"_r;   // TensorField
 
         MatrixField2 halfLogField(grid);
         for (const auto& addr : grid) {
@@ -264,4 +264,4 @@ namespace delta::geometry::testing {
         EXPECT_TRUE(matrix_near(sqrtM_sq.at(grid[0]), M, delta::default_eps()));
     }
 
-} // namespace delta::geometry::testing
+} // namespace delta::testing

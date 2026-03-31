@@ -156,7 +156,7 @@ namespace delta::geometry {
         double max_abs = 0.0;
         for (int i = 0; i < Dim; ++i) {
             for (int j = 0; j < Dim; ++j) {
-                double val = static_cast<double>(M(i, j));
+                double val = M(i, j).convert_to<double>();
                 double abs_val = val < 0 ? -val : val;
                 if (abs_val > max_abs) max_abs = abs_val;
             }
@@ -197,7 +197,7 @@ namespace delta::geometry {
         Scalar normM = matrix_norm(M);
         int k = 0;
         Scalar two_pow_k = 1;
-        while (normM / two_pow_k > 0.5) {
+        while (normM / two_pow_k > Rational(1, 2)) {
             two_pow_k *= 2;
             ++k;
         }
@@ -260,7 +260,7 @@ namespace delta::geometry {
         value_type X = M;
         int k = 0;
         const int max_scale = 100;
-        while (matrix_norm(X - value_type::Identity()) > 0.5) {
+        while (matrix_norm(X - value_type::Identity()) > Rational(1, 2)) {
             X = X / Scalar(2);
             ++k;
             if (k > max_scale) throw std::runtime_error("matrix_log: scaling did not converge");
@@ -287,7 +287,7 @@ namespace delta::geometry {
             sum += term;
             // Fast convergence check using double
             double norm_term = matrix_norm_double(term);
-            if (norm_term <= static_cast<double>(eps)) break;
+            if (norm_term <= eps.convert_to<double>()) break;
             if (n > max_series) throw std::runtime_error("matrix_log: series did not converge");
         }
         sum = sum * Scalar(2);

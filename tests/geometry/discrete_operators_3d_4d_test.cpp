@@ -9,10 +9,7 @@
 #include "delta/geometry/tensor_field.h"
 #include "../test_fixtures_geometry_numerical.h"
 
-namespace delta::numerical::testing {
-
-    using delta::testing::GeometryNumericalTest;
-    using delta::operator""_r;
+namespace delta::testing {
     using namespace delta::geometry;
     struct MaxMetric {
         template<typename T, std::size_t N>
@@ -162,6 +159,9 @@ namespace delta::numerical::testing {
     }
 
     TEST_F(DiscreteOperators3DTest, GradientSecondOrder) {
+        ScopedEagerEval eval;
+        set_precision(Rational(1, 1000000000));
+
         std::vector<std::size_t> ns = { 5, 9, 17 };
         std::vector<double> errors;
         for (std::size_t n : ns) {
@@ -178,9 +178,9 @@ namespace delta::numerical::testing {
                     continue;
                 Rational x = addr[0], y = addr[1], z = addr[2];
                 auto g = grad_num.at(addr);
-                double err_x = std::abs(static_cast<double>(g[0] - 4 * x * x * x));
-                double err_y = std::abs(static_cast<double>(g[1] - 4 * y * y * y));
-                double err_z = std::abs(static_cast<double>(g[2] - 4 * z * z * z));
+                double err_x = std::abs((g[0] - 4 * x * x * x).convert_to<double>());
+                double err_y = std::abs((g[1] - 4 * y * y * y).convert_to<double>());
+                double err_z = std::abs((g[2] - 4 * z * z * z).convert_to<double>());
                 max_err = std::max(max_err, std::max({ err_x, err_y, err_z }));
             }
             errors.push_back(max_err);
@@ -193,6 +193,8 @@ namespace delta::numerical::testing {
     }
 
     TEST_F(DiscreteOperators3DTest, LaplacianSecondOrder) {
+        ScopedEagerEval eval;
+        set_precision(Rational(1, 1000000000));
         std::vector<std::size_t> ns = { 5, 9, 17 };
         std::vector<double> errors;
         for (std::size_t n : ns) {
@@ -208,7 +210,7 @@ namespace delta::numerical::testing {
                 if (addr[0] == 0_r || addr[0] == 1_r || addr[1] == 0_r || addr[1] == 1_r || addr[2] == 0_r || addr[2] == 1_r)
                     continue;
                 Rational x = addr[0], y = addr[1], z = addr[2];
-                double err = std::abs(static_cast<double>(lap_num.at(addr) - (12 * x * x + 12 * y * y + 12 * z * z)));
+                double err = std::abs((lap_num.at(addr) - (12 * x * x + 12 * y * y + 12 * z * z)).convert_to<double>());
                 max_err = std::max(max_err, err);
             }
             errors.push_back(max_err);
@@ -336,12 +338,13 @@ namespace delta::numerical::testing {
         auto div_grad = discrete_divergence(grid, grad, max_metric, DifferenceScheme::CENTRAL);
         auto lap = discrete_laplacian(grid, f, max_metric);
         // Проверяем только центральную точку (0.5,0.5,0.5,0.5), так как для неё все соседи внутренние
-        Addr4D center = { 0.5_r, 0.5_r, 0.5_r, 0.5_r };
+        Addr4D center = { "0.5"_r, "0.5"_r, "0.5"_r, "0.5"_r };
         EXPECT_RATIONAL_NEAR(div_grad.at(center), lap.at(center), delta::default_eps());
         EXPECT_RATIONAL_NEAR(lap.at(center), 8_r, delta::default_eps());
     }
 
     TEST_F(DiscreteOperators4DTest, GradientSecondOrder) {
+        ScopedEagerEval eval;
         set_precision(Rational(1_r / 10000000_r));
         std::vector<std::size_t> ns = { 5, 9, 17 };
         std::vector<double> errors;
@@ -360,10 +363,10 @@ namespace delta::numerical::testing {
                     continue;
                 Rational x = addr[0], y = addr[1], z = addr[2], w = addr[3];
                 auto g = grad_num.at(addr);
-                double err_x = std::abs(static_cast<double>(g[0] - 4 * x * x * x));
-                double err_y = std::abs(static_cast<double>(g[1] - 4 * y * y * y));
-                double err_z = std::abs(static_cast<double>(g[2] - 4 * z * z * z));
-                double err_w = std::abs(static_cast<double>(g[3] - 4 * w * w * w));
+                double err_x = std::abs((g[0] - 4 * x * x * x).convert_to<double>());
+                double err_y = std::abs((g[1] - 4 * y * y * y).convert_to<double>());
+                double err_z = std::abs((g[2] - 4 * z * z * z).convert_to<double>());
+                double err_w = std::abs((g[3] - 4 * w * w * w).convert_to<double>());
                 max_err = std::max(max_err, std::max({ err_x, err_y, err_z, err_w }));
             }
             errors.push_back(max_err);
@@ -376,6 +379,8 @@ namespace delta::numerical::testing {
     }
 
     TEST_F(DiscreteOperators4DTest, LaplacianSecondOrder) {
+        ScopedEagerEval eval;
+        set_precision(Rational(1_r / 10000000_r));
         std::vector<std::size_t> ns = { 5, 9, 17 };
         std::vector<double> errors;
         for (std::size_t n : ns) {
@@ -392,7 +397,7 @@ namespace delta::numerical::testing {
                     addr[2] == 0_r || addr[2] == 1_r || addr[3] == 0_r || addr[3] == 1_r)
                     continue;
                 Rational x = addr[0], y = addr[1], z = addr[2], w = addr[3];
-                double err = std::abs(static_cast<double>(lap_num.at(addr) - (12 * x * x + 12 * y * y + 12 * z * z + 12 * w * w)));
+                double err = std::abs((lap_num.at(addr) - (12 * x * x + 12 * y * y + 12 * z * z + 12 * w * w)).convert_to<double>());
                 max_err = std::max(max_err, err);
             }
             errors.push_back(max_err);
@@ -404,4 +409,4 @@ namespace delta::numerical::testing {
         }
     }
 
-} // namespace delta::numerical::testing
+} // namespace delta::testing

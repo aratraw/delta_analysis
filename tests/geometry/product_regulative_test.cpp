@@ -8,11 +8,7 @@
 #include "delta/core/completion.h"
 #include "../test_fixtures_geometry_numerical.h"
 
-namespace delta::geometry::testing {
-
-    using delta::testing::GeometryNumericalTest;
-    using delta::operator""_r;
-
+namespace delta::testing {
     // Базовые регулятивные идеи для тестов
     using BaseIdea = delta::RegulativeIdea<
         Rational,
@@ -73,8 +69,7 @@ namespace delta::geometry::testing {
         bool is_dyadic(const Addr& x) {
             if (x == 0) return false;
 
-            using boost::multiprecision::denominator;
-            auto den = denominator(x);
+            auto den = x.denominator().convert_to<long long>();
 
             if (den == 0) return false;
             while (den % 2 == 0) {
@@ -96,11 +91,6 @@ namespace delta::geometry::testing {
     // =========================================================================
 
     TEST_F(ProductRegulativeTest, ProductBetweenness) {
-        // ЗАПАСНОЙ ПАРАЩЮТ КОТОРЫЙ КОМПИЛИТСЯ: Создаём объекты betweenness напрямую, без ProductIdea
-        //delta::LessBetweenness b1, b2;
-        //delta::geometry::detail::ProductBetweenness<delta::LessBetweenness, delta::LessBetweenness> betweenness(b1, b2);
-
-        //ПРАВИЛЬНАЯ ШТУКА, НО КОТОРАЯ МОЖЕТ НЕ СКОМПИЛИТЬСЯ. 
         RI1D idea1;
         RI1D idea2;
         ProductIdea product_idea(idea1, idea2);
@@ -134,11 +124,6 @@ namespace delta::geometry::testing {
     }
 
     TEST_F(ProductRegulativeTest, ProductMetric) {
-        //КОСТЫЛЬ КОТОРЫЙ КОМПИЛИТСЯ
- /*       delta::EuclideanMetric m1, m2;
-        delta::geometry::detail::ProductMetric<delta::EuclideanMetric, delta::EuclideanMetric> metric(m1, m2);*/
-
-        //ПРАВИЛЬНАЯ ШТУКА КОТОРАЯ МОЖЕТ НЕ СКОМПИЛИТЬСЯ.
         RI1D idea1;
         RI1D idea2;
         ProductIdea product_idea(idea1, idea2);
@@ -206,7 +191,7 @@ namespace delta::geometry::testing {
         bool found_0_05 = false;
         for (std::size_t i = 0; i < grid2.size(); ++i) {
             auto addr = grid2[i];
-            if (addr[0] == 0_r && addr[1] == 0.5_r) {
+            if (addr[0] == 0_r && addr[1] == "0.5"_r) {
                 found_0_05 = true;
                 break;
             }
@@ -216,7 +201,7 @@ namespace delta::geometry::testing {
         bool found_05_075 = false;
         for (std::size_t i = 0; i < grid2.size(); ++i) {
             auto addr = grid2[i];
-            if (addr[0] == 0.5_r && addr[1] == 0.75_r) {
+            if (addr[0] == "0.5"_r && addr[1] == "0.75"_r) {
                 found_05_075 = true;
                 break;
             }
@@ -279,7 +264,7 @@ namespace delta::geometry::testing {
             return sum;
             };
 
-        FundamentalSequence e_seq(e_seq_gen, 3_r, 0.5_r, 0);
+        FundamentalSequence e_seq(e_seq_gen, 3_r, "0.5"_r, 0);
 
         Rational e_exact = e("0.000000000000000000000000000001"_r);
         std::size_t n = 20;
@@ -301,7 +286,7 @@ namespace delta::geometry::testing {
             };
 
         auto pi_seq = std::make_shared<FundamentalSequence<ExponentialModulus>>(
-            pi_seq_gen, 1_r, 0.5_r, 0
+            pi_seq_gen, 1_r, "0.5"_r, 0
         );
 
         RealNumber pi_real(pi_seq);
@@ -310,10 +295,10 @@ namespace delta::geometry::testing {
 
         EXPECT_RATIONAL_NEAR(pi_approx, pi_exact, Rational(1, 1000000000000));
 
-        RealNumber half_real(0.5_r);
-        EXPECT_EQ(half_real.approximate(0), 0.5_r);
+        RealNumber half_real("0.5"_r);
+        EXPECT_EQ(half_real.approximate(0), "0.5"_r);
 
-        RealNumber half_real2(0.5_r);
+        RealNumber half_real2("0.5"_r);
         EXPECT_TRUE(half_real == half_real2);
 
         // Используем строковый литерал для точного задания
@@ -368,4 +353,4 @@ namespace delta::geometry::testing {
         EXPECT_LT(error_a6, error_a);
     }
 
-} // namespace delta::geometry::testing
+} // namespace delta::testing

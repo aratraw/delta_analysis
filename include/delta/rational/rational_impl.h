@@ -673,9 +673,8 @@ namespace delta {
         return ExpressionRoot(node_idx);
     }
 
-    inline const Rational& default_eps() {
-        static Rational cache(internal::default_eps_value);
-        return cache;
+    inline Rational default_eps() {
+        return Rational(internal::default_eps_value);
     }
 
     inline void set_default_eps(const Rational& eps) {
@@ -750,6 +749,27 @@ namespace delta {
                 return static_cast<long long>(num.convert_to<long long>());
             }
             throw std::logic_error("Rational::convert_to<long long>: invalid state");
+        }
+        else if constexpr (std::is_same_v<T, boost::multiprecision::cpp_int>) {
+            Rational v = eval();
+            if (v.denominator() != 1) {
+                throw std::domain_error("Rational::convert_to<cpp_int>: not an integer");
+            }
+            if (auto* s = v.as_small()) {
+                internal::SmallStorage norm = *s;
+                norm.normalize();
+                // Приводим absl::int128 к cpp_int
+                if (norm.num < 0) {
+                    return -internal::to_cpp_int(static_cast<absl::uint128>(-norm.num));
+                }
+                else {
+                    return internal::to_cpp_int(static_cast<absl::uint128>(norm.num));
+                }
+            }
+            else if (auto* b = v.as_big()) {
+                return b->num();  // b->num() уже cpp_int
+            }
+            throw std::logic_error("Rational::convert_to<cpp_int>: invalid state");
         }
         else {
             static_assert(sizeof(T) == 0, "convert_to not supported for this type");

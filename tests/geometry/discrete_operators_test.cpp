@@ -9,10 +9,7 @@
 #include "delta/geometry/tensor_field.h"
 #include "../test_fixtures_geometry_numerical.h"
 
-namespace delta::numerical::testing {
-
-    using delta::testing::GeometryNumericalTest;
-    using delta::operator""_r;
+namespace delta::testing{
     using namespace delta::geometry;
 
     // Определяем метрику для массивов вне классов, чтобы она была доступна везде
@@ -51,7 +48,7 @@ namespace delta::numerical::testing {
         for (std::size_t i = 0; i < grid.size(); ++i) {
             f.set(grid[i], grid[i]); // f(x)=x
         }
-        auto df = forward_difference(grid, f, metric, 0.25_r);
+        auto df = forward_difference(grid, f, metric, "0.25"_r);
         EXPECT_RATIONAL_NEAR(df, 1_r, delta::default_eps());
         EXPECT_THROW(forward_difference(grid, f, metric, 1_r), std::out_of_range);
     }
@@ -62,7 +59,7 @@ namespace delta::numerical::testing {
         for (std::size_t i = 0; i < grid.size(); ++i) {
             f.set(grid[i], grid[i]);
         }
-        auto df = backward_difference(grid, f, metric, 0.25_r);
+        auto df = backward_difference(grid, f, metric, "0.25"_r);
         EXPECT_RATIONAL_NEAR(df, 1_r, delta::default_eps());
         EXPECT_THROW(backward_difference(grid, f, metric, 0_r), std::out_of_range);
     }
@@ -73,7 +70,7 @@ namespace delta::numerical::testing {
         for (std::size_t i = 0; i < grid.size(); ++i) {
             f.set(grid[i], grid[i]);
         }
-        auto df = central_difference(grid, f, metric, 0.25_r);
+        auto df = central_difference(grid, f, metric, "0.25"_r);
         EXPECT_RATIONAL_NEAR(df, 1_r, delta::default_eps());
         EXPECT_THROW(central_difference(grid, f, metric, 0_r), std::out_of_range);
         EXPECT_THROW(central_difference(grid, f, metric, 1_r), std::out_of_range);
@@ -267,8 +264,8 @@ namespace delta::numerical::testing {
                     continue;
                 auto g = grad_num.at(addr);
                 Rational x = addr[0], y = addr[1];
-                double err_x = std::abs(static_cast<double>(g[0] - 3 * x * x));
-                double err_y = std::abs(static_cast<double>(g[1] - 3 * y * y));
+                double err_x = std::abs((g[0] - 3 * x * x).convert_to<double>());
+                double err_y = std::abs((g[1] - 3 * y * y).convert_to<double>());
                 max_err = std::max(max_err, std::max(err_x, err_y));
             }
             errors.push_back(max_err);
@@ -296,7 +293,7 @@ namespace delta::numerical::testing {
                 if (addr[0] == 0_r || addr[0] == 1_r || addr[1] == 0_r || addr[1] == 1_r)
                     continue;
                 Rational x = addr[0], y = addr[1];
-                double err = std::abs(static_cast<double>(lap_num.at(addr) - (12 * x * x + 12 * y * y)));
+                double err = std::abs((lap_num.at(addr) - (12 * x * x + 12 * y * y)).convert_to<double>());
                 max_err = std::max(max_err, err);
             }
             errors.push_back(max_err);
@@ -411,4 +408,4 @@ namespace delta::numerical::testing {
             EXPECT_RATIONAL_NEAR(div.at(addr), 0_r, delta::default_eps());
         }
     }
-} // namespace delta::numerical::testing
+} // namespace delta::testing

@@ -5,10 +5,7 @@
 #include "delta/geometry/tensor_field.h"
 #include "../test_fixtures_geometry_numerical.h"
 
-namespace delta::geometry::testing {
-
-    using delta::testing::GeometryNumericalTest;
-    using delta::operator""_r;
+namespace delta::testing{
 
     /**
      * @class TensorFieldTest
@@ -229,4 +226,4 @@ namespace delta::geometry::testing {
         EXPECT_TRUE(tensors_near<1>(v_sharp.at(grid[0]), v_val));
     }
 
-} // namespace delta::geometry::testing
+} // namespace delta::testing

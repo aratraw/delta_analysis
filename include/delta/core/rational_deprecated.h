@@ -353,9 +353,9 @@ namespace delta {
         return eps;
     }
 
-    inline const Rational& default_eps() {
-        return default_eps_value();
-    }
+    //inline const Rational& default_eps() {
+    //    return default_eps_value();
+    //}
 
 } // namespace delta
 

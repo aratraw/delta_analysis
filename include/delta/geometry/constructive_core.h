@@ -1,13 +1,11 @@
-//include/delta/geometry/constructive_core.h
+// include/delta/geometry/constructive_core.h
 #pragma once
 
 #include <optional>
 #include <set>
 #include <cmath>
 #include <Eigen/Dense>
-#include <boost/multiprecision/number.hpp>
 #include <boost/multiprecision/cpp_int.hpp>
-#include <boost/multiprecision/cpp_bin_float.hpp>
 #include "delta/core/rational.h"
 
 namespace delta::geometry {
@@ -19,86 +17,55 @@ namespace delta::geometry {
     namespace detail {
 
         /**
-         * @brief Разложить целое число на простые множители.
-         * @tparam Integer Целочисленный тип (boost::multiprecision::cpp_int или int)
+         * @brief Разложить целое число (cpp_int) на простые множители.
          * @param n Число для разложения (положительное)
          * @return std::set<int> Множество простых множителей (уникальные)
          */
-        template<typename Integer>
-        std::set<int> prime_factors(Integer n) {
+        inline std::set<int> prime_factors(const boost::multiprecision::cpp_int& n) {
             std::set<int> factors;
+            if (n <= 1) return factors;
 
-            // Работаем с положительным числом
-            if (n < 0) n = -n;
-            if (n <= 1) return factors;  // 1 не имеет простых множителей
-
+            boost::multiprecision::cpp_int m = n;
             // Обрабатываем множитель 2
-            if (n % 2 == 0) {
+            if (m % 2 == 0) {
                 factors.insert(2);
-                while (n % 2 == 0) {
-                    n /= 2;
-                }
+                while (m % 2 == 0) m /= 2;
             }
-
             // Обрабатываем нечётные множители
-            int p = 3;
-            while (static_cast<double>(p) * static_cast<double>(p) <= static_cast<double>(n)) {
-                if (n % p == 0) {
-                    factors.insert(p);
-                    while (n % p == 0) {
-                        n /= p;
-                    }
+            boost::multiprecision::cpp_int p = 3;
+            while (p * p <= m) {
+                if (m % p == 0) {
+                    factors.insert(p.convert_to<int>());
+                    while (m % p == 0) m /= p;
                 }
                 p += 2;
             }
-
-            // Если остаток больше 1, это тоже простой множитель
-            if (n > 1) {
-                factors.insert(static_cast<int>(n));
-            }
-
+            if (m > 1) factors.insert(m.convert_to<int>());
             return factors;
         }
 
         /**
-         * @brief Специализация для int (оптимизированная).
+         * @brief Разложить целое Rational (знаменатель = 1) на простые множители.
+         * @param x Рациональное число (должно быть целым)
+         * @return std::set<int> Множество простых множителей
+         * @throws std::domain_error если x не целое
          */
-        inline std::set<int> prime_factors(int n) {
-            std::set<int> factors;
-            if (n < 0) n = -n;
-            if (n <= 1) return factors;
-
-            // Factor 2
-            if (n % 2 == 0) {
-                factors.insert(2);
-                while (n % 2 == 0) n /= 2;
+        inline std::set<int> prime_factors(const Rational& x) {
+            if (x.denominator() != 1) {
+                throw std::domain_error("prime_factors: argument must be an integer");
             }
-
-            // Factor odd numbers
-            for (int p = 3; p * p <= n; p += 2) {
-                if (n % p == 0) {
-                    factors.insert(p);
-                    while (n % p == 0) n /= p;
-                }
-            }
-
-            if (n > 1) factors.insert(n);
-            return factors;
+            auto num = x.numerator();
+            if (num < 0) num = -num;
+            boost::multiprecision::cpp_int n = num.convert_to<boost::multiprecision::cpp_int>();
+            return prime_factors(n);
         }
 
         /**
-         * @brief Получить числитель и знаменатель Rational в несократимом виде.
-         * @return std::pair<boost::multiprecision::cpp_int, boost::multiprecision::cpp_int>
+         * @brief Получить числитель и знаменатель Rational в виде пары Rational.
+         * @return std::pair<Rational, Rational>
          */
-        inline std::pair<boost::multiprecision::cpp_int, boost::multiprecision::cpp_int>
-            get_numerator_denominator(const Rational& x) {
-            using boost::multiprecision::numerator;
-            using boost::multiprecision::denominator;
-
-            auto num = numerator(x);
-            auto den = denominator(x);
-
-            return { num, den };
+        inline std::pair<Rational, Rational> get_numerator_denominator(const Rational& x) {
+            return { x.numerator(), x.denominator() };
         }
 
     } // namespace detail
@@ -123,23 +90,19 @@ namespace delta::geometry {
          * @return true если представимо, false если нет или x == 0
          */
         static bool is_representable(const Rational& x) {
-            if (x == 0) return false;  // ноль исключаем согласно определению K*
+            if (x == 0) return false;
 
             auto [num, den] = detail::get_numerator_denominator(x);
             auto den_factors = detail::prime_factors(den);
+            if (den_factors.empty()) return true; // знаменатель 1
 
-            // Если знаменатель == 1, число целое - представимо в любом основании
-            if (den_factors.empty()) return true;
+            auto base_factors = detail::prime_factors(static_cast<boost::multiprecision::cpp_int>(Base));
 
-            auto base_factors = detail::prime_factors(Base);
-
-            // Проверяем, что все множители знаменателя содержатся в множителях основания
             for (int p : den_factors) {
                 if (base_factors.find(p) == base_factors.end()) {
                     return false;
                 }
             }
-
             return true;
         }
     };
@@ -223,6 +186,7 @@ namespace delta::geometry {
     private:
         vector_type data_;
     };
+
     // -------------------------------------------------------------------------
     // Операции с точками и векторами
     // -------------------------------------------------------------------------
@@ -230,14 +194,8 @@ namespace delta::geometry {
     /**
      * @brief Разность двух точек даёт вектор.
      */
-    
     template<typename Scalar, int Dim>
     Vector<Scalar, Dim> operator-(const Point<Scalar, Dim>& a, const Point<Scalar, Dim>& b) {
-        // КРИТИЧНО: НЕЛЬЗЯ МЕНЯТЬ ПРОСТО НА (a-b) ПОТОМУ ЧТО
-        // ЭТО ВЫЗОВЕТ ЭТОТ ЖЕ ОПЕРАТОР, И ВСЁ ВПАДЁТ
-        // В БЕСКОНЕЧНУЮ РЕКУРСИЮ. НЕ ТУПИТЕ.
-        // Обращение через a.array() достоверно безопасно
-        // eval() не работает, derived() не работает. Eigen::Matrix<Scalar, Dim, 1>(a) - НЕ РАБОТАЕТ
         return Vector<Scalar, Dim>(a.array() - b.array());
     }
 
@@ -258,9 +216,7 @@ namespace delta::geometry {
     template<int Dim>
     bool is_in_K(const Eigen::Matrix<Rational, Dim, 1>& p) {
         for (int i = 0; i < Dim; ++i) {
-            if (p[i] == 0) {
-                return false;
-            }
+            if (p[i] == 0) return false;
         }
         return true;
     }
@@ -275,8 +231,6 @@ namespace delta::geometry {
     std::optional<Point<Scalar, Dim>> operator+(const Point<Scalar, Dim>& p,
         const Vector<Scalar, Dim>& v) {
         Point<Scalar, Dim> new_coords = p + v.data();
-
-        // Проверяем принадлежность K (все координаты ненулевые)
         if (is_in_K(new_coords)) {
             return new_coords;
         }
@@ -288,7 +242,7 @@ namespace delta::geometry {
      */
     template<typename Scalar, int Dim>
     Vector<Scalar, Dim> operator+(const Vector<Scalar, Dim>& u, const Vector<Scalar, Dim>& v) {
-        return Vector<Scalar, Dim>(u.data() + v.data());  // ЭТО МЕСТО ТЕПЕРЬ РАБОТАЕТ БЛАГОДАРЯ УНИВЕРСАЛЬНОМУ КОНСТРУКТОРУ
+        return Vector<Scalar, Dim>(u.data() + v.data());
     }
 
     /**

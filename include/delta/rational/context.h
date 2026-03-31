@@ -27,6 +27,6 @@ namespace delta {
         ~ScopedEagerEval() { internal::global_eager_mode = old_; }
     };
 
-    const Rational& default_eps();
+    Rational default_eps();
     void set_default_eps(const Rational& eps);
 }
