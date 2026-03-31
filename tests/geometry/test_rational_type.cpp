@@ -99,7 +99,7 @@ namespace delta::testing {
 
         // Store high-precision sqrt(2)
         Rational high = delta::sqrt(2_r);
-        double high_val = static_cast<double>(high);
+        double high_val = high.convert_to<double>();
 
         // Set coarse precision
         delta::default_eps_value() = Rational(1, 10);

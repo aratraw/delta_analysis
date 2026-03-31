@@ -110,8 +110,8 @@ namespace delta::testing {
             // Generate random left and right in [0,1] with left < right
             double a = static_cast<double>(rand()) / RAND_MAX;
             double b = a + static_cast<double>(rand()) / RAND_MAX * (1.0 - a);
-            Addr left = Rational(static_cast<int64_t>(a * 10000), 10000);
-            Addr right = Rational(static_cast<int64_t>(b * 10000), 10000);
+            Addr left = Rational(static_cast<int>(a * 10000), 10000);
+            Addr right = Rational(static_cast<int>(b * 10000), 10000);
             if (left >= right) std::swap(left, right);
 
             Dist max_osc = Rational(rand() % 100, 100);

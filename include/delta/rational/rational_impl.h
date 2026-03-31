@@ -128,11 +128,12 @@ namespace delta {
 
     inline Rational::Rational(absl::int128 num) : storage_(internal::SmallStorage(num)) {}
 
-    // Явные конструкторы для целых типов
+    // Неявные конструкторы для целых типов
     inline Rational::Rational(int num) : Rational(static_cast<absl::int128>(num)) {}
     inline Rational::Rational(long long num) : Rational(static_cast<absl::int128>(num)) {}
     inline Rational::Rational(unsigned long long num) : Rational(static_cast<absl::int128>(num)) {}
 
+    // Конструктор от двух 128-битных чисел (внутренний, неявный)
     inline Rational::Rational(absl::int128 num, absl::uint128 den) {
         if (den == 0) {
             throw std::domain_error("Denominator cannot be zero");
@@ -142,6 +143,33 @@ namespace delta {
         storage_ = s;
     }
 
+    // ЕДИНСТВЕННЫЙ конструктор от двух аргументов для пользовательского кода
+    inline Rational::Rational(long long num, long long den) {
+        if (den == 0) {
+            throw std::domain_error("Denominator cannot be zero");
+        }
+        if (den < 0) {
+            num = -num;
+            den = -den;
+        }
+
+        // Проверяем, помещается ли в 128-битные типы
+        constexpr absl::int128 max_int128 = (std::numeric_limits<absl::int128>::max)();
+        constexpr absl::int128 min_int128 = (std::numeric_limits<absl::int128>::min)();
+        constexpr absl::uint128 max_uint128 = (std::numeric_limits<absl::uint128>::max)();
+
+        if (num <= max_int128 && num >= min_int128 &&
+            static_cast<absl::uint128>(den) <= max_uint128) {
+            *this = Rational(static_cast<absl::int128>(num),
+                static_cast<absl::uint128>(den));
+        }
+        else {
+            *this = Rational(boost::multiprecision::cpp_int(num),
+                boost::multiprecision::cpp_int(den));
+        }
+    }
+
+    // Конструкторы для больших чисел (explicit)
     inline Rational::Rational(const boost::multiprecision::cpp_int& num)
         : storage_(internal::BigStorage(num)) {
     }
@@ -154,15 +182,8 @@ namespace delta {
         storage_ = internal::BigStorage(num, den);
     }
 
-    inline Rational::Rational(int num, int den) {
-        if (den == 0) {
-            throw std::domain_error("Denominator cannot be zero");
-        }
-        *this = Rational(static_cast<absl::int128>(num), static_cast<absl::uint128>(den));
-    }
-
+    // Конструктор от строки
     inline Rational::Rational(const std::string& s) {
-        // парсинг (нормализует)
         size_t slash = s.find('/');
         if (slash != std::string::npos) {
             std::string num_str = s.substr(0, slash);
@@ -192,27 +213,22 @@ namespace delta {
             else {
                 std::string int_part = s.substr(0, dot);
                 std::string frac_part = s.substr(dot + 1);
-                // Если дробная часть пустая (случай "123.") — считаем её "0"
                 if (frac_part.empty()) frac_part = "0";
                 size_t decimal_places = frac_part.length();
 
-                // Обрабатываем знак
                 bool negative = false;
                 if (!int_part.empty() && int_part[0] == '-') {
                     negative = true;
                     int_part = int_part.substr(1);
                 }
 
-                // Удаляем ведущие нули из целой части (но не из дробной)
                 if (int_part.empty()) int_part = "0";
                 size_t int_start = int_part.find_first_not_of('0');
                 if (int_start != std::string::npos) int_part = int_part.substr(int_start);
                 else int_part = "0";
 
-                // Формируем числитель как целую часть + дробную часть
                 std::string numerator_str = int_part + frac_part;
 
-                // Удаляем ведущие нули из объединённой строки (кроме случая, когда она вся нули)
                 size_t num_start = numerator_str.find_first_not_of('0');
                 if (num_start != std::string::npos) {
                     numerator_str = numerator_str.substr(num_start);
@@ -221,12 +237,10 @@ namespace delta {
                     numerator_str = "0";
                 }
 
-                // Восстанавливаем знак, если число не нуль
                 if (negative && numerator_str != "0") {
                     numerator_str = "-" + numerator_str;
                 }
 
-                // Знаменатель: 10^(decimal_places)
                 boost::multiprecision::cpp_int denominator = 1;
                 for (size_t i = 0; i < decimal_places; ++i) denominator *= 10;
 
@@ -235,7 +249,6 @@ namespace delta {
                 numerator /= g;
                 denominator /= g;
 
-                // Выбираем SmallStorage или BigStorage
                 if (numerator <= internal::to_cpp_int((std::numeric_limits<absl::int128>::max)()) &&
                     denominator <= internal::to_cpp_int((std::numeric_limits<absl::uint128>::max)())) {
                     storage_ = internal::SmallStorage(
@@ -249,6 +262,7 @@ namespace delta {
             }
         }
     }
+
     inline Rational::Rational(internal::Value val) {
         if (std::holds_alternative<internal::SmallStorage>(val)) {
             auto s = std::get<internal::SmallStorage>(std::move(val));
@@ -283,9 +297,8 @@ namespace delta {
     }
 
     // ----------------------------------------------------------------------------
-    // Numerator/Denominator querries
+    // Numerator/Denominator queries
     // ----------------------------------------------------------------------------
-
 
     inline Rational Rational::numerator() const {
         if (is_immediate()) {
@@ -613,10 +626,8 @@ namespace delta {
             }
             return x;
         }
-        // lazy case – используем оператор сравнения
         return x < Rational(0) ? -x : x;
     }
-
 
     inline ExpressionRoot ExpressionRoot::sqrt(const Rational& eps) const {
         internal::Value eps_val = eps.to_value();
@@ -662,7 +673,6 @@ namespace delta {
         return ExpressionRoot(node_idx);
     }
 
-
     inline const Rational& default_eps() {
         static Rational cache(internal::default_eps_value);
         return cache;
@@ -671,6 +681,7 @@ namespace delta {
     inline void set_default_eps(const Rational& eps) {
         internal::default_eps_value = eps.to_value();
     }
+
     inline double Rational::to_double() const {
         return internal::to_double(to_value());
     }

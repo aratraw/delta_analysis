@@ -3,7 +3,7 @@
 
 #include "rational_fwd.h"
 #include "storage.h"
-#include "expression_root.h"   // для ExpressionRoot
+#include "expression_root.h"
 
 #include <absl/numeric/int128.h>
 #include <boost/multiprecision/cpp_int.hpp>
@@ -19,24 +19,25 @@ namespace delta {
         // Конструктор из Value (для immediate)
         Rational(internal::Value val);
 
-        // Конструкторы immediate
+        // Конструкторы immediate (неявные)
         Rational() noexcept;
         Rational(absl::int128 num);
-        Rational(absl::int128 num, absl::uint128 den);
+        Rational(absl::int128 num, absl::uint128 den);  // для внутреннего использования
 
-        // Явные конструкторы для целых типов (чтобы избежать неоднозначности)
+        // Конструкторы от целых типов (неявные)
         Rational(int num);
         Rational(long long num);
         Rational(unsigned long long num);
 
-        // Конструктор от cpp_int – explicit
+        // ЕДИНСТВЕННЫЙ конструктор от двух аргументов – от long long
+        explicit Rational(long long num, long long den);
+
+        // Конструкторы для больших чисел (explicit)
         explicit Rational(const boost::multiprecision::cpp_int& num);
-        Rational(const boost::multiprecision::cpp_int& num, const boost::multiprecision::cpp_int& den);
+        explicit Rational(const boost::multiprecision::cpp_int& num, const boost::multiprecision::cpp_int& den);
+        explicit Rational(const std::string& s);
 
-        explicit Rational(const std::string& s);          // парсит "1/2" или "0.125"
-        Rational(int num, int den);   // конструктор от двух int
-
-        // Фабричный метод для создания ленивого объекта по индексу
+        // Фабричный метод для ленивого объекта
         static Rational from_lazy_index(std::size_t root_idx);
 
         // Копирование/перемещение по умолчанию
@@ -46,38 +47,25 @@ namespace delta {
         Rational& operator=(Rational&&) = default;
         ~Rational() = default;
 
-        //вывод в double
         double to_double() const;
 
-        /// Convert to arithmetic type T (int, double, etc.)
         template<typename T>
         T convert_to() const;
 
-        // Состояние
         bool is_immediate() const noexcept;
         bool is_lazy() const noexcept;
 
-        // Доступ к immediate данным
         const internal::SmallStorage* as_small() const noexcept;
         const internal::BigStorage* as_big() const noexcept;
-        // Доступ к числителю и знаменателю
         Rational numerator() const;
         Rational denominator() const;
 
-        // Доступ к lazy (индекс корня)
-        int root_index() const;          // требует is_lazy()
-
-        // Преобразование в lazy (создаёт константу из текущего значения)
+        int root_index() const;
         Rational lazy() const;
-
-        // Упрощение и вычисление
         Rational simplify() const;
         Rational eval(bool skip_simplify = false) const;
 
-        // Для внутреннего использования
         internal::Value to_value() const;
-
-        // Интервальная оценка
         internal::Interval approx_interval() const noexcept;
 
         // Дружественные операторы
@@ -88,7 +76,6 @@ namespace delta {
         friend Rational operator-(const Rational&);
         friend Rational batch_add(const std::vector<Rational>&);
 
-        // Дружественные функции из transcendentals.h
         friend Rational sqrt(const Rational&, const Rational&);
         friend Rational exp(const Rational&, const Rational&);
         friend Rational log(const Rational&, const Rational&);
@@ -100,14 +87,11 @@ namespace delta {
         friend Rational pow(const Rational&, int);
 
     private:
-        using Storage = std::variant<internal::SmallStorage,
-            internal::BigStorage,
-            int>;   // int для lazy
+        using Storage = std::variant<internal::SmallStorage, internal::BigStorage, int>;
         Storage storage_;
 
         friend std::string to_string(const Rational& r);
     };
 
-    // Включение реализаций
 } // namespace delta
 #include "rational_impl.h"
