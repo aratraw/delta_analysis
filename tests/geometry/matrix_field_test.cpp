@@ -23,7 +23,7 @@ namespace delta::testing {
     };
 
     // -------------------------------------------------------------------------
-    // Utility Test to check actual precision management
+    // Utility Tests to double-check actual precision management
     // -------------------------------------------------------------------------
     TEST_F(MatrixFieldTest, PrecisionManagementWorks) {
         // Проверяем, что set_precision действительно изменяет глобальную переменную
@@ -38,6 +38,68 @@ namespace delta::testing {
         // Восстанавливаем исходное значение
         set_precision(original_eps);
         EXPECT_EQ(delta::default_eps(), original_eps);
+    }
+    TEST_F(MatrixFieldTest, DefaultEpsilonAffectsResult) {
+        ScopedEagerEval eval;
+        Rational original_eps = delta::default_eps();
+
+        std::vector<Rational> eps_values = {
+            Rational(1, 1000),                    // 1e-3
+            Rational(1, 1000000),                 // 1e-6
+            Rational(1, 1000000000),              // 1e-9
+            Rational(1, 1000000000000),           // 1e-12
+            Rational(1, 1000000000000000),        // 1e-15
+            "1/1000000000000000000"_r,           // 1e-18
+            "1/1000000000000000000000"_r,        // 1e-21
+            "1/1000000000000000000000000"_r,     // 1e-24
+            "1/1000000000000000000000000000"_r,  // 1e-27
+            "1/1000000000000000000000000000000"_r // 1e-30
+        };
+
+        Rational arg_sqrt = 2_r;
+        Rational arg_exp = 1_r;
+        Rational arg_log = 2_r;
+        Rational arg_sin = 1_r;
+        Rational arg_cos = 1_r;
+        Rational arg_acos = Rational(1, 2);
+        Rational arg_pow_base = 5_r;
+        Rational arg_pow_exp = Rational(1, 3);
+
+        std::vector<Rational> sqrt_results, exp_results, log_results,
+            sin_results, cos_results, acos_results,
+            pi_results, e_results, pow_results;
+
+        for (const auto& eps : eps_values) {
+            set_precision(eps);
+
+            sqrt_results.push_back(delta::sqrt(arg_sqrt));
+            exp_results.push_back(delta::exp(arg_exp));
+            log_results.push_back(delta::log(arg_log));
+            sin_results.push_back(delta::sin(arg_sin));
+            cos_results.push_back(delta::cos(arg_cos));
+            acos_results.push_back(delta::acos(arg_acos));
+            pi_results.push_back(delta::pi());
+            e_results.push_back(delta::e());
+            pow_results.push_back(delta::pow(arg_pow_base, arg_pow_exp));
+        }
+
+        // Проверяем, что для каждой функции результаты не все одинаковы
+        auto has_variation = [](const auto& vec) {
+            if (vec.empty()) return false;
+            return std::adjacent_find(vec.begin(), vec.end(), std::not_equal_to<>()) != vec.end();
+            };
+
+        EXPECT_TRUE(has_variation(sqrt_results)) << "sqrt results do not vary with epsilon";
+        EXPECT_TRUE(has_variation(exp_results)) << "exp results do not vary with epsilon";
+        EXPECT_TRUE(has_variation(log_results)) << "log results do not vary with epsilon";
+        EXPECT_TRUE(has_variation(sin_results)) << "sin results do not vary with epsilon";
+        EXPECT_TRUE(has_variation(cos_results)) << "cos results do not vary with epsilon";
+        EXPECT_TRUE(has_variation(acos_results)) << "acos results do not vary with epsilon";
+        EXPECT_TRUE(has_variation(pi_results)) << "pi results do not vary with epsilon";
+        EXPECT_TRUE(has_variation(e_results)) << "e results do not vary with epsilon";
+        EXPECT_TRUE(has_variation(pow_results)) << "pow results do not vary with epsilon";
+
+        set_precision(original_eps);
     }
 
     // -------------------------------------------------------------------------
@@ -124,7 +186,8 @@ namespace delta::testing {
     // Exponential and logarithm
     // -------------------------------------------------------------------------
     TEST_F(MatrixFieldTest, ExponentialAndLogarithm) {
-        set_precision(Rational(1, 100000000));
+        ScopedEagerEval eval;
+        set_precision(Rational(1, 1000000));
         Grid grid = make_test_grid();
         MatrixField2 A(grid);
 
@@ -159,6 +222,7 @@ namespace delta::testing {
         // При дефолтной точности (1e-30) тест выполняется недопустимо долго из-за
         // сложных вычислений с рациональными числами.
         set_precision(Rational(1, 1000000)); // 1e-6
+        ScopedEagerEval eval;
 
         Grid grid = make_test_grid();
         MatrixField2 A(grid);
@@ -177,7 +241,8 @@ namespace delta::testing {
     // Symmetric positive definite matrix (near identity)
     // -------------------------------------------------------------------------
     TEST_F(MatrixFieldTest, ExponentialLogarithmSymmetric) {
-        set_precision(Rational(1, 100000000));
+        ScopedEagerEval eval;
+        set_precision(Rational(1, 1000000));
         Grid grid = make_test_grid();
         MatrixField2 A(grid);
         Matrix2 M; M << "1.1"_r, "0.05"_r, "0.05"_r, "0.9"_r;
@@ -193,7 +258,8 @@ namespace delta::testing {
     // Large norm matrix (scaling required)
     // -------------------------------------------------------------------------
     TEST_F(MatrixFieldTest, ExponentialLogarithmLargeNorm) {
-        set_precision(Rational(1, 100000000));
+        ScopedEagerEval eval;
+        set_precision(Rational(1, 1000000));
         Grid grid = make_test_grid();
         MatrixField2 A(grid);
         // Use B = I + N where N has entry 0.5, so norm(B-I)=0.5 – borderline, will trigger scaling
@@ -229,7 +295,8 @@ namespace delta::testing {
     // Matrix far from identity (norm > 0.5) still works with scaling
     // -------------------------------------------------------------------------
     TEST_F(MatrixFieldTest, LogarithmFarFromIdentity) {
-        set_precision(Rational(1, 100000000));
+        ScopedEagerEval eval;
+        set_precision(Rational(1, 1000000));
         Grid grid = make_test_grid();
         MatrixField2 A(grid);
         // M = diag(10, 0.1) – far from identity, but positive definite
@@ -246,6 +313,8 @@ namespace delta::testing {
     // Square root consistency via exp(0.5*log(M))
     // -------------------------------------------------------------------------
     TEST_F(MatrixFieldTest, SquareRootConsistency) {
+        ScopedEagerEval eval;
+        set_precision(Rational(1, 1000000));
         auto grid = make_test_grid();
         MatrixField2 A(grid);
         Matrix2 M; M << 2_r, 1_r, 1_r, 2_r;

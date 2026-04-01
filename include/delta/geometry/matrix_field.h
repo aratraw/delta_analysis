@@ -69,7 +69,6 @@ namespace delta::geometry {
         // Helper functions
         // -------------------------------------------------------------------------
         static Scalar matrix_norm(const value_type& M);
-        static double matrix_norm_double(const value_type& M);
         static value_type matrix_exp(const value_type& M, const Scalar& eps);
         static value_type matrix_log(const value_type& M, const Scalar& eps, const Scalar& log2);
         static value_type matrix_exp_diag(const value_type& M, const Scalar& eps);
@@ -145,19 +144,6 @@ namespace delta::geometry {
         for (int i = 0; i < Dim; ++i) {
             for (int j = 0; j < Dim; ++j) {
                 Scalar abs_val = delta::abs(M(i, j));
-                if (abs_val > max_abs) max_abs = abs_val;
-            }
-        }
-        return max_abs;
-    }
-
-    template<typename Addr, int Dim, typename Compare>
-    double MatrixField<Addr, Dim, Compare>::matrix_norm_double(const value_type& M) {
-        double max_abs = 0.0;
-        for (int i = 0; i < Dim; ++i) {
-            for (int j = 0; j < Dim; ++j) {
-                double val = M(i, j).convert_to<double>();
-                double abs_val = val < 0 ? -val : val;
                 if (abs_val > max_abs) max_abs = abs_val;
             }
         }
@@ -285,9 +271,13 @@ namespace delta::geometry {
             Z_pow = Z_pow * Z2;              // one multiplication instead of two
             value_type term = Z_pow / Scalar(2 * n + 1);
             sum += term;
-            // Fast convergence check using double
-            double norm_term = matrix_norm_double(term);
-            if (norm_term <= eps.convert_to<double>()) break;
+
+            // Check convergence using exact rational comparison.
+            // The norm of the term is a rational number; we compare it directly
+            // with the requested epsilon. Thanks to the built‑in preliminary 
+            // double interval comparison, this is, in theory, both efficient and exact.
+            Scalar norm_term = matrix_norm(term);
+            if (norm_term <= eps) break;
             if (n > max_series) throw std::runtime_error("matrix_log: series did not converge");
         }
         sum = sum * Scalar(2);
