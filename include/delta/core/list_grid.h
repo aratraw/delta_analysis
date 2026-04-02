@@ -92,6 +92,10 @@ namespace delta {
         /// Returns the comparator used by the grid.
         const Compare& comparator() const noexcept { return comp_; }
 
+        std::vector<value_type> collect_points() const {
+            return data_;   // data_ is std::vector<T>
+        }
+
         // -------------------------------------------------------------------------
         // Refinement
         // -------------------------------------------------------------------------

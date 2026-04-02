@@ -87,6 +87,16 @@ namespace delta {
         /// Returns the comparator used by the grid.
         const Compare& comparator() const noexcept { return comp_; }
 
+        /// Generates a flat vector of all addresses (sequential).
+        std::vector<value_type> collect_points() const {
+            std::vector<value_type> points;
+            points.reserve(size());
+            for (const auto& addr : *this) {
+                points.push_back(addr);
+            }
+            return points;
+        }
+
         // -------------------------------------------------------------------------
         // Refinement is not provided directly – use the free function refine_grid
         // -------------------------------------------------------------------------

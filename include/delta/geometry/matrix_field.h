@@ -8,6 +8,7 @@
 #include <stdexcept>
 #include <type_traits>
 #include <limits>
+#include <vector>        // added for parallelization
 
 namespace delta::geometry {
 
@@ -94,9 +95,37 @@ namespace delta::geometry {
 
     template<typename Addr, int Dim, typename Compare>
     auto MatrixField<Addr, Dim, Compare>::operator*(const MatrixField& other) const -> MatrixField {
-        MatrixField result;
+        // 1. Collect addresses from this field
+        std::vector<Addr> addrs;
+        addrs.reserve(this->size());
         for (const auto& [addr, mat] : *this) {
-            result.set(addr, mat * other.at(addr));
+            addrs.push_back(addr);
+        }
+
+        // 2. Vector of results
+        std::vector<value_type> results(addrs.size());
+
+        // 3. Parallel (or sequential) computation
+#ifdef _OPENMP
+        static constexpr std::size_t OMP_MIN_SIZE = 1000;
+        if (addrs.size() >= OMP_MIN_SIZE) {
+#pragma omp parallel for
+            for (std::ptrdiff_t i = 0; i < static_cast<std::ptrdiff_t>(addrs.size()); ++i) {
+                results[i] = this->at(addrs[i]) * other.at(addrs[i]);
+            }
+        }
+        else
+#endif
+        {
+            for (std::size_t i = 0; i < addrs.size(); ++i) {
+                results[i] = this->at(addrs[i]) * other.at(addrs[i]);
+            }
+        }
+
+        // 4. Build result field
+        MatrixField result;
+        for (std::size_t i = 0; i < addrs.size(); ++i) {
+            result.set(addrs[i], results[i]);
         }
         return result;
     }
@@ -273,9 +302,6 @@ namespace delta::geometry {
             sum += term;
 
             // Check convergence using exact rational comparison.
-            // The norm of the term is a rational number; we compare it directly
-            // with the requested epsilon. Thanks to the built‑in preliminary 
-            // double interval comparison, this is, in theory, both efficient and exact.
             Scalar norm_term = matrix_norm(term);
             if (norm_term <= eps) break;
             if (n > max_series) throw std::runtime_error("matrix_log: series did not converge");
@@ -288,14 +314,43 @@ namespace delta::geometry {
     }
 
     // -------------------------------------------------------------------------
-    // Public exp/log methods
+    // Public exp/log methods (parallelized)
     // -------------------------------------------------------------------------
     template<typename Addr, int Dim, typename Compare>
     auto MatrixField<Addr, Dim, Compare>::exp(const Scalar& eps) const -> MatrixField {
         Scalar actual_eps = (eps == 0) ? delta::default_eps() : eps;
-        MatrixField result;
+
+        // 1. Collect addresses
+        std::vector<Addr> addrs;
+        addrs.reserve(this->size());
         for (const auto& [addr, mat] : *this) {
-            result.set(addr, matrix_exp(mat, actual_eps));
+            addrs.push_back(addr);
+        }
+
+        // 2. Vector of results
+        std::vector<value_type> results(addrs.size());
+
+        // 3. Parallel (or sequential) computation
+#ifdef _OPENMP
+        static constexpr std::size_t OMP_MIN_SIZE = 1000;
+        if (addrs.size() >= OMP_MIN_SIZE) {
+#pragma omp parallel for
+            for (std::ptrdiff_t i = 0; i < static_cast<std::ptrdiff_t>(addrs.size()); ++i) {
+                results[i] = matrix_exp(this->at(addrs[i]), actual_eps);
+            }
+        }
+        else
+#endif
+        {
+            for (std::size_t i = 0; i < addrs.size(); ++i) {
+                results[i] = matrix_exp(this->at(addrs[i]), actual_eps);
+            }
+        }
+
+        // 4. Build result field
+        MatrixField result;
+        for (std::size_t i = 0; i < addrs.size(); ++i) {
+            result.set(addrs[i], results[i]);
         }
         return result;
     }
@@ -305,9 +360,38 @@ namespace delta::geometry {
         Scalar actual_eps = (eps == 0) ? delta::default_eps() : eps;
         // Compute log2 once for the whole field
         Scalar log2 = delta::log(2_r, actual_eps);
-        MatrixField result;
+
+        // 1. Collect addresses
+        std::vector<Addr> addrs;
+        addrs.reserve(this->size());
         for (const auto& [addr, mat] : *this) {
-            result.set(addr, matrix_log(mat, actual_eps, log2));
+            addrs.push_back(addr);
+        }
+
+        // 2. Vector of results
+        std::vector<value_type> results(addrs.size());
+
+        // 3. Parallel (or sequential) computation
+#ifdef _OPENMP
+        static constexpr std::size_t OMP_MIN_SIZE = 1000;
+        if (addrs.size() >= OMP_MIN_SIZE) {
+#pragma omp parallel for
+            for (std::ptrdiff_t i = 0; i < static_cast<std::ptrdiff_t>(addrs.size()); ++i) {
+                results[i] = matrix_log(this->at(addrs[i]), actual_eps, log2);
+            }
+        }
+        else
+#endif
+        {
+            for (std::size_t i = 0; i < addrs.size(); ++i) {
+                results[i] = matrix_log(this->at(addrs[i]), actual_eps, log2);
+            }
+        }
+
+        // 4. Build result field
+        MatrixField result;
+        for (std::size_t i = 0; i < addrs.size(); ++i) {
+            result.set(addrs[i], results[i]);
         }
         return result;
     }

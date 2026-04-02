@@ -72,6 +72,11 @@ namespace delta {
         /// Returns the comparator used for ordering.
         const Compare& comparator() const noexcept { return comp_; }
 
+        /// Returns a flat vector of all nodes (all addresses in the tree).
+        std::vector<value_type> collect_points() const {
+            return nodes_;   // nodes_ is std::vector<std::string>
+        }
+
         // -------------------------------------------------------------------------
         // Tree-specific methods
         // -------------------------------------------------------------------------
