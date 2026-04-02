@@ -41,11 +41,11 @@ namespace delta {
         static Rational from_lazy_index(std::size_t root_idx);
 
         // Копирование/перемещение по умолчанию
-        Rational(const Rational&) = default;
-        Rational(Rational&&) = default;
-        Rational& operator=(const Rational&) = default;
-        Rational& operator=(Rational&&) = default;
-        ~Rational() = default;
+        Rational(const Rational&);
+        Rational(Rational&&) noexcept;
+        Rational& operator=(const Rational&);
+        Rational& operator=(Rational&&) noexcept;
+        ~Rational();
 
         double to_double() const;
 
@@ -62,6 +62,7 @@ namespace delta {
 
         int root_index() const;
         Rational lazy() const;
+        Rational immediate() const;
         Rational simplify() const;
         Rational eval(bool skip_simplify = false) const;
 

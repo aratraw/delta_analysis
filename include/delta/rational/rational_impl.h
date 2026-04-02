@@ -278,11 +278,53 @@ namespace delta {
     }
 
     inline Rational Rational::from_lazy_index(std::size_t root_idx) {
+        internal::increment_ref(static_cast<int>(root_idx));
         Rational r;
         r.storage_ = static_cast<int>(root_idx);
         return r;
     }
 
+    // ----------------------------------------------------------------------------
+    // Copy, move, destructor, assignment (with reference counting)
+    // ----------------------------------------------------------------------------
+
+    inline Rational::Rational(const Rational& other) : storage_(other.storage_) {
+        if (is_lazy()) {
+            internal::increment_ref(root_index());
+        }
+    }
+
+    inline Rational::Rational(Rational&& other) noexcept : storage_(std::move(other.storage_)) {
+        other.storage_ = internal::SmallStorage(0);
+    }
+
+    inline Rational::~Rational() {
+        if (is_lazy()) {
+            internal::decrement_ref(root_index());
+        }
+    }
+
+    inline Rational& Rational::operator=(const Rational& other) {
+        if (this == &other) return *this;
+        if (is_lazy()) {
+            internal::decrement_ref(root_index());
+        }
+        storage_ = other.storage_;
+        if (is_lazy()) {
+            internal::increment_ref(root_index());
+        }
+        return *this;
+    }
+
+    inline Rational& Rational::operator=(Rational&& other) noexcept {
+        if (this == &other) return *this;
+        if (is_lazy()) {
+            internal::decrement_ref(root_index());
+        }
+        storage_ = std::move(other.storage_);
+        other.storage_ = internal::SmallStorage(0);
+        return *this;
+    }
     // ----------------------------------------------------------------------------
     // State queries
     // ----------------------------------------------------------------------------
@@ -359,6 +401,20 @@ namespace delta {
         internal::Value val = to_value();
         ExpressionRoot root = ExpressionRoot::make_const(val);
         return Rational::from_lazy_index(root.root_index());
+    }
+
+    inline Rational Rational::immediate() const {
+        if (is_immediate()) {
+            return *this;   // или Rational(*this) – копия, но *this уже immediate
+        }
+        // lazy
+        const internal::Node& node = internal::pool.nodes[root_index()];
+        if (node.op == internal::LazyOp::CONST) {
+            internal::Value v = internal::pool.values[node.value_idx];
+            return Rational(v);
+        }
+        // fallback: сложное выражение
+        return eval();
     }
 
     // ----------------------------------------------------------------------------
@@ -661,14 +717,14 @@ namespace delta {
 
     inline ExpressionRoot ExpressionRoot::pi(const Rational& eps) {
         internal::Value eps_val = eps.to_value();
-        int val_idx = internal::add_value(eps_val);
+        int val_idx = internal::pool.add_value(eps_val);
         int node_idx = internal::get_unary_node(internal::LazyOp::PI, -1, val_idx);
         return ExpressionRoot(node_idx);
     }
 
     inline ExpressionRoot ExpressionRoot::e(const Rational& eps) {
         internal::Value eps_val = eps.to_value();
-        int val_idx = internal::add_value(eps_val);
+        int val_idx = internal::pool.add_value(eps_val);
         int node_idx = internal::get_unary_node(internal::LazyOp::E, -1, val_idx);
         return ExpressionRoot(node_idx);
     }

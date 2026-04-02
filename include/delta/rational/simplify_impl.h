@@ -118,7 +118,7 @@ namespace delta::internal {
                         if (inner != -1) {
                             Value eps = node.value_idx != -1 ? values[node.value_idx]
                                 : internal::default_eps_value;
-                            int eps_idx = add_value(eps);
+                            int eps_idx = internal::pool.add_value(eps);
                             int two = add_const(Value(SmallStorage(2)));
                             int half = get_unary_node(LazyOp::RECIP, two);
                             int x_half = get_binary_node(LazyOp::MUL, inner, half);
@@ -146,7 +146,7 @@ namespace delta::internal {
                             // acos(0) → π/2
                             Value eps = node.value_idx != -1 ? values[node.value_idx]
                                 : internal::default_eps_value;
-                            int eps_idx = add_value(eps);
+                            int eps_idx = internal::pool.add_value(eps);
                             int pi_node = get_unary_node(LazyOp::PI, -1, eps_idx);
                             int two = add_const(Value(SmallStorage(2)));
                             int half = get_unary_node(LazyOp::RECIP, two);

@@ -6,6 +6,7 @@ add_executable(delta_tests_rational
     "rational_test.cpp"
     "rational_test_2.cpp"
     "lazy_test.cpp"
+     "gc_test.cpp"
     "interval_test.cpp"
     "transcendentals_test.cpp"
     "pow_test.cpp"

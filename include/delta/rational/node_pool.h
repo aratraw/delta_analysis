@@ -12,9 +12,8 @@
 
 #include <vector>
 #include <cstdint>
-#include <optional>
 #include <cmath>
-#include <functional>
+#include <limits>
 
 #ifndef M_PI
 #define M_PI 3.14159265358979323846
@@ -25,9 +24,6 @@
 
 namespace delta::internal {
 
-    // ----------------------------------------------------------------------------
-    // AbslHashValue для SmallStorage, BigStorage и Value
-    // ----------------------------------------------------------------------------
     template <typename H>
     H AbslHashValue(H h, const SmallStorage& s) {
         SmallStorage norm = s;
@@ -42,23 +38,16 @@ namespace delta::internal {
 
     template <typename H>
     H AbslHashValue(H h, const Value& v) {
-        // Используем математическое представление для консистентности
         auto [num, den] = normalize_to_cpp_int(v);
         return H::combine(std::move(h), num, den);
     }
 
-    // ----------------------------------------------------------------------------
-    // LazyOp – виды узлов
-    // ----------------------------------------------------------------------------
     enum class LazyOp : uint8_t {
         CONST, ADD, MUL, NEG, RECIP,
         SQRT, EXP, LOG, SIN, COS, ACOS,
         PI, E, POW
     };
 
-    // ----------------------------------------------------------------------------
-    // Node – узел ленивого дерева
-    // ----------------------------------------------------------------------------
     struct Node {
         LazyOp op;
         int32_t child0;
@@ -68,6 +57,10 @@ namespace delta::internal {
         Interval approx;
         uint64_t hash;
 
+        // Конструктор по умолчанию
+        Node() : op(LazyOp::CONST), child0(-1), child1(-1), value_idx(-1), depth(0), approx(Interval()), hash(0) {}
+
+        // Конструктор с параметрами (остаётся без изменений)
         Node(LazyOp op, int32_t c0, int32_t c1, int32_t v_idx, int32_t depth,
             Interval approx, uint64_t hash)
             : op(op), child0(c0), child1(c1), value_idx(v_idx),
@@ -75,9 +68,6 @@ namespace delta::internal {
         }
     };
 
-    // ----------------------------------------------------------------------------
-    // Ключи для кэшей интернирования
-    // ----------------------------------------------------------------------------
     struct BinaryKey {
         LazyOp op;
         int32_t left;
@@ -92,7 +82,6 @@ namespace delta::internal {
         bool operator==(const UnaryKey&) const = default;
     };
 
-    // Ключ для тернарных операций (например, POW с eps)
     struct TernaryKey {
         LazyOp op;
         int32_t left;
@@ -101,7 +90,6 @@ namespace delta::internal {
         bool operator==(const TernaryKey&) const = default;
     };
 
-    // Хешеры с использованием absl::HashOf
     struct BinaryKeyHash {
         size_t operator()(const BinaryKey& k) const {
             return absl::HashOf(k.op, k.left, k.right);
@@ -120,61 +108,82 @@ namespace delta::internal {
         }
     };
 
-    // ----------------------------------------------------------------------------
-    // NodePool – thread‑local пул узлов и значений
-    // ----------------------------------------------------------------------------
     struct NodePool {
+        static constexpr size_t DEFAULT_MAX_SIZE = 1'000'000;
+        size_t max_size = DEFAULT_MAX_SIZE;
         std::vector<Node> nodes;
         std::vector<Value> values;
+        std::vector<int> refcount;
+        size_t next_free_index = 0;
+
         absl::flat_hash_map<Value, int> value_cache;
+        absl::flat_hash_map<Value, int> constant_cache;
         absl::flat_hash_map<BinaryKey, int, BinaryKeyHash> binary_cache;
         absl::flat_hash_map<UnaryKey, int, UnaryKeyHash> unary_cache;
-        absl::flat_hash_map<TernaryKey, int, TernaryKeyHash> ternary_cache; // для POW
+        absl::flat_hash_map<TernaryKey, int, TernaryKeyHash> ternary_cache;
+
+        void ensure_initialized() {
+            if (nodes.empty()) {
+                nodes.resize(max_size);
+                refcount.resize(max_size, 0);
+                for (size_t i = 0; i < max_size; ++i) {
+                    nodes[i] = Node(LazyOp::CONST, -1, -1, -1, 0, Interval(), 0);
+                }
+                next_free_index = 0;
+            }
+        }
+
+        // Метод add_value
+        int add_value(const Value& v) {
+            Value normalized = v;
+            if (auto* s = std::get_if<SmallStorage>(&normalized)) {
+                s->normalize();
+            }
+            auto it = value_cache.find(normalized);
+            if (it != value_cache.end()) return it->second;
+            int idx = static_cast<int>(values.size());
+            values.push_back(normalized);
+            value_cache[normalized] = idx;
+            return idx;
+        }
     };
 
     inline thread_local NodePool pool;
 
-    // ----------------------------------------------------------------------------
-    // Вспомогательные функции
-    // ----------------------------------------------------------------------------
-    int add_value(const Value& v);
+    // Объявления функций
     int add_const(const Value& v);
     int get_binary_node(LazyOp op, int left, int right);
-    int get_binary_node(LazyOp op, int left, int right, int value_idx); // устаревшая, не использовать для POW
+    int get_binary_node(LazyOp op, int left, int right, int value_idx);
+    int get_pow_node(int left, int right, int value_idx);
     int get_unary_node(LazyOp op, int child, int value_idx = -1);
-    int get_pow_node(int left, int right, int value_idx);                // специально для POW
     Interval compute_interval(LazyOp op, const Interval& a, const Interval& b = Interval());
     uint64_t combine_hash(LazyOp op, uint64_t h0, uint64_t h1 = 0, int64_t extra = 0);
     uint64_t compute_hash_const(const Value& v);
 
-    // ----------------------------------------------------------------------------
+    inline void increment_ref(int idx);
+    inline void decrement_ref(int idx);
+    inline void set_pool_max_size(size_t new_size);
+    inline void force_garbage_collect();
+
+    int allocate_node();
+    void collect_garbage();
+
     // Реализации
-    // ----------------------------------------------------------------------------
-
-    inline int add_value(const Value& v) {
-        Value normalized = v;
-        if (auto* s = std::get_if<SmallStorage>(&normalized)) {
-            s->normalize();
-        }
-        auto it = pool.value_cache.find(normalized);
-        if (it != pool.value_cache.end()) return it->second;
-        int idx = static_cast<int>(pool.values.size());
-        pool.values.push_back(normalized);
-        pool.value_cache[normalized] = idx;
-        return idx;
-    }
-
     inline int add_const(const Value& v) {
-        int val_idx = add_value(v);
-        Interval approx(to_double(v));
-        uint64_t h = compute_hash_const(v);
-        Node node(LazyOp::CONST, -1, -1, val_idx, 0, approx, h);
-        int idx = static_cast<int>(pool.nodes.size());
-        pool.nodes.push_back(node);
+        pool.ensure_initialized();
+        auto it = pool.constant_cache.find(v);
+        if (it != pool.constant_cache.end()) return it->second;
+        int idx = allocate_node();
+        int val_idx = pool.add_value(v);
+        Node node(LazyOp::CONST, -1, -1, val_idx, 0, Interval(to_double(v)), compute_hash_const(v));
+        pool.nodes[idx] = node;
+        pool.refcount[idx] = 0;
+        pool.constant_cache[v] = idx;
         return idx;
     }
 
     inline int get_binary_node(LazyOp op, int left, int right) {
+        pool.ensure_initialized();
         if (op == LazyOp::ADD || op == LazyOp::MUL) {
             if (pool.nodes[left].hash > pool.nodes[right].hash)
                 std::swap(left, right);
@@ -184,21 +193,19 @@ namespace delta::internal {
         BinaryKey key{ op, left, right };
         auto it = pool.binary_cache.find(key);
         if (it != pool.binary_cache.end()) return it->second;
-
+        int idx = allocate_node();
         int depth = 1 + std::max(pool.nodes[left].depth, pool.nodes[right].depth);
         Interval approx = compute_interval(op, pool.nodes[left].approx, pool.nodes[right].approx);
         uint64_t hash = combine_hash(op, pool.nodes[left].hash, pool.nodes[right].hash);
         Node node(op, left, right, -1, depth, approx, hash);
-        int idx = static_cast<int>(pool.nodes.size());
-        pool.nodes.push_back(node);
+        pool.nodes[idx] = node;
+        pool.refcount[idx] = 0;
         pool.binary_cache[key] = idx;
         return idx;
     }
 
-    // ВНИМАНИЕ: эта перегрузка не использует value_idx в ключе,
-    // поэтому не подходит для операций, где value_idx влияет на семантику (например, POW).
-    // Для POW используйте get_pow_node.
     inline int get_binary_node(LazyOp op, int left, int right, int value_idx) {
+        pool.ensure_initialized();
         if (op == LazyOp::ADD || op == LazyOp::MUL) {
             if (pool.nodes[left].hash > pool.nodes[right].hash)
                 std::swap(left, right);
@@ -208,41 +215,42 @@ namespace delta::internal {
         BinaryKey key{ op, left, right };
         auto it = pool.binary_cache.find(key);
         if (it != pool.binary_cache.end()) return it->second;
-
+        int idx = allocate_node();
         int depth = 1 + std::max(pool.nodes[left].depth, pool.nodes[right].depth);
         Interval approx = compute_interval(op, pool.nodes[left].approx, pool.nodes[right].approx);
         uint64_t hash = combine_hash(op, pool.nodes[left].hash, pool.nodes[right].hash, value_idx);
         Node node(op, left, right, value_idx, depth, approx, hash);
-        int idx = static_cast<int>(pool.nodes.size());
-        pool.nodes.push_back(node);
+        pool.nodes[idx] = node;
+        pool.refcount[idx] = 0;
         pool.binary_cache[key] = idx;
         return idx;
     }
 
     inline int get_pow_node(int left, int right, int value_idx) {
+        pool.ensure_initialized();
         TernaryKey key{ LazyOp::POW, left, right, value_idx };
         auto it = pool.ternary_cache.find(key);
         if (it != pool.ternary_cache.end()) return it->second;
-
+        int idx = allocate_node();
         int depth = 1 + std::max(pool.nodes[left].depth, pool.nodes[right].depth);
         Interval approx = compute_interval(LazyOp::POW, pool.nodes[left].approx, pool.nodes[right].approx);
         uint64_t hash = combine_hash(LazyOp::POW, pool.nodes[left].hash, pool.nodes[right].hash, value_idx);
         Node node(LazyOp::POW, left, right, value_idx, depth, approx, hash);
-        int idx = static_cast<int>(pool.nodes.size());
-        pool.nodes.push_back(node);
+        pool.nodes[idx] = node;
+        pool.refcount[idx] = 0;
         pool.ternary_cache[key] = idx;
         return idx;
     }
 
     inline int get_unary_node(LazyOp op, int child, int value_idx) {
+        pool.ensure_initialized();
         UnaryKey key{ op, child, value_idx };
         auto it = pool.unary_cache.find(key);
         if (it != pool.unary_cache.end()) return it->second;
-
+        int idx = allocate_node();
         int depth;
         Interval approx;
         uint64_t hash;
-
         if (child == -1) {
             depth = 0;
             approx = compute_interval(op, Interval());
@@ -253,10 +261,9 @@ namespace delta::internal {
             approx = compute_interval(op, pool.nodes[child].approx);
             hash = combine_hash(op, pool.nodes[child].hash, value_idx);
         }
-
         Node node(op, child, -1, value_idx, depth, approx, hash);
-        int idx = static_cast<int>(pool.nodes.size());
-        pool.nodes.push_back(node);
+        pool.nodes[idx] = node;
+        pool.refcount[idx] = 0;
         pool.unary_cache[key] = idx;
         return idx;
     }
@@ -307,7 +314,6 @@ namespace delta::internal {
         case LazyOp::PI:   return Interval(M_PI);
         case LazyOp::E:    return Interval(M_E);
         case LazyOp::POW: {
-            // Грубая оценка: для положительных оснований
             double lo = std::pow(a.lower(), b.lower());
             double hi = std::pow(a.upper(), b.upper());
             return Interval(lo, hi);
@@ -331,4 +337,35 @@ namespace delta::internal {
         return absl::Hash<Value>{}(v);
     }
 
+    inline void increment_ref(int idx) {
+        if (idx < 0) return;
+        pool.ensure_initialized();
+        if (static_cast<size_t>(idx) >= pool.nodes.size()) return;
+        ++pool.refcount[idx];
+    }
+
+    inline void decrement_ref(int idx) {
+        if (idx < 0) return;
+        if (static_cast<size_t>(idx) >= pool.nodes.size()) return;
+        if (pool.refcount[idx] > 0)
+            --pool.refcount[idx];
+    }
+
+    inline void set_pool_max_size(size_t new_size) {
+        if (pool.nodes.empty()) {
+            pool.max_size = new_size;
+        }
+    }
+
+    inline void force_garbage_collect() {
+        collect_garbage();
+    }
+
+    inline void reset_pool() {
+        pool.~NodePool();
+        new (&pool) NodePool();   // placement new
+    }
+
 } // namespace delta::internal
+
+#include "gc.h"
