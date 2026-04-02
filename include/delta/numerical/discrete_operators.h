@@ -14,9 +14,7 @@
 #include "delta/core/uniform_grid.h"
 #include "delta/core/list_grid.h"
 #include "delta/geometry/tensor_field.h"
-#include "delta/core/product_path.h"// for ProductGrid. Yeah, it's non-obvious. Noone pays me to make it obvious.
-// at some point should rename core/product_path and deduplicate 
-// the ProductPath functional with geometry/product_regulative.h
+#include "delta/core/product_grid.h"// for ProductGrid.
 
 namespace delta::numerical {
 

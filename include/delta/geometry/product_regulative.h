@@ -20,7 +20,7 @@
 #include <functional>
 #include <type_traits>
 #include "delta/core/regulative_idea.h"
-#include "delta/core/product_path.h"
+#include "delta/core/product_grid.h"
 
 namespace delta::geometry {
 

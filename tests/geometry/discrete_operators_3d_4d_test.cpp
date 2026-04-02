@@ -5,7 +5,7 @@
 #include <cmath>
 #include "delta/numerical/discrete_operators.h"
 #include "delta/core/uniform_grid.h"
-#include "delta/core/product_path.h"
+#include "delta/core/product_grid.h"
 #include "delta/geometry/tensor_field.h"
 #include "../test_fixtures_geometry_numerical.h"
 
