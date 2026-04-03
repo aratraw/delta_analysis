@@ -57,10 +57,8 @@ namespace delta::internal {
         Interval approx;
         uint64_t hash;
 
-        // Конструктор по умолчанию
         Node() : op(LazyOp::CONST), child0(-1), child1(-1), value_idx(-1), depth(0), approx(Interval()), hash(0) {}
 
-        // Конструктор с параметрами (остаётся без изменений)
         Node(LazyOp op, int32_t c0, int32_t c1, int32_t v_idx, int32_t depth,
             Interval approx, uint64_t hash)
             : op(op), child0(c0), child1(c1), value_idx(v_idx),
@@ -111,6 +109,7 @@ namespace delta::internal {
     struct NodePool {
         static constexpr size_t DEFAULT_MAX_SIZE = 1'000'000;
         size_t max_size = DEFAULT_MAX_SIZE;
+        size_t gc_threshold = 0;   // порог для сборки мусора (0.9 * max_size)
         std::vector<Node> nodes;
         std::vector<Value> values;
         std::vector<int> refcount;
@@ -122,6 +121,10 @@ namespace delta::internal {
         absl::flat_hash_map<UnaryKey, int, UnaryKeyHash> unary_cache;
         absl::flat_hash_map<TernaryKey, int, TernaryKeyHash> ternary_cache;
 
+        void update_gc_threshold() {
+            gc_threshold = static_cast<size_t>(0.9 * max_size);
+        }
+
         void ensure_initialized() {
             if (nodes.empty()) {
                 nodes.resize(max_size);
@@ -130,10 +133,10 @@ namespace delta::internal {
                     nodes[i] = Node(LazyOp::CONST, -1, -1, -1, 0, Interval(), 0);
                 }
                 next_free_index = 0;
+                update_gc_threshold();
             }
         }
 
-        // Метод add_value
         int add_value(const Value& v) {
             Value normalized = v;
             if (auto* s = std::get_if<SmallStorage>(&normalized)) {
@@ -150,7 +153,7 @@ namespace delta::internal {
 
     inline thread_local NodePool pool;
 
-    // Объявления функций
+    // Объявления функций (реализации в gc.h)
     int add_const(const Value& v);
     int get_binary_node(LazyOp op, int left, int right);
     int get_binary_node(LazyOp op, int left, int right, int value_idx);
@@ -168,7 +171,7 @@ namespace delta::internal {
     int allocate_node();
     void collect_garbage();
 
-    // Реализации
+    // Реализации (кроме тех, что в gc.h)
     inline int add_const(const Value& v) {
         pool.ensure_initialized();
         auto it = pool.constant_cache.find(v);
@@ -349,21 +352,6 @@ namespace delta::internal {
         if (static_cast<size_t>(idx) >= pool.nodes.size()) return;
         if (pool.refcount[idx] > 0)
             --pool.refcount[idx];
-    }
-
-    inline void set_pool_max_size(size_t new_size) {
-        if (pool.nodes.empty()) {
-            pool.max_size = new_size;
-        }
-    }
-
-    inline void force_garbage_collect() {
-        collect_garbage();
-    }
-
-    inline void reset_pool() {
-        pool.~NodePool();
-        new (&pool) NodePool();   // placement new
     }
 
 } // namespace delta::internal
