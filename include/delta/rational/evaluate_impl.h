@@ -13,7 +13,6 @@ namespace delta::internal {
 
     // ----------------------------------------------------------------------------
     // compute_node – вычисление узла по операции и уже готовым детям
-    // (без изменений)
     // ----------------------------------------------------------------------------
     inline Value compute_node(LazyOp op, const Value& left, const Value& right, const Value& eps) {
         switch (op) {
@@ -36,7 +35,8 @@ namespace delta::internal {
     }
 
     // ----------------------------------------------------------------------------
-    // batch_add_values – пакетное сложение нескольких значений из кэша
+    // batch_add_values – пакетное сложение с быстрым путём для SmallStorage
+    // (все значения предполагаются нормализованными)
     // ----------------------------------------------------------------------------
     inline Value batch_add_values(const std::vector<int>& indices,
         const std::vector<std::optional<Value>>& cache) {
@@ -47,12 +47,83 @@ namespace delta::internal {
             return cache[indices[0]].value();
         }
 
+        // --- Быстрый путь: все операнды SmallStorage и количество ≤ 64 ---
+        bool all_small = true;
+        for (int idx : indices) {
+            if (!std::holds_alternative<SmallStorage>(cache[idx].value())) {
+                all_small = false;
+                break;
+            }
+        }
+
+        if (all_small && indices.size() <= 64) {
+            absl::uint128 common_denom = 1;
+            std::vector<absl::int128> nums;
+            std::vector<absl::uint128> dens;
+            nums.reserve(indices.size());
+            dens.reserve(indices.size());
+
+            // Сбор чисел (уже нормализованы) и LCM с проверкой переполнения
+            for (int idx : indices) {
+                const SmallStorage& s = std::get<SmallStorage>(cache[idx].value());
+                // s уже нормализована (инвариант библиотеки)
+                nums.push_back(s.num);
+                dens.push_back(s.den);
+
+                absl::uint128 g = gcd(common_denom, s.den);
+                absl::uint128 lcm_candidate = common_denom / g;
+                if (lcm_candidate > (std::numeric_limits<absl::uint128>::max)() / s.den) {
+                    all_small = false;
+                    break;
+                }
+                common_denom = lcm_candidate * s.den;
+            }
+
+            if (all_small) {
+                absl::int128 sum_num = 0;
+                bool overflow = false;
+                for (size_t i = 0; i < indices.size(); ++i) {
+                    absl::uint128 factor = common_denom / dens[i];
+                    // Проверка переполнения умножения nums[i] * factor
+                    if (nums[i] != 0 && factor > 0) {
+                        absl::uint128 abs_num = nums[i] < 0 ? static_cast<absl::uint128>(-nums[i]) : static_cast<absl::uint128>(nums[i]);
+                        if (abs_num > (std::numeric_limits<absl::uint128>::max)() / factor) {
+                            overflow = true;
+                            break;
+                        }
+                    }
+                    absl::int128 term = nums[i] * static_cast<absl::int128>(factor);
+                    if (would_overflow_add(sum_num, term)) {
+                        overflow = true;
+                        break;
+                    }
+                    sum_num += term;
+                }
+                if (!overflow) {
+                    bool negative = (sum_num < 0);
+                    absl::uint128 abs_sum = negative ? static_cast<absl::uint128>(-sum_num) : static_cast<absl::uint128>(sum_num);
+                    absl::uint128 g = gcd(abs_sum, common_denom);
+                    if (g > 1) {
+                        abs_sum /= g;
+                        common_denom /= g;
+                    }
+                    if (abs_sum <= static_cast<absl::uint128>((std::numeric_limits<absl::int128>::max)()) &&
+                        common_denom <= (std::numeric_limits<absl::uint128>::max)()) {
+                        absl::int128 final_num = negative ? -static_cast<absl::int128>(abs_sum) : static_cast<absl::int128>(abs_sum);
+                        SmallStorage result(final_num, common_denom);
+                        result.normalize(); // безопасно, но в теории не нужно
+                        return result;
+                    }
+                }
+            }
+        }
+
+        // --- Общий путь (cpp_int) ---
         using boost::multiprecision::cpp_int;
         cpp_int common_denom(1);
         std::vector<cpp_int> numerators;
         numerators.reserve(indices.size());
 
-        // Первый проход: вычисляем общий знаменатель (LCM всех знаменателей)
         for (int idx : indices) {
             const Value& v = cache[idx].value();
             auto [num, den] = normalize_to_cpp_int(v);
@@ -60,7 +131,6 @@ namespace delta::internal {
             common_denom = boost::multiprecision::lcm(common_denom, den);
         }
 
-        // Второй проход: суммируем числители, приведённые к общему знаменателю
         cpp_int sum_num(0);
         for (size_t i = 0; i < indices.size(); ++i) {
             const Value& v = cache[indices[i]].value();
@@ -69,20 +139,42 @@ namespace delta::internal {
             sum_num += num * factor;
         }
 
-        // Сокращение
         cpp_int g = boost::multiprecision::gcd(sum_num, common_denom);
         if (g != 0) {
             sum_num /= g;
             common_denom /= g;
         }
 
-        // Преобразование обратно в Value (SmallStorage, если помещается)
         if (sum_num <= to_cpp_int((std::numeric_limits<absl::int128>::max)()) &&
             common_denom <= to_cpp_int((std::numeric_limits<absl::uint128>::max)())) {
             return SmallStorage(int128_from_string(sum_num.str()),
                 uint128_from_string(common_denom.str()));
         }
         return BigStorage(sum_num, common_denom);
+    }
+
+    // ----------------------------------------------------------------------------
+    // Вспомогательная функция: обработать список индексов батчами заданного размера
+    // ----------------------------------------------------------------------------
+    inline Value process_batch_list(const std::vector<int>& indices,
+        size_t batch_size,
+        const std::vector<std::optional<Value>>& cache) {
+        if (indices.empty()) return SmallStorage(0);
+        if (indices.size() <= batch_size) {
+            return batch_add_values(indices, cache);
+        }
+        std::vector<Value> partial_sums;
+        partial_sums.reserve((indices.size() + batch_size - 1) / batch_size);
+        for (size_t start = 0; start < indices.size(); start += batch_size) {
+            size_t end = std::min(start + batch_size, indices.size());
+            std::vector<int> chunk(indices.begin() + start, indices.begin() + end);
+            partial_sums.push_back(batch_add_values(chunk, cache));
+        }
+        Value sum = partial_sums[0];
+        for (size_t i = 1; i < partial_sums.size(); ++i) {
+            sum = eager_add(sum, partial_sums[i]);
+        }
+        return sum;
     }
 
     // ----------------------------------------------------------------------------
@@ -100,10 +192,12 @@ namespace delta::internal {
         std::stack<int> st;
         st.push(root_idx);
 
-        // Максимальный размер батча для пакетного сложения (предотвращает взрывной LCM)
-        constexpr size_t MAX_BATCH_SIZE = 64;
-        // Порог: если операндов <= 3, складываем последовательно (меньше накладных расходов)
-        constexpr size_t DIRECT_ADD_LIMIT = 3;
+        // Настройки батчинга
+        constexpr size_t DIRECT_ADD_LIMIT = 3;       // при ≤3 слагаемых – последовательное сложение
+        //why 64? Optimal size for a random scenario
+        //Do not swap this number unless you're sure what you're doing.
+        constexpr size_t MAX_BATCH_SIZE = 64;        // максимальный батч для рациональных чисел
+        constexpr size_t MAX_TRANS_BATCH = 8;        // батч для трансцендентных (приближённых) значений
 
         while (!st.empty()) {
             int idx = st.top();
@@ -120,7 +214,7 @@ namespace delta::internal {
                 continue;
             }
 
-            // Узел без детей (например, PI, E)
+            // Узел без детей (PI, E)
             if (node.child0 == -1 && node.child1 == -1) {
                 Value left{}, right{};
                 Value eps = node.value_idx != -1 ? values[node.value_idx] : Value{};
@@ -147,14 +241,13 @@ namespace delta::internal {
             // --- Специальная обработка для ADD ---
             if (node.op == LazyOp::ADD) {
                 std::vector<int> operands;
-                operands.reserve(16); // небольшая начальная ёмкость
+                operands.reserve(16);
 
                 // Левый ребёнок
                 if (node.child0 != -1) {
                     const Node& left_node = nodes[node.child0];
                     if (left_node.op == LazyOp::ADD && add_cache[node.child0].has_value()) {
                         auto& child_vec = add_cache[node.child0].value();
-                        // Если у дочернего ADD только один родитель (этот узел), перемещаем вектор
                         if (pool.refcount[node.child0] == 1) {
                             operands.insert(operands.end(),
                                 std::make_move_iterator(child_vec.begin()),
@@ -163,12 +256,10 @@ namespace delta::internal {
                             add_cache[node.child0].reset();
                         }
                         else {
-                            // Иначе копируем индексы (они маленькие)
                             operands.insert(operands.end(), child_vec.begin(), child_vec.end());
                         }
                     }
                     else {
-                        // Обычный узел – добавляем его индекс
                         operands.push_back(node.child0);
                     }
                 }
@@ -194,44 +285,61 @@ namespace delta::internal {
                     }
                 }
 
-                // Сохраняем список операндов для возможного использования родительским ADD
+                // Сохраняем для возможного использования родителем
                 add_cache[idx] = std::move(operands);
                 const auto& indices = add_cache[idx].value();
 
-                // Мелкие суммы – складываем последовательно (меньше накладных расходов)
+                // Мелкие суммы – старый добрый последовательный расчёт
                 if (indices.size() <= DIRECT_ADD_LIMIT) {
                     Value sum = cache[indices[0]].value();
                     for (size_t i = 1; i < indices.size(); ++i) {
                         sum = eager_add(sum, cache[indices[i]].value());
                     }
                     cache[idx] = sum;
+                    st.pop();
+                    continue;
                 }
-                else {
-                    // Разбиваем на батчи, если операндов больше MAX_BATCH_SIZE
-                    if (indices.size() <= MAX_BATCH_SIZE) {
-                        cache[idx] = batch_add_values(indices, cache);
+
+                // Крупные суммы – разделяем на рациональные и трансцендентные операнды
+                std::vector<int> rational_idxs;
+                std::vector<int> trans_idxs;
+                rational_idxs.reserve(indices.size());
+                trans_idxs.reserve(indices.size() / 2);
+
+                for (int operand_idx : indices) {
+                    LazyOp op = nodes[operand_idx].op;
+                    if (op == LazyOp::CONST || op == LazyOp::MUL || op == LazyOp::NEG || op == LazyOp::RECIP) {
+                        rational_idxs.push_back(operand_idx);
                     }
                     else {
-                        std::vector<Value> batch_results;
-                        batch_results.reserve((indices.size() + MAX_BATCH_SIZE - 1) / MAX_BATCH_SIZE);
-                        for (size_t start = 0; start < indices.size(); start += MAX_BATCH_SIZE) {
-                            size_t end = std::min(start + MAX_BATCH_SIZE, indices.size());
-                            std::vector<int> chunk(indices.begin() + start, indices.begin() + end);
-                            batch_results.push_back(batch_add_values(chunk, cache));
-                        }
-                        // Суммируем результаты батчей последовательно через eager_add
-                        Value sum = batch_results[0];
-                        for (size_t i = 1; i < batch_results.size(); ++i) {
-                            sum = eager_add(sum, batch_results[i]);
-                        }
-                        cache[idx] = sum;
+                        trans_idxs.push_back(operand_idx);
                     }
                 }
+
+                Value final_sum;
+                if (trans_idxs.empty()) {
+                    // Только рациональные
+                    final_sum = process_batch_list(rational_idxs, MAX_BATCH_SIZE, cache);
+                }
+                else {
+                    // Есть трансцендентные – сначала суммируем их небольшими батчами
+                    Value trans_sum = process_batch_list(trans_idxs, MAX_TRANS_BATCH, cache);
+                    if (rational_idxs.empty()) {
+                        final_sum = trans_sum;
+                    }
+                    else {
+                        // Суммируем рациональные (они могут быть большими)
+                        Value rational_sum = process_batch_list(rational_idxs, MAX_BATCH_SIZE, cache);
+                        final_sum = eager_add(trans_sum, rational_sum);
+                    }
+                }
+
+                cache[idx] = final_sum;
                 st.pop();
                 continue;
             }
 
-            // --- Обработка всех остальных операций (без изменений) ---
+            // --- Все остальные операции ---
             Value left = node.child0 != -1 ? cache[node.child0].value() : Value{};
             Value right = node.child1 != -1 ? cache[node.child1].value() : Value{};
             Value eps = node.value_idx != -1 ? values[node.value_idx] : Value{};

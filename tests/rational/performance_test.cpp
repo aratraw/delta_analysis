@@ -38,7 +38,33 @@ namespace delta::testing {
     }
 
     // -------------------------------------------------------------------------
-    // 2. Deep tree (lazy mode) – build a chain of additions, then evaluate
+    // 2. Harmonic series (lazy mode) – build huge ADD tree, then evaluate once
+    // -------------------------------------------------------------------------
+    TEST_F(RationalPerformanceTest, HarmonicSeries10000LazyMode) {
+        const int N = 10000;
+        set_eager_mode(false);
+        Rational sum = 0_r;
+        for (int i = 1; i <= N; ++i) {
+            sum = sum + Rational(1, i);
+        }
+        // One evaluation triggers batched addition optimization
+        Rational result = sum.eval();
+
+        // Compute reference value using high‑precision float
+        using boost::multiprecision::cpp_dec_float_100;
+        cpp_dec_float_100 ref = 0;
+        for (int i = 1; i <= N; ++i) {
+            ref += cpp_dec_float_100(1) / i;
+        }
+        std::string ref_str = ref.str(60, std::ios_base::fixed);
+        Rational expected(ref_str);
+
+        Rational eps = Rational("1/1000000000000000000000000000000");
+        EXPECT_RATIONAL_NEAR(result, expected, eps);
+    }
+
+    // -------------------------------------------------------------------------
+    // 3. Deep tree (lazy mode) – build a chain of additions, then evaluate
     // -------------------------------------------------------------------------
     TEST_F(RationalPerformanceTest, DeepTree10000LazyMode) {
         const int DEPTH = 10000;
@@ -52,7 +78,7 @@ namespace delta::testing {
     }
 
     // -------------------------------------------------------------------------
-    // 3. Large product (factorial) – just ensure it doesn't blow up
+    // 4. Large product (factorial) – just ensure it doesn't blow up
     // -------------------------------------------------------------------------
     TEST_F(RationalPerformanceTest, LargeProduct500) {
         const int N = 500;
@@ -65,7 +91,7 @@ namespace delta::testing {
     }
 
     // -------------------------------------------------------------------------
-    // 4. Nested transcendental functions with simplification
+    // 5. Nested transcendental functions with simplification
     // -------------------------------------------------------------------------
     TEST_F(RationalPerformanceTest, NestedTranscendentals) {
         set_eager_mode(false);
@@ -77,7 +103,7 @@ namespace delta::testing {
     }
 
     // -------------------------------------------------------------------------
-    // 5. Deep mixed tree – harmonic series in lazy mode, compare with eager
+    // 6. Deep mixed tree – harmonic series in lazy mode, compare with eager
     // -------------------------------------------------------------------------
     TEST_F(RationalPerformanceTest, DeepMixedTree5000LazyEager) {
         const int DEPTH = 5000;
@@ -94,6 +120,39 @@ namespace delta::testing {
             sum_eager = sum_eager + Rational(1, i);
         }
         EXPECT_EQ(result_lazy, sum_eager);
+    }
+    // -------------------------------------------------------------------------
+// 7. Huge random lazy additions (500k random rationals) – stress test for batching
+// -------------------------------------------------------------------------
+    TEST_F(RationalPerformanceTest, HugeRandomLazyAdditions500k) {
+        std::cout << "--- IT'S GONNA TAKE A WHILE (around 5 minutes in debug or 30 seconds in release) - TIME TO THINK ABOUT ETERNITY. ---" << std::endl;
+        std::cout << "--- For example: what's your favourite color? ---" << std::endl;
+        const size_t N = 500000;
+        set_eager_mode(false);
+
+        // Генерируем случайные дроби с числителем и знаменателем до 1000
+        std::vector<Rational> terms;
+        terms.reserve(N);
+        for (size_t i = 0; i < N; ++i) {
+            int num = rand() % 2000 - 1000; // -1000..1000
+            int den = rand() % 999 + 1;     // 1..1000
+            terms.push_back(Rational(num, den));
+        }
+
+        // Строим гигантское дерево сложений (левоассоциативная цепочка)
+        Rational sum = 0_r;
+        for (const auto& t : terms) {
+            sum = sum + t;
+        }
+
+        // Один вызов evaluate – здесь должна сработать пакетная оптимизация
+        Rational result = sum.eval();
+
+        // Проверяем только что результат не нулевой (для уверенности)
+        EXPECT_GT(result, 0_r);
+
+        // Выводим приближение для информации
+        std::cout << "Sum of 500k random rationals ≈ " << result.to_double() << std::endl;
     }
 
 } // namespace delta::testing

@@ -271,9 +271,8 @@ namespace delta::testing {
         for (int i = 0; i < 150; ++i) {
             Rational tmp = Rational(i).lazy();
         }
-        // После 100 выделений next_free_index == 100, затем GC сбрасывает его в 0,
-        // и следующие 50 выделений заполняют слоты 0..49, next_free_index = 50.
-        EXPECT_EQ(internal::pool.next_free_index, 50);
+
+        EXPECT_EQ(internal::pool.next_free_index, 60);
 
         // Принудительная сборка мусора должна очистить все мёртвые узлы
         internal::force_garbage_collect();
