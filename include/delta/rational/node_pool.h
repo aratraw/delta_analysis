@@ -33,12 +33,12 @@ namespace delta::internal {
 
     template <typename H>
     H AbslHashValue(H h, const BigStorage& b) {
-        return H::combine(std::move(h), b.num(), b.den());
+        return H::combine(std::move(h), b.numerator(), b.denominator());
     }
 
     template <typename H>
     H AbslHashValue(H h, const Value& v) {
-        auto [num, den] = normalize_to_cpp_int(v);
+        auto [num, den] = normalize_to_dumb_int(v);
         return H::combine(std::move(h), num, den);
     }
 

@@ -5,6 +5,7 @@
 #include "expression_root.h"
 #include "node_pool.h"
 #include "evaluate_impl.h"
+#include "evaluation_core.h" 
 #include "simplify_impl.h"
 #include "context.h"
 #include "utils.h"
@@ -21,6 +22,7 @@
 #include <type_traits>
 
 namespace delta {
+
     // ----------------------------------------------------------------------------
     // eager wrapper functions (formerly in eager.h)
     // ----------------------------------------------------------------------------
@@ -120,6 +122,71 @@ namespace delta {
         internal::Value res = internal::eager_pow(vbase, vexp, veps);
         return Rational(res);
     }
+
+    // ----------------------------------------------------------------------------
+    // In‑place addition for immediate Rationals (zero allocation for BigStorage)
+    // ----------------------------------------------------------------------------
+    inline void inplace_add(Rational& a, const Rational& b) {
+        if (!a.is_immediate() || !b.is_immediate()) {
+            a = a + b;
+            return;
+        }
+
+        // Small + Small
+        if (auto* sa = std::get_if<internal::SmallStorage>(&a.storage_)) {
+            if (const auto* sb = std::get_if<internal::SmallStorage>(&b.storage_)) {
+                internal::Value tmp = internal::eager_add(*sa, *sb);
+                if (const auto* res_small = std::get_if<internal::SmallStorage>(&tmp)) {
+                    a.storage_ = *res_small;
+                }
+                else {
+                    a.storage_ = std::get<internal::BigStorage>(tmp);
+                }
+                return;
+            }
+            // Small + Big
+            if (const auto* bb = std::get_if<internal::BigStorage>(&b.storage_)) {
+                internal::BigRationalType sum =
+                    internal::BigRationalType(internal::to_dumb_int(sa->num)) / internal::to_dumb_int(sa->den) + bb->val;
+                a.storage_ = internal::BigStorage(std::move(sum));
+                return;
+            }
+        }
+
+        // Big + Big
+        if (auto* ba = std::get_if<internal::BigStorage>(&a.storage_)) {
+            if (const auto* bb = std::get_if<internal::BigStorage>(&b.storage_)) {
+                ba->val += bb->val;   // zero allocation
+                return;
+            }
+            // Big + Small
+            if (const auto* sb = std::get_if<internal::SmallStorage>(&b.storage_)) {
+                internal::dumb_int snum = internal::to_dumb_int(sb->num);
+                internal::dumb_int sden = internal::to_dumb_int(sb->den);
+                internal::BigRationalType small_rational = internal::BigRationalType(snum) / sden;
+                ba->val += small_rational;
+                return;
+            }
+        }
+
+        // Fallback
+        a = a + b;
+    }
+
+    inline void inplace_mul(Rational& a, const Rational& b) {
+        if (!a.is_immediate() || !b.is_immediate()) {
+            a = a * b;
+            return;
+        }
+        if (auto* ba = std::get_if<internal::BigStorage>(&a.storage_)) {
+            if (const auto* bb = std::get_if<internal::BigStorage>(&b.storage_)) {
+                ba->val *= bb->val;
+                return;
+            }
+        }
+        a = a * b;
+    }
+
     // ----------------------------------------------------------------------------
     // Constructors
     // ----------------------------------------------------------------------------
@@ -128,77 +195,67 @@ namespace delta {
 
     inline Rational::Rational(absl::int128 num) : storage_(internal::SmallStorage(num)) {}
 
-    // Неявные конструкторы для целых типов
     inline Rational::Rational(int num) : Rational(static_cast<absl::int128>(num)) {}
     inline Rational::Rational(long long num) : Rational(static_cast<absl::int128>(num)) {}
     inline Rational::Rational(unsigned long long num) : Rational(static_cast<absl::int128>(num)) {}
 
-    // Конструктор от двух 128-битных чисел (внутренний, неявный)
     inline Rational::Rational(absl::int128 num, absl::uint128 den) {
-        if (den == 0) {
-            throw std::domain_error("Denominator cannot be zero");
-        }
+        if (den == 0) throw std::domain_error("Denominator cannot be zero");
         internal::SmallStorage s(num, den);
         s.normalize();
         storage_ = s;
     }
 
-    // ЕДИНСТВЕННЫЙ конструктор от двух аргументов для пользовательского кода
     inline Rational::Rational(long long num, long long den) {
-        if (den == 0) {
-            throw std::domain_error("Denominator cannot be zero");
-        }
-        if (den < 0) {
-            num = -num;
-            den = -den;
-        }
+        if (den == 0) throw std::domain_error("Denominator cannot be zero");
+        if (den < 0) { num = -num; den = -den; }
 
-        // Проверяем, помещается ли в 128-битные типы
-        constexpr absl::int128 max_int128 = (std::numeric_limits<absl::int128>::max)();
-        constexpr absl::int128 min_int128 = (std::numeric_limits<absl::int128>::min)();
-        constexpr absl::uint128 max_uint128 = (std::numeric_limits<absl::uint128>::max)();
+        constexpr absl::int128 max_i128 = (std::numeric_limits<absl::int128>::max)();
+        constexpr absl::int128 min_i128 = (std::numeric_limits<absl::int128>::min)();
+        constexpr absl::uint128 max_u128 = (std::numeric_limits<absl::uint128>::max)();
 
-        if (num <= max_int128 && num >= min_int128 &&
-            static_cast<absl::uint128>(den) <= max_uint128) {
+        if (num <= max_i128 && num >= min_i128 &&
+            static_cast<absl::uint128>(den) <= max_u128) {
             *this = Rational(static_cast<absl::int128>(num),
                 static_cast<absl::uint128>(den));
         }
         else {
-            *this = Rational(boost::multiprecision::cpp_int(num),
-                boost::multiprecision::cpp_int(den));
+            *this = Rational(internal::dumb_int(num), internal::dumb_int(den));
         }
     }
 
-    // Конструкторы для больших чисел (explicit)
-    inline Rational::Rational(const boost::multiprecision::cpp_int& num)
+    inline Rational::Rational(const internal::dumb_int& num)
         : storage_(internal::BigStorage(num)) {
     }
 
-    inline Rational::Rational(const boost::multiprecision::cpp_int& num,
-        const boost::multiprecision::cpp_int& den) {
-        if (den == 0) {
-            throw std::domain_error("Denominator cannot be zero");
-        }
+    inline Rational::Rational(const internal::dumb_int& num, const internal::dumb_int& den) {
+        if (den == 0) throw std::domain_error("Denominator cannot be zero");
         storage_ = internal::BigStorage(num, den);
     }
 
-    // Конструктор от строки
+    inline Rational::Rational(const boost::multiprecision::cpp_int& num)
+        : Rational(internal::dumb_int(num)) {
+    }
+
+    inline Rational::Rational(const boost::multiprecision::cpp_int& num, const boost::multiprecision::cpp_int& den)
+        : Rational(internal::dumb_int(num), internal::dumb_int(den)) {
+    }
+
     inline Rational::Rational(const std::string& s) {
         size_t slash = s.find('/');
         if (slash != std::string::npos) {
             std::string num_str = s.substr(0, slash);
             std::string den_str = s.substr(slash + 1);
-            boost::multiprecision::cpp_int num(num_str);
-            boost::multiprecision::cpp_int den(den_str);
+            internal::dumb_int num(num_str);
+            internal::dumb_int den(den_str);
             if (den == 0) throw std::domain_error("Denominator cannot be zero");
             if (den < 0) { den = -den; num = -num; }
-            boost::multiprecision::cpp_int g = boost::multiprecision::gcd(num, den);
+            internal::dumb_int g = boost::multiprecision::gcd(num, den);
             num /= g; den /= g;
-            if (num <= internal::to_cpp_int((std::numeric_limits<absl::int128>::max)()) &&
-                den <= internal::to_cpp_int((std::numeric_limits<absl::uint128>::max)())) {
+            if (internal::fits_in_int128(num) && internal::fits_in_uint128(den)) {
                 storage_ = internal::SmallStorage(
-                    internal::int128_from_string(num.str()),
-                    internal::uint128_from_string(den.str())
+                    internal::dumb_int_to_int128(num),
+                    internal::dumb_int_to_uint128(den)
                 );
             }
             else {
@@ -208,7 +265,7 @@ namespace delta {
         else {
             size_t dot = s.find('.');
             if (dot == std::string::npos) {
-                storage_ = internal::BigStorage(boost::multiprecision::cpp_int(s));
+                storage_ = internal::BigStorage(internal::dumb_int(s));
             }
             else {
                 std::string int_part = s.substr(0, dot);
@@ -241,19 +298,18 @@ namespace delta {
                     numerator_str = "-" + numerator_str;
                 }
 
-                boost::multiprecision::cpp_int denominator = 1;
+                internal::dumb_int denominator = 1;
                 for (size_t i = 0; i < decimal_places; ++i) denominator *= 10;
 
-                boost::multiprecision::cpp_int numerator(numerator_str);
-                boost::multiprecision::cpp_int g = boost::multiprecision::gcd(numerator, denominator);
+                internal::dumb_int numerator(numerator_str);
+                internal::dumb_int g = boost::multiprecision::gcd(numerator, denominator);
                 numerator /= g;
                 denominator /= g;
 
-                if (numerator <= internal::to_cpp_int((std::numeric_limits<absl::int128>::max)()) &&
-                    denominator <= internal::to_cpp_int((std::numeric_limits<absl::uint128>::max)())) {
+                if (internal::fits_in_int128(numerator) && internal::fits_in_uint128(denominator)) {
                     storage_ = internal::SmallStorage(
-                        internal::int128_from_string(numerator.str()),
-                        internal::uint128_from_string(denominator.str())
+                        internal::dumb_int_to_int128(numerator),
+                        internal::dumb_int_to_uint128(denominator)
                     );
                 }
                 else {
@@ -289,9 +345,7 @@ namespace delta {
     // ----------------------------------------------------------------------------
 
     inline Rational::Rational(const Rational& other) : storage_(other.storage_) {
-        if (is_lazy()) {
-            internal::increment_ref(root_index());
-        }
+        if (is_lazy()) internal::increment_ref(root_index());
     }
 
     inline Rational::Rational(Rational&& other) noexcept : storage_(std::move(other.storage_)) {
@@ -299,32 +353,25 @@ namespace delta {
     }
 
     inline Rational::~Rational() {
-        if (is_lazy()) {
-            internal::decrement_ref(root_index());
-        }
+        if (is_lazy()) internal::decrement_ref(root_index());
     }
 
     inline Rational& Rational::operator=(const Rational& other) {
         if (this == &other) return *this;
-        if (is_lazy()) {
-            internal::decrement_ref(root_index());
-        }
+        if (is_lazy()) internal::decrement_ref(root_index());
         storage_ = other.storage_;
-        if (is_lazy()) {
-            internal::increment_ref(root_index());
-        }
+        if (is_lazy()) internal::increment_ref(root_index());
         return *this;
     }
 
     inline Rational& Rational::operator=(Rational&& other) noexcept {
         if (this == &other) return *this;
-        if (is_lazy()) {
-            internal::decrement_ref(root_index());
-        }
+        if (is_lazy()) internal::decrement_ref(root_index());
         storage_ = std::move(other.storage_);
         other.storage_ = internal::SmallStorage(0);
         return *this;
     }
+
     // ----------------------------------------------------------------------------
     // State queries
     // ----------------------------------------------------------------------------
@@ -347,10 +394,10 @@ namespace delta {
             if (auto* s = std::get_if<internal::SmallStorage>(&storage_)) {
                 internal::SmallStorage norm = *s;
                 norm.normalize();
-                return Rational(internal::to_cpp_int(norm.num));
+                return Rational(internal::to_dumb_int(norm.num));
             }
             else if (auto* b = std::get_if<internal::BigStorage>(&storage_)) {
-                return Rational(b->num());
+                return Rational(b->numerator());
             }
         }
         else {
@@ -364,10 +411,10 @@ namespace delta {
             if (auto* s = std::get_if<internal::SmallStorage>(&storage_)) {
                 internal::SmallStorage norm = *s;
                 norm.normalize();
-                return Rational(internal::to_cpp_int(norm.den));
+                return Rational(internal::to_dumb_int(norm.den));
             }
             else if (auto* b = std::get_if<internal::BigStorage>(&storage_)) {
-                return Rational(b->den());
+                return Rational(b->denominator());
             }
         }
         else {
@@ -404,16 +451,12 @@ namespace delta {
     }
 
     inline Rational Rational::immediate() const {
-        if (is_immediate()) {
-            return *this;   // или Rational(*this) – копия, но *this уже immediate
-        }
-        // lazy
+        if (is_immediate()) return *this;
         const internal::Node& node = internal::pool.nodes[root_index()];
         if (node.op == internal::LazyOp::CONST) {
             internal::Value v = internal::pool.values[node.value_idx];
             return Rational(v);
         }
-        // fallback: сложное выражение
         return eval();
     }
 
@@ -541,11 +584,16 @@ namespace delta {
     }
 
     // ----------------------------------------------------------------------------
-    // Compound assignment
+    // Compound assignment (in‑place where possible)
     // ----------------------------------------------------------------------------
 
     inline Rational& operator+=(Rational& a, const Rational& b) {
-        a = a + b;
+        if (internal::global_eager_mode || (a.is_immediate() && b.is_immediate())) {
+            inplace_add(a, b);
+        }
+        else {
+            a = a + b;
+        }
         return a;
     }
 
@@ -555,7 +603,12 @@ namespace delta {
     }
 
     inline Rational& operator*=(Rational& a, const Rational& b) {
-        a = a * b;
+        if (internal::global_eager_mode || (a.is_immediate() && b.is_immediate())) {
+            inplace_mul(a, b);
+        }
+        else {
+            a = a * b;
+        }
         return a;
     }
 
@@ -586,7 +639,7 @@ namespace delta {
     }
 
     // ----------------------------------------------------------------------------
-    // Batch addition
+    // Batch addition (optimised for immediate, uses build tree for lazy)
     // ----------------------------------------------------------------------------
     inline Rational batch_add(const std::vector<Rational>& terms) {
         if (terms.empty()) return Rational(0);
@@ -595,23 +648,23 @@ namespace delta {
             [](const Rational& r) { return r.is_immediate(); });
 
         if (all_immediate) {
-            using boost::multiprecision::cpp_int;
-            cpp_int common_denom(1);
-            std::vector<cpp_int> nums;
+            using internal::dumb_int;
+            dumb_int common_denom(1);
+            std::vector<dumb_int> nums;
             nums.reserve(terms.size());
 
             for (const Rational& term : terms) {
                 if (term.as_small()) {
                     internal::SmallStorage s = *term.as_small();
                     s.normalize();
-                    nums.push_back(internal::to_cpp_int(s.num));
-                    cpp_int den = internal::to_cpp_int(s.den);
+                    nums.push_back(internal::to_dumb_int(s.num));
+                    dumb_int den = internal::to_dumb_int(s.den);
                     common_denom = boost::multiprecision::lcm(common_denom, den);
                 }
                 else if (term.as_big()) {
                     const auto& b = *term.as_big();
-                    nums.push_back(b.num());
-                    common_denom = boost::multiprecision::lcm(common_denom, b.den());
+                    nums.push_back(b.numerator());
+                    common_denom = boost::multiprecision::lcm(common_denom, b.denominator());
                 }
                 else {
                     all_immediate = false;
@@ -620,30 +673,29 @@ namespace delta {
             }
 
             if (all_immediate) {
-                cpp_int sum_num(0);
+                dumb_int sum_num(0);
                 for (size_t i = 0; i < terms.size(); ++i) {
-                    cpp_int factor = common_denom;
+                    dumb_int factor = common_denom;
                     if (terms[i].as_small()) {
                         internal::SmallStorage s = *terms[i].as_small();
                         s.normalize();
-                        factor /= internal::to_cpp_int(s.den);
+                        factor /= internal::to_dumb_int(s.den);
                         sum_num += nums[i] * factor;
                     }
                     else if (terms[i].as_big()) {
                         const auto& b = *terms[i].as_big();
-                        factor /= b.den();
-                        sum_num += b.num() * factor;
+                        factor /= b.denominator();
+                        sum_num += b.numerator() * factor;
                     }
                 }
-                cpp_int g = boost::multiprecision::gcd(sum_num, common_denom);
+                dumb_int g = boost::multiprecision::gcd(sum_num, common_denom);
                 sum_num /= g;
                 common_denom /= g;
 
-                if (sum_num <= internal::to_cpp_int((std::numeric_limits<absl::int128>::max)()) &&
-                    common_denom <= internal::to_cpp_int((std::numeric_limits<absl::uint128>::max)())) {
+                if (internal::fits_in_int128(sum_num) && internal::fits_in_uint128(common_denom)) {
                     return Rational(
-                        internal::int128_from_string(sum_num.str()),
-                        internal::uint128_from_string(common_denom.str())
+                        internal::dumb_int_to_int128(sum_num),
+                        internal::dumb_int_to_uint128(common_denom)
                     );
                 }
                 else {
@@ -685,6 +737,9 @@ namespace delta {
         return x < Rational(0) ? -x : x;
     }
 
+    // ----------------------------------------------------------------------------
+    // ExpressionRoot method implementations (they need Rational and eps)
+    // ----------------------------------------------------------------------------
     inline ExpressionRoot ExpressionRoot::sqrt(const Rational& eps) const {
         internal::Value eps_val = eps.to_value();
         return make_unary(internal::LazyOp::SQRT, *this, eps_val);
@@ -729,6 +784,11 @@ namespace delta {
         return ExpressionRoot(node_idx);
     }
 
+    inline ExpressionRoot ExpressionRoot::pow(const ExpressionRoot& exponent, const Rational& eps) const {
+        internal::Value eps_val = eps.to_value();
+        return make_binary_with_eps(internal::LazyOp::POW, *this, exponent, eps_val);
+    }
+
     inline Rational default_eps() {
         return Rational(internal::default_eps_value);
     }
@@ -741,13 +801,8 @@ namespace delta {
         return internal::to_double(to_value());
     }
 
-    inline ExpressionRoot ExpressionRoot::pow(const ExpressionRoot& exponent, const Rational& eps) const {
-        internal::Value eps_val = eps.to_value();
-        return make_binary_with_eps(internal::LazyOp::POW, *this, exponent, eps_val);
-    }
-
     // ----------------------------------------------------------------------------
-    // convert_to<T> functionality
+    // convert_to<T> functionality (unchanged except using dumb_int)
     // ----------------------------------------------------------------------------
     template<typename T>
     inline T Rational::convert_to() const {
@@ -769,12 +824,12 @@ namespace delta {
                 return static_cast<int>(num);
             }
             else if (auto* b = v.as_big()) {
-                const auto& num = b->num();
+                const auto& num = b->numerator();
                 if (num > std::numeric_limits<int>::max()) {
-                    throw std::overflow_error("Rational::convert_to<int>: value out of int range (positive)");
+                    throw std::overflow_error("Rational::convert_to<int>: value out of range (positive)");
                 }
                 if (num < std::numeric_limits<int>::min()) {
-                    throw std::overflow_error("Rational::convert_to<int>: value out of int range (negative)");
+                    throw std::overflow_error("Rational::convert_to<int>: value out of range (negative)");
                 }
                 return static_cast<int>(num.convert_to<long long>());
             }
@@ -795,7 +850,7 @@ namespace delta {
                 return static_cast<long long>(num);
             }
             else if (auto* b = v.as_big()) {
-                const auto& num = b->num();
+                const auto& num = b->numerator();
                 if (num > std::numeric_limits<long long>::max()) {
                     throw std::overflow_error("Rational::convert_to<long long>: value out of range (positive)");
                 }
@@ -806,29 +861,24 @@ namespace delta {
             }
             throw std::logic_error("Rational::convert_to<long long>: invalid state");
         }
-        else if constexpr (std::is_same_v<T, boost::multiprecision::cpp_int>) {
+        else if constexpr (std::is_same_v<T, internal::dumb_int>) {
             Rational v = eval();
             if (v.denominator() != 1) {
-                throw std::domain_error("Rational::convert_to<cpp_int>: not an integer");
+                throw std::domain_error("Rational::convert_to<dumb_int>: not an integer");
             }
             if (auto* s = v.as_small()) {
                 internal::SmallStorage norm = *s;
                 norm.normalize();
-                // Приводим absl::int128 к cpp_int
-                if (norm.num < 0) {
-                    return -internal::to_cpp_int(static_cast<absl::uint128>(-norm.num));
-                }
-                else {
-                    return internal::to_cpp_int(static_cast<absl::uint128>(norm.num));
-                }
+                return internal::to_dumb_int(norm.num);
             }
             else if (auto* b = v.as_big()) {
-                return b->num();  // b->num() уже cpp_int
+                return b->numerator();
             }
-            throw std::logic_error("Rational::convert_to<cpp_int>: invalid state");
+            throw std::logic_error("Rational::convert_to<dumb_int>: invalid state");
         }
         else {
             static_assert(sizeof(T) == 0, "convert_to not supported for this type");
         }
     }
+
 } // namespace delta

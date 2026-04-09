@@ -36,10 +36,10 @@ namespace delta::testing {
             std::string den = denominator_str(r);
             if (num.empty() || den.empty()) return true;
 
-            boost::multiprecision::cpp_int n(num);
-            boost::multiprecision::cpp_int d(den);
+            delta::internal::dumb_int n(num);
+            delta::internal::dumb_int d(den);
             if (n < 0) n = -n;
-            boost::multiprecision::cpp_int g = boost::multiprecision::gcd(n, d);
+            delta::internal::dumb_int g = boost::multiprecision::gcd(n, d);
             return g == 1;
         }
     };

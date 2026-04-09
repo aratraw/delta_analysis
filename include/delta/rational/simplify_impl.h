@@ -260,7 +260,7 @@ namespace delta::internal {
                             if (sb_norm.den == 1) b_int = true;
                         }
                         else if (const auto* bb = std::get_if<BigStorage>(&vb)) {
-                            if (bb->den() == 1) b_int = true;
+                            if (bb->denominator() == 1) b_int = true;
                         }
                         if (const auto* sc = std::get_if<SmallStorage>(&vc)) {
                             SmallStorage sc_norm = *sc;
@@ -268,7 +268,7 @@ namespace delta::internal {
                             if (sc_norm.den == 1) c_int = true;
                         }
                         else if (const auto* bc = std::get_if<BigStorage>(&vc)) {
-                            if (bc->den() == 1) c_int = true;
+                            if (bc->denominator() == 1) c_int = true;
                         }
                         if (b_int && c_int) {
                             Value vprod = eager_mul(vb, vc);

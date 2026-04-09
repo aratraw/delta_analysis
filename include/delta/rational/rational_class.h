@@ -37,6 +37,10 @@ namespace delta {
         explicit Rational(const boost::multiprecision::cpp_int& num, const boost::multiprecision::cpp_int& den);
         explicit Rational(const std::string& s);
 
+        // 🔥 Новые конструкторы от dumb_int (для внутреннего использования)
+        explicit Rational(const internal::dumb_int& num);
+        explicit Rational(const internal::dumb_int& num, const internal::dumb_int& den);
+
         // Фабричный метод для ленивого объекта
         static Rational from_lazy_index(std::size_t root_idx);
 
@@ -86,6 +90,10 @@ namespace delta {
         friend Rational pi(const Rational&);
         friend Rational e(const Rational&);
         friend Rational pow(const Rational&, int);
+
+        // 🔥 Друзья для inplace-операций (доступ к storage_)
+        friend void inplace_add(Rational& a, const Rational& b);
+        friend void inplace_mul(Rational& a, const Rational& b);
 
     private:
         using Storage = std::variant<internal::SmallStorage, internal::BigStorage, int>;

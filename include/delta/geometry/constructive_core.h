@@ -21,18 +21,18 @@ namespace delta::geometry {
          * @param n Число для разложения (положительное)
          * @return std::set<int> Множество простых множителей (уникальные)
          */
-        inline std::set<int> prime_factors(const boost::multiprecision::cpp_int& n) {
+        inline std::set<int> prime_factors(const delta::internal::dumb_int& n) {
             std::set<int> factors;
             if (n <= 1) return factors;
 
-            boost::multiprecision::cpp_int m = n;
+            delta::internal::dumb_int m = n;
             // Обрабатываем множитель 2
             if (m % 2 == 0) {
                 factors.insert(2);
                 while (m % 2 == 0) m /= 2;
             }
             // Обрабатываем нечётные множители
-            boost::multiprecision::cpp_int p = 3;
+            delta::internal::dumb_int p = 3;
             while (p * p <= m) {
                 if (m % p == 0) {
                     factors.insert(p.convert_to<int>());
@@ -56,7 +56,7 @@ namespace delta::geometry {
             }
             auto num = x.numerator();
             if (num < 0) num = -num;
-            boost::multiprecision::cpp_int n = num.convert_to<boost::multiprecision::cpp_int>();
+            delta::internal::dumb_int n = num.convert_to<delta::internal::dumb_int>();
             return prime_factors(n);
         }
 
@@ -96,7 +96,7 @@ namespace delta::geometry {
             auto den_factors = detail::prime_factors(den);
             if (den_factors.empty()) return true; // знаменатель 1
 
-            auto base_factors = detail::prime_factors(static_cast<boost::multiprecision::cpp_int>(Base));
+            auto base_factors = detail::prime_factors(static_cast<delta::internal::dumb_int>(Base));
 
             for (int p : den_factors) {
                 if (base_factors.find(p) == base_factors.end()) {

@@ -3,7 +3,7 @@
 
 #include "node_pool.h"
 #include "evaluation_core.h"
-#include <boost/multiprecision/integer.hpp>   // для lcm
+#include <boost/multiprecision/integer.hpp>   // для lcm, gcd (работают с dumb_int)
 #include <stack>
 #include <optional>
 #include <vector>
@@ -66,11 +66,10 @@ namespace delta::internal {
             // Сбор чисел (уже нормализованы) и LCM с проверкой переполнения
             for (int idx : indices) {
                 const SmallStorage& s = std::get<SmallStorage>(cache[idx].value());
-                // s уже нормализована (инвариант библиотеки)
                 nums.push_back(s.num);
                 dens.push_back(s.den);
 
-                absl::uint128 g = gcd(common_denom, s.den);
+                absl::uint128 g = binary_gcd(common_denom, s.den);
                 absl::uint128 lcm_candidate = common_denom / g;
                 if (lcm_candidate > (std::numeric_limits<absl::uint128>::max)() / s.den) {
                     all_small = false;
@@ -84,7 +83,6 @@ namespace delta::internal {
                 bool overflow = false;
                 for (size_t i = 0; i < indices.size(); ++i) {
                     absl::uint128 factor = common_denom / dens[i];
-                    // Проверка переполнения умножения nums[i] * factor
                     if (nums[i] != 0 && factor > 0) {
                         absl::uint128 abs_num = nums[i] < 0 ? static_cast<absl::uint128>(-nums[i]) : static_cast<absl::uint128>(nums[i]);
                         if (abs_num > (std::numeric_limits<absl::uint128>::max)() / factor) {
@@ -102,7 +100,7 @@ namespace delta::internal {
                 if (!overflow) {
                     bool negative = (sum_num < 0);
                     absl::uint128 abs_sum = negative ? static_cast<absl::uint128>(-sum_num) : static_cast<absl::uint128>(sum_num);
-                    absl::uint128 g = gcd(abs_sum, common_denom);
+                    absl::uint128 g = binary_gcd(abs_sum, common_denom);
                     if (g > 1) {
                         abs_sum /= g;
                         common_denom /= g;
@@ -111,45 +109,48 @@ namespace delta::internal {
                         common_denom <= (std::numeric_limits<absl::uint128>::max)()) {
                         absl::int128 final_num = negative ? -static_cast<absl::int128>(abs_sum) : static_cast<absl::int128>(abs_sum);
                         SmallStorage result(final_num, common_denom);
-                        result.normalize(); // безопасно, но в теории не нужно
+                        result.normalize();
                         return result;
                     }
                 }
             }
         }
 
-        // --- Общий путь (cpp_int) ---
-        using boost::multiprecision::cpp_int;
-        cpp_int common_denom(1);
-        std::vector<cpp_int> numerators;
+        // --- Общий путь с использованием dumb_int (et_off) и конвертаций без .str() ---
+        using delta::internal::dumb_int;
+        dumb_int common_denom(1);
+        std::vector<dumb_int> numerators;
         numerators.reserve(indices.size());
 
         for (int idx : indices) {
             const Value& v = cache[idx].value();
-            auto [num, den] = normalize_to_cpp_int(v);
+            auto [num, den] = normalize_to_dumb_int(v);
             numerators.push_back(num);
             common_denom = boost::multiprecision::lcm(common_denom, den);
         }
 
-        cpp_int sum_num(0);
+        dumb_int sum_num(0);
         for (size_t i = 0; i < indices.size(); ++i) {
             const Value& v = cache[indices[i]].value();
-            auto [num, den] = normalize_to_cpp_int(v);
-            cpp_int factor = common_denom / den;
+            auto [num, den] = normalize_to_dumb_int(v);
+            dumb_int factor = common_denom / den;
             sum_num += num * factor;
         }
 
-        cpp_int g = boost::multiprecision::gcd(sum_num, common_denom);
+        dumb_int g = boost::multiprecision::gcd(sum_num, common_denom);
         if (g != 0) {
             sum_num /= g;
             common_denom /= g;
         }
 
-        if (sum_num <= to_cpp_int((std::numeric_limits<absl::int128>::max)()) &&
-            common_denom <= to_cpp_int((std::numeric_limits<absl::uint128>::max)())) {
-            return SmallStorage(int128_from_string(sum_num.str()),
-                uint128_from_string(common_denom.str()));
+        // Проверяем, помещается ли результат в 128-битные типы, и если да – возвращаем SmallStorage
+        if (fits_in_int128(sum_num) && fits_in_uint128(common_denom)) {
+            return SmallStorage(
+                dumb_int_to_int128(sum_num),
+                dumb_int_to_uint128(common_denom)
+            );
         }
+        // Иначе – BigStorage (без копирования через строки)
         return BigStorage(sum_num, common_denom);
     }
 
@@ -194,8 +195,6 @@ namespace delta::internal {
 
         // Настройки батчинга
         constexpr size_t DIRECT_ADD_LIMIT = 3;       // при ≤3 слагаемых – последовательное сложение
-        //why 64? Optimal size for a random scenario
-        //Do not swap this number unless you're sure what you're doing.
         constexpr size_t MAX_BATCH_SIZE = 64;        // максимальный батч для рациональных чисел
         constexpr size_t MAX_TRANS_BATCH = 8;        // батч для трансцендентных (приближённых) значений
 

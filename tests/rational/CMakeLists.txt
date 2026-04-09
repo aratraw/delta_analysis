@@ -12,8 +12,8 @@ add_executable(delta_tests_rational
     "pow_test.cpp"
     "eager_test.cpp"
     "batch_test.cpp"
-    "performance_test.cpp"
-)
+#    "performance_test.cpp"
+ "performance_compare_test.cpp")
 
 target_include_directories(delta_tests_rational PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/..)
 

@@ -9,8 +9,8 @@ namespace delta::internal {
 
     // Определение default_eps_value как Value, инициализация через BigStorage (10^-30)
     inline thread_local Value default_eps_value = [] {
-        boost::multiprecision::cpp_int num(1);
-        boost::multiprecision::cpp_int den(1);
+        delta::internal::dumb_int num(1);
+        delta::internal::dumb_int den(1);
         for (int i = 0; i < 30; ++i) den *= 10;
         return Value(BigStorage(num, den));
         }();

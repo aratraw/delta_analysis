@@ -1,3 +1,4 @@
+// storage.h
 #pragma once
 
 #include "rational_fwd.h"
@@ -5,9 +6,9 @@
 
 #include <absl/numeric/int128.h>
 #include <boost/multiprecision/cpp_int.hpp>
-#include <boost/multiprecision/integer.hpp>   // for lcm (used in operations.h)
+#include <boost/multiprecision/number.hpp>
+#include <boost/multiprecision/rational_adaptor.hpp>
 
-#include <memory>
 #include <stdexcept>
 #include <variant>
 
@@ -22,102 +23,66 @@ namespace delta::internal {
         bool reduced;
 
         constexpr SmallStorage() noexcept : num(0), den(1), reduced(true) {}
-
-        constexpr explicit SmallStorage(absl::int128 n) noexcept
-            : num(n), den(1), reduced(true) {
-        }
-
-        constexpr SmallStorage(absl::int128 n, absl::uint128 d) noexcept
-            : num(n), den(d), reduced(false) {
-        }
+        constexpr explicit SmallStorage(absl::int128 n) noexcept : num(n), den(1), reduced(true) {}
+        constexpr SmallStorage(absl::int128 n, absl::uint128 d) noexcept : num(n), den(d), reduced(false) {}
 
         void normalize() {
             if (reduced) return;
-            if (den == 0) {
-                throw std::domain_error("SmallStorage: denominator cannot be zero");
-            }
+            if (den == 0) throw std::domain_error("SmallStorage: denominator cannot be zero");
             if (num == 0) {
                 den = 1;
                 reduced = true;
                 return;
             }
-
-            // Ensure denominator is positive
             if (den < 0) {
                 den = -den;
                 num = -num;
             }
-
-            // Reduce by GCD
-            absl::uint128 g = gcd(static_cast<absl::uint128>(num < 0 ? -num : num), den);
+            absl::uint128 abs_num = num < 0 ? static_cast<absl::uint128>(-num) : static_cast<absl::uint128>(num);
+            absl::uint128 g = binary_gcd(abs_num, den);
             if (g > 1) {
-                num = static_cast<absl::int128>(static_cast<absl::uint128>(num < 0 ? -num : num) / g);
-                if (num < 0) num = -num;
+                abs_num /= g;
                 den /= g;
+                num = (num < 0) ? -static_cast<absl::int128>(abs_num) : static_cast<absl::int128>(abs_num);
             }
             reduced = true;
         }
     };
 
     // ============================================================================
-    // BigStorageImpl – actual arbitrary‑precision storage (immutable)
+    // BigRationalType – canonical rational with expression templates disabled
     // ============================================================================
-    struct BigStorageImpl {
-        boost::multiprecision::cpp_int num;
-        boost::multiprecision::cpp_int den;   // > 0
-
-        BigStorageImpl() = default;
-
-        BigStorageImpl(const boost::multiprecision::cpp_int& n,
-            const boost::multiprecision::cpp_int& d)
-            : num(n), den(d)
-        {
-            normalize();
-        }
-
-        void normalize() {
-            if (den == 0) {
-                throw std::domain_error("BigStorage: denominator cannot be zero");
-            }
-            if (num == 0) {
-                den = 1;
-                return;
-            }
-
-            // Ensure denominator is positive
-            if (den < 0) {
-                den = -den;
-                num = -num;
-            }
-
-            // Reduce by GCD
-            boost::multiprecision::cpp_int g = boost::multiprecision::gcd(num, den);
-            if (g > 1) {
-                num /= g;
-                den /= g;
-            }
-        }
-    };
+    using BigRationalType = boost::multiprecision::number<
+        boost::multiprecision::rational_adaptor<
+        boost::multiprecision::cpp_int_backend<>
+        >,
+        boost::multiprecision::et_off
+    >;
 
     // ============================================================================
-    // BigStorage – shared‑ptr wrapper for arbitrary‑precision rationals
+    // BigStorage – single‑field wrapper for arbitrary‑precision rationals
     // ============================================================================
     struct BigStorage {
-        std::shared_ptr<const BigStorageImpl> data;
+        BigRationalType val;
 
-        BigStorage() : data(std::make_shared<const BigStorageImpl>()) {}
-
-        explicit BigStorage(const boost::multiprecision::cpp_int& n)
-            : data(std::make_shared<const BigStorageImpl>(n, 1)) {
+        BigStorage() noexcept : val(0) {}
+        explicit BigStorage(const dumb_int& n) : val(n) {}
+        BigStorage(const dumb_int& n, const dumb_int& d) {
+            if (d == 0) throw std::domain_error("BigStorage: denominator cannot be zero");
+            BigRationalType tmp(n);
+            tmp /= d;
+            val = tmp;
         }
+        explicit BigStorage(BigRationalType v) noexcept : val(std::move(v)) {}
 
-        BigStorage(const boost::multiprecision::cpp_int& n,
-            const boost::multiprecision::cpp_int& d)
-            : data(std::make_shared<const BigStorageImpl>(n, d)) {
+        [[nodiscard]] dumb_int numerator() const {
+            return boost::multiprecision::numerator(val);
         }
-
-        const boost::multiprecision::cpp_int& num() const noexcept { return data->num; }
-        const boost::multiprecision::cpp_int& den() const noexcept { return data->den; }
+        [[nodiscard]] dumb_int denominator() const {
+            return boost::multiprecision::denominator(val);
+        }
+        [[nodiscard]] bool is_normalized() const noexcept { return true; }
+        void normalize() noexcept {}
     };
 
     // ============================================================================
@@ -125,49 +90,103 @@ namespace delta::internal {
     // ============================================================================
     using Value = std::variant<SmallStorage, BigStorage>;
 
-    // ----------------------------------------------------------------------------
-    // Comparison operators for Value (full comparison, normalizing if needed)
-    // ----------------------------------------------------------------------------
-
-    // Helper: convert a Value to a pair of cpp_int (num, den) for comparison
-    inline std::pair<boost::multiprecision::cpp_int, boost::multiprecision::cpp_int>
-        normalize_to_cpp_int(const Value& v) {
-        if (const auto* small = std::get_if<SmallStorage>(&v)) {
-            SmallStorage s = *small;
-            s.normalize();  // ensure reduced
-            return { to_cpp_int(s.num), to_cpp_int(s.den) };
-        }
-        else if (const auto* big = std::get_if<BigStorage>(&v)) {
-            return { big->num(), big->den() };
-        }
-        throw std::invalid_argument("Invalid variant state");
-    }
-
+    // ============================================================================
+    // Optimized comparisons (no normalize_to_dumb_int in hot path)
+    // ============================================================================
     inline bool operator==(const Value& a, const Value& b) {
-        auto [anum, aden] = normalize_to_cpp_int(a);
-        auto [bnum, bden] = normalize_to_cpp_int(b);
-        // Compare cross‑multiplication
-        return anum * bden == bnum * aden;
+        const auto* sa = std::get_if<SmallStorage>(&a);
+        const auto* sb = std::get_if<SmallStorage>(&b);
+        if (sa && sb) {
+            // Both SmallStorage: cross-multiplication with overflow check
+            absl::int128 left_num = sa->num;
+            absl::uint128 left_den = sa->den;
+            absl::int128 right_num = sb->num;
+            absl::uint128 right_den = sb->den;
+            if (would_overflow_mul(left_num, static_cast<absl::int128>(right_den)) ||
+                would_overflow_mul(right_num, static_cast<absl::int128>(left_den))) {
+                dumb_int l = to_dumb_int(left_num) * to_dumb_int(right_den);
+                dumb_int r = to_dumb_int(right_num) * to_dumb_int(left_den);
+                return l == r;
+            }
+            return left_num * static_cast<absl::int128>(right_den) ==
+                right_num * static_cast<absl::int128>(left_den);
+        }
+        // At least one BigStorage: convert both to BigRationalType and compare
+        BigRationalType av, bv;
+        if (const auto* ba = std::get_if<BigStorage>(&a)) {
+            av = ba->val;
+        }
+        else {
+            const auto& s = std::get<SmallStorage>(a);
+            av = BigRationalType(to_dumb_int(s.num)) / to_dumb_int(s.den);
+        }
+        if (const auto* bb = std::get_if<BigStorage>(&b)) {
+            bv = bb->val;
+        }
+        else {
+            const auto& s = std::get<SmallStorage>(b);
+            bv = BigRationalType(to_dumb_int(s.num)) / to_dumb_int(s.den);
+        }
+        return av == bv;
     }
 
     inline bool operator<(const Value& a, const Value& b) {
-        auto [anum, aden] = normalize_to_cpp_int(a);
-        auto [bnum, bden] = normalize_to_cpp_int(b);
-        return anum * bden < bnum * aden;
+        const auto* sa = std::get_if<SmallStorage>(&a);
+        const auto* sb = std::get_if<SmallStorage>(&b);
+        if (sa && sb) {
+            absl::int128 left_num = sa->num;
+            absl::uint128 left_den = sa->den;
+            absl::int128 right_num = sb->num;
+            absl::uint128 right_den = sb->den;
+            if (would_overflow_mul(left_num, static_cast<absl::int128>(right_den)) ||
+                would_overflow_mul(right_num, static_cast<absl::int128>(left_den))) {
+                dumb_int l = to_dumb_int(left_num) * to_dumb_int(right_den);
+                dumb_int r = to_dumb_int(right_num) * to_dumb_int(left_den);
+                return l < r;
+            }
+            return left_num * static_cast<absl::int128>(right_den) <
+                right_num * static_cast<absl::int128>(left_den);
+        }
+        BigRationalType av, bv;
+        if (const auto* ba = std::get_if<BigStorage>(&a)) {
+            av = ba->val;
+        }
+        else {
+            const auto& s = std::get<SmallStorage>(a);
+            av = BigRationalType(to_dumb_int(s.num)) / to_dumb_int(s.den);
+        }
+        if (const auto* bb = std::get_if<BigStorage>(&b)) {
+            bv = bb->val;
+        }
+        else {
+            const auto& s = std::get<SmallStorage>(b);
+            bv = BigRationalType(to_dumb_int(s.num)) / to_dumb_int(s.den);
+        }
+        return av < bv;
     }
 
-    inline bool operator>(const Value& a, const Value& b) {
-        return b < a;
+    inline bool operator>(const Value& a, const Value& b) { return b < a; }
+    inline bool operator<=(const Value& a, const Value& b) { return !(b < a); }
+    inline bool operator>=(const Value& a, const Value& b) { return !(a < b); }
+
+    // ============================================================================
+    // normalize_to_dumb_int – only for batch addition, not for comparisons
+    // ============================================================================
+    inline std::pair<dumb_int, dumb_int> normalize_to_dumb_int(const Value& v) {
+        if (const auto* small = std::get_if<SmallStorage>(&v)) {
+            SmallStorage s = *small;
+            s.normalize();
+            return { to_dumb_int(s.num), to_dumb_int(s.den) };
+        }
+        else if (const auto* big = std::get_if<BigStorage>(&v)) {
+            return { big->numerator(), big->denominator() };
+        }
+        throw std::invalid_argument("normalize_to_dumb_int: invalid variant");
     }
 
-    inline bool operator<=(const Value& a, const Value& b) {
-        return !(b < a);
-    }
-
-    inline bool operator>=(const Value& a, const Value& b) {
-        return !(a < b);
-    }
-
+    // ============================================================================
+    // String conversions (debugging only)
+    // ============================================================================
     inline std::string to_string(const SmallStorage& s) {
         SmallStorage norm = s;
         norm.normalize();
@@ -176,8 +195,8 @@ namespace delta::internal {
     }
 
     inline std::string to_string(const BigStorage& b) {
-        if (b.den() == 1) return b.num().str();
-        return b.num().str() + "/" + b.den().str();
+        if (b.denominator() == 1) return b.numerator().str();
+        return b.numerator().str() + "/" + b.denominator().str();
     }
 
     inline std::string to_string(const Value& v) {

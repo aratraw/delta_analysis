@@ -1,6 +1,7 @@
 // evaluation_core.h
 // Смешанная версия: быстрые пути через cpp_dec_float_100 с контролируемой точностью,
 // медленные пути для особых случаев (когда eps < порога). Интервалы остаются в double.
+// Теперь с использованием delta::internal::dumb_int (et_off) и прямым BigStorage путём.
 
 #pragma once
 
@@ -61,7 +62,7 @@ namespace delta::internal {
             return s->num == 0;
         }
         const auto& b = std::get<BigStorage>(v);
-        return b.num() == 0;
+        return b.numerator() == 0;
     }
 
     inline bool is_one(const Value& v) {
@@ -71,7 +72,7 @@ namespace delta::internal {
             return norm.num == 1 && norm.den == 1;
         }
         const auto& b = std::get<BigStorage>(v);
-        return b.num() == 1 && b.den() == 1;
+        return b.numerator() == 1 && b.denominator() == 1;
     }
 
     inline bool is_positive(const Value& v) {
@@ -79,7 +80,7 @@ namespace delta::internal {
             return s->num > 0;
         }
         const auto& b = std::get<BigStorage>(v);
-        return b.num() > 0;
+        return b.numerator() > 0;
     }
 
     inline bool is_negative(const Value& v) {
@@ -87,16 +88,11 @@ namespace delta::internal {
             return s->num < 0;
         }
         const auto& b = std::get<BigStorage>(v);
-        return b.num() < 0;
+        return b.numerator() < 0;
     }
 
-    inline bool is_less(const Value& a, const Value& b) {
-        return a < b;
-    }
-
-    inline bool is_greater(const Value& a, const Value& b) {
-        return a > b;
-    }
+    inline bool is_less(const Value& a, const Value& b) { return a < b; }
+    inline bool is_greater(const Value& a, const Value& b) { return a > b; }
 
     inline double to_double(const Value& v) {
         if (const auto* s = std::get_if<SmallStorage>(&v)) {
@@ -105,14 +101,13 @@ namespace delta::internal {
             return static_cast<double>(norm.num) / static_cast<double>(norm.den);
         }
         const auto& b = std::get<BigStorage>(v);
-        boost::multiprecision::cpp_dec_float_100 f = static_cast<boost::multiprecision::cpp_dec_float_100>(b.num());
-        f /= static_cast<boost::multiprecision::cpp_dec_float_100>(b.den());
+        boost::multiprecision::cpp_dec_float_100 f = static_cast<boost::multiprecision::cpp_dec_float_100>(b.numerator());
+        f /= static_cast<boost::multiprecision::cpp_dec_float_100>(b.denominator());
         return f.convert_to<double>();
     }
 
     // Порог для выбора быстрого пути – снижен до 1e-35,
-    // чтобы для eps = 1e-30 использовался медленный (Newton) путь,
-    // гарантирующий высокую точность.
+    // чтобы для eps = 1e-30 использовался медленный (Newton) путь.
     constexpr double HYBRID_THRESHOLD = 1e-35;
 
     // ============================================================================
@@ -120,6 +115,7 @@ namespace delta::internal {
     // ============================================================================
 
     inline Value eager_add(const Value& a, const Value& b) {
+        // Small + Small
         if (const auto* sa = std::get_if<SmallStorage>(&a)) {
             if (const auto* sb = std::get_if<SmallStorage>(&b)) {
                 SmallStorage sa_norm = *sa;
@@ -137,56 +133,46 @@ namespace delta::internal {
                         return res;
                     }
                 }
-                boost::multiprecision::cpp_int num = to_cpp_int(sa_norm.num) * to_cpp_int(den2) +
-                    to_cpp_int(sb_norm.num) * to_cpp_int(den);
-                boost::multiprecision::cpp_int denom = to_cpp_int(den) * to_cpp_int(den2);
-                boost::multiprecision::cpp_int g = boost::multiprecision::gcd(num, denom);
+                // Fallback для SmallStorage, если переполнение или знаменатели разные
+                dumb_int num = to_dumb_int(sa_norm.num) * to_dumb_int(den2) +
+                    to_dumb_int(sb_norm.num) * to_dumb_int(den);
+                dumb_int denom = to_dumb_int(den) * to_dumb_int(den2);
+                dumb_int g = boost::multiprecision::gcd(num, denom);
                 num /= g;
                 denom /= g;
-                if (num <= to_cpp_int((std::numeric_limits<absl::int128>::max)()) &&
-                    denom <= to_cpp_int((std::numeric_limits<absl::uint128>::max)())) {
-                    return SmallStorage(int128_from_string(num.str()),
-                        uint128_from_string(denom.str()));
+                if (fits_in_int128(num) && fits_in_uint128(denom)) {
+                    return SmallStorage(dumb_int_to_int128(num), dumb_int_to_uint128(denom));
                 }
                 return BigStorage(num, denom);
             }
         }
-        boost::multiprecision::cpp_int num1, den1, num2, den2;
-        if (const auto* sa = std::get_if<SmallStorage>(&a)) {
-            SmallStorage s = *sa;
-            s.normalize();
-            num1 = to_cpp_int(s.num);
-            den1 = to_cpp_int(s.den);
+
+        // 🔥 ПРЯМОЙ ПУТЬ: два BigStorage
+        if (const auto* ba = std::get_if<BigStorage>(&a)) {
+            if (const auto* bb = std::get_if<BigStorage>(&b)) {
+                BigRationalType res = ba->val + bb->val;
+                return BigStorage(std::move(res));
+            }
         }
-        else {
-            const auto& b = std::get<BigStorage>(a);
-            num1 = b.num();
-            den1 = b.den();
-        }
-        if (const auto* sb = std::get_if<SmallStorage>(&b)) {
-            SmallStorage s = *sb;
-            s.normalize();
-            num2 = to_cpp_int(s.num);
-            den2 = to_cpp_int(s.den);
-        }
-        else {
-            const auto& big_b = std::get<BigStorage>(b);
-            num2 = big_b.num();
-            den2 = big_b.den();
-        }
-        boost::multiprecision::cpp_int num = num1 * den2 + num2 * den1;
-        boost::multiprecision::cpp_int den = den1 * den2;
-        boost::multiprecision::cpp_int g = boost::multiprecision::gcd(num, den);
+
+        // Mixed или fallback через dumb_int
+        auto [anum, aden] = normalize_to_dumb_int(a);
+        auto [bnum, bden] = normalize_to_dumb_int(b);
+        dumb_int num = anum * bden + bnum * aden;
+        dumb_int den = aden * bden;
+        dumb_int g = boost::multiprecision::gcd(num, den);
         num /= g;
         den /= g;
+        if (fits_in_int128(num) && fits_in_uint128(den)) {
+            return SmallStorage(dumb_int_to_int128(num), dumb_int_to_uint128(den));
+        }
         return BigStorage(num, den);
     }
-
     inline Value eager_sub(const Value& a, const Value& b) {
         return eager_add(a, eager_neg(b));
     }
-
     inline Value eager_mul(const Value& a, const Value& b) {
+        // Small + Small
         if (const auto* sa = std::get_if<SmallStorage>(&a)) {
             if (const auto* sb = std::get_if<SmallStorage>(&b)) {
                 SmallStorage sa_norm = *sa;
@@ -202,36 +188,38 @@ namespace delta::internal {
                     result.normalize();
                     return result;
                 }
+                // Fallback через dumb_int
+                dumb_int num = to_dumb_int(sa_norm.num) * to_dumb_int(sb_norm.num);
+                dumb_int den = to_dumb_int(sa_norm.den) * to_dumb_int(sb_norm.den);
+                dumb_int g = boost::multiprecision::gcd(num, den);
+                num /= g;
+                den /= g;
+                if (fits_in_int128(num) && fits_in_uint128(den)) {
+                    return SmallStorage(dumb_int_to_int128(num), dumb_int_to_uint128(den));
+                }
+                return BigStorage(num, den);
             }
         }
-        boost::multiprecision::cpp_int num1, den1, num2, den2;
-        if (const auto* sa = std::get_if<SmallStorage>(&a)) {
-            SmallStorage s = *sa;
-            s.normalize();
-            num1 = to_cpp_int(s.num);
-            den1 = to_cpp_int(s.den);
+
+        // 🔥 ПРЯМОЙ ПУТЬ: два BigStorage
+        if (const auto* ba = std::get_if<BigStorage>(&a)) {
+            if (const auto* bb = std::get_if<BigStorage>(&b)) {
+                BigRationalType res = ba->val * bb->val;
+                return BigStorage(std::move(res));
+            }
         }
-        else {
-            const auto& b = std::get<BigStorage>(a);
-            num1 = b.num();
-            den1 = b.den();
-        }
-        if (const auto* sb = std::get_if<SmallStorage>(&b)) {
-            SmallStorage s = *sb;
-            s.normalize();
-            num2 = to_cpp_int(s.num);
-            den2 = to_cpp_int(s.den);
-        }
-        else {
-            const auto& big_b = std::get<BigStorage>(b);
-            num2 = big_b.num();
-            den2 = big_b.den();
-        }
-        boost::multiprecision::cpp_int num = num1 * num2;
-        boost::multiprecision::cpp_int den = den1 * den2;
-        boost::multiprecision::cpp_int g = boost::multiprecision::gcd(num, den);
+
+        // Mixed fallback
+        auto [anum, aden] = normalize_to_dumb_int(a);
+        auto [bnum, bden] = normalize_to_dumb_int(b);
+        dumb_int num = anum * bnum;
+        dumb_int den = aden * bden;
+        dumb_int g = boost::multiprecision::gcd(num, den);
         num /= g;
         den /= g;
+        if (fits_in_int128(num) && fits_in_uint128(den)) {
+            return SmallStorage(dumb_int_to_int128(num), dumb_int_to_uint128(den));
+        }
         return BigStorage(num, den);
     }
 
@@ -248,18 +236,35 @@ namespace delta::internal {
             recip.normalize();
             return eager_mul(a, recip);
         }
-        else {
-            const auto& bbig = std::get<BigStorage>(b);
-            if (bbig.num() == 0) throw std::domain_error("Division by zero");
-            boost::multiprecision::cpp_int num_recip = bbig.den();
-            boost::multiprecision::cpp_int den_recip = bbig.num();
-            if (den_recip < 0) {
-                den_recip = -den_recip;
-                num_recip = -num_recip;
+        // BigStorage деление – через eager_mul с обратным
+        if (const auto* bb = std::get_if<BigStorage>(&b)) {
+            if (bb->numerator() == 0) throw std::domain_error("Division by zero");
+            // Получаем обратное число
+            const dumb_int& num = bb->numerator();
+            const dumb_int& den = bb->denominator();
+            dumb_int recip_num = den;
+            dumb_int recip_den = num;
+            if (recip_den < 0) {
+                recip_den = -recip_den;
+                recip_num = -recip_num;
             }
-            BigStorage recip(num_recip, den_recip);
+            BigStorage recip(recip_num, recip_den);
             return eager_mul(a, recip);
         }
+        // Fallback через normalize
+        auto [anum, aden] = normalize_to_dumb_int(a);
+        auto [bnum, bden] = normalize_to_dumb_int(b);
+        dumb_int num = anum * bden;
+        dumb_int den = aden * bnum;
+        if (den == 0) throw std::domain_error("Division by zero");
+        if (den < 0) { den = -den; num = -num; }
+        dumb_int g = boost::multiprecision::gcd(num, den);
+        num /= g;
+        den /= g;
+        if (fits_in_int128(num) && fits_in_uint128(den)) {
+            return SmallStorage(dumb_int_to_int128(num), dumb_int_to_uint128(den));
+        }
+        return BigStorage(num, den);
     }
 
     inline Value eager_neg(const Value& a) {
@@ -269,7 +274,8 @@ namespace delta::internal {
             return res;
         }
         const auto& b = std::get<BigStorage>(a);
-        return BigStorage(-b.num(), b.den());
+        BigRationalType res = -b.val;
+        return BigStorage(std::move(res));
     }
 
     inline Value eager_abs(const Value& a) {
@@ -287,17 +293,16 @@ namespace delta::internal {
         if (const auto* s = std::get_if<SmallStorage>(&v)) {
             SmallStorage norm = *s;
             norm.normalize();
-            HighPrecFloat num = static_cast<HighPrecFloat>(to_cpp_int(norm.num));
-            HighPrecFloat den = static_cast<HighPrecFloat>(to_cpp_int(norm.den));
+            HighPrecFloat num = static_cast<HighPrecFloat>(to_dumb_int(norm.num));
+            HighPrecFloat den = static_cast<HighPrecFloat>(to_dumb_int(norm.den));
             return num / den;
         }
         const auto& b = std::get<BigStorage>(v);
-        HighPrecFloat num = static_cast<HighPrecFloat>(b.num());
-        HighPrecFloat den = static_cast<HighPrecFloat>(b.den());
+        HighPrecFloat num = static_cast<HighPrecFloat>(b.numerator());
+        HighPrecFloat den = static_cast<HighPrecFloat>(b.denominator());
         return num / den;
     }
 
-    // Преобразование high‑prec float в рациональное с заданным запасом точности
     inline Value to_rational_with_eps(const HighPrecFloat& f, const Value& eps, int extra_digits = 2) {
         HighPrecFloat eps_f = to_high_prec(eps);
         if (eps_f <= 0) throw std::domain_error("Epsilon must be positive");
@@ -349,10 +354,10 @@ namespace delta::internal {
             }
         }
 
-        boost::multiprecision::cpp_int num(num_str);
-        boost::multiprecision::cpp_int den(1);
+        dumb_int num(num_str);
+        dumb_int den(1);
         for (size_t i = 0; i < fractional_part.size(); ++i) den *= 10;
-        boost::multiprecision::cpp_int g = boost::multiprecision::gcd(num, den);
+        dumb_int g = boost::multiprecision::gcd(num, den);
         num /= g;
         den /= g;
         return BigStorage(num, den);
@@ -419,25 +424,24 @@ namespace delta::internal {
             return norm.den == 1;
         }
         if (const auto* b = std::get_if<BigStorage>(&v)) {
-            return b->den() == 1;
+            return b->denominator() == 1;
         }
         return false;
     }
 
-    inline boost::multiprecision::cpp_int get_integer(const Value& v) {
+    inline dumb_int get_integer(const Value& v) {
         if (const auto* s = std::get_if<SmallStorage>(&v)) {
             SmallStorage norm = *s;
             norm.normalize();
-            return to_cpp_int(norm.num);
+            return to_dumb_int(norm.num);
         }
         if (const auto* b = std::get_if<BigStorage>(&v)) {
-            return b->num();
+            return b->numerator();
         }
         throw std::logic_error("get_integer: not an integer");
     }
 
-    inline boost::multiprecision::cpp_int integer_nth_root(const boost::multiprecision::cpp_int& a,
-        const boost::multiprecision::cpp_int& n) {
+    inline dumb_int integer_nth_root(const dumb_int& a, const dumb_int& n) {
         if (n == 0) return 0;
         if (n == 1) return a;
         if (a == 0) return 0;
@@ -447,13 +451,13 @@ namespace delta::internal {
         if (n_int > 1000) return 0;
 
         size_t bits = boost::multiprecision::msb(a) + 1;
-        boost::multiprecision::cpp_int high = boost::multiprecision::cpp_int(1) << ((bits + n_int - 1) / n_int);
+        dumb_int high = dumb_int(1) << ((bits + n_int - 1) / n_int);
         high += 1;
-        boost::multiprecision::cpp_int low = 1;
+        dumb_int low = 1;
 
         while (low <= high) {
-            boost::multiprecision::cpp_int mid = (low + high) / 2;
-            boost::multiprecision::cpp_int pow = boost::multiprecision::pow(mid, n_int);
+            dumb_int mid = (low + high) / 2;
+            dumb_int pow = boost::multiprecision::pow(mid, n_int);
             if (pow == a) return mid;
             if (pow < a) low = mid + 1;
             else high = mid - 1;
@@ -462,16 +466,16 @@ namespace delta::internal {
     }
 
     inline std::optional<Value> try_exact_nth_root(const Value& base, const Value& n_val) {
-        boost::multiprecision::cpp_int n;
+        dumb_int n;
         if (const auto* s = std::get_if<SmallStorage>(&n_val)) {
             SmallStorage norm = *s;
             norm.normalize();
             if (norm.den != 1) return std::nullopt;
-            n = to_cpp_int(norm.num);
+            n = to_dumb_int(norm.num);
         }
         else if (const auto* b = std::get_if<BigStorage>(&n_val)) {
-            if (b->den() != 1) return std::nullopt;
-            n = b->num();
+            if (b->denominator() != 1) return std::nullopt;
+            n = b->numerator();
         }
         else {
             return std::nullopt;
@@ -485,23 +489,23 @@ namespace delta::internal {
             if (s_norm.num == 0) return SmallStorage(0);
             bool negative = s_norm.num < 0;
             if (negative && n % 2 == 0) return std::nullopt;
-            boost::multiprecision::cpp_int num = to_cpp_int(negative ? -s_norm.num : s_norm.num);
-            boost::multiprecision::cpp_int den = to_cpp_int(s_norm.den);
-            boost::multiprecision::cpp_int root_num = integer_nth_root(num, n);
-            boost::multiprecision::cpp_int root_den = integer_nth_root(den, n);
+            dumb_int num = to_dumb_int(negative ? -s_norm.num : s_norm.num);
+            dumb_int den = to_dumb_int(s_norm.den);
+            dumb_int root_num = integer_nth_root(num, n);
+            dumb_int root_den = integer_nth_root(den, n);
             if (root_num != 0 && root_den != 0) {
                 if (negative) root_num = -root_num;
                 return BigStorage(root_num, root_den);
             }
         }
         else if (const auto* b = std::get_if<BigStorage>(&base)) {
-            if (b->num() == 0) return SmallStorage(0);
-            bool negative = b->num() < 0;
+            if (b->numerator() == 0) return SmallStorage(0);
+            bool negative = b->numerator() < 0;
             if (negative && n % 2 == 0) return std::nullopt;
-            boost::multiprecision::cpp_int num = negative ? -b->num() : b->num();
-            boost::multiprecision::cpp_int den = b->den();
-            boost::multiprecision::cpp_int root_num = integer_nth_root(num, n);
-            boost::multiprecision::cpp_int root_den = integer_nth_root(den, n);
+            dumb_int num = negative ? -b->numerator() : b->numerator();
+            dumb_int den = b->denominator();
+            dumb_int root_num = integer_nth_root(num, n);
+            dumb_int root_den = integer_nth_root(den, n);
             if (root_num != 0 && root_den != 0) {
                 if (negative) root_num = -root_num;
                 return BigStorage(root_num, root_den);
@@ -510,23 +514,16 @@ namespace delta::internal {
         return std::nullopt;
     }
 
-
     // ============================================================================
-// Конфигурация медленных методов
-// ============================================================================
-
-// Максимальное количество итераций для рядов (экспонента, логарифм, тригонометрия)
-// Установлено с огромным запасом; реально для eps=1e-30 требуется ~200-300 итераций.
-// Если ряд не сошёлся за это время – что-то пошло не так (например, расходится).
-    inline constexpr size_t DEFAULT_MAX_ITER = 1000000;  // миллион
-
-    // Для методов Ньютона (sqrt, nth_root) достаточно 1000, сходимость квадратичная
+    // Конфигурация медленных методов
+    // ============================================================================
+    inline constexpr size_t DEFAULT_MAX_ITER = 1000000;
     inline constexpr size_t NEWTON_MAX_ITER = 1000;
-
-    // Для acos (итерационный метод) тоже достаточно 100
     inline constexpr size_t ACOS_MAX_ITER = 100;
+
     // ============================================================================
     // Медленные (точные) реализации трансцендентных функций
+    // (все используют dumb_int и прямые операции над BigStorage)
     // ============================================================================
 
     inline Value slow_ln2(const Value& eps) {
@@ -539,8 +536,7 @@ namespace delta::internal {
         Value n = one;
         Value two = SmallStorage(absl::int128(2));
         size_t iter = 0;
-        const size_t max_iter = DEFAULT_MAX_ITER;
-        while (iter < max_iter) {
+        while (iter < DEFAULT_MAX_ITER) {
             term = eager_mul(term, z2);
             n = eager_add(n, two);
             sum = eager_add(sum, eager_div(term, n));
@@ -551,28 +547,27 @@ namespace delta::internal {
     }
 
     inline Value slow_sqrt(const Value& x, const Value& eps) {
-        if (is_zero(x)) return SmallStorage(absl::int128(0));
+        if (is_zero(x)) return SmallStorage(0);
         if (is_negative(x)) throw std::domain_error("sqrt of negative number");
 
-        Value one = SmallStorage(absl::int128(1));
-        Value two = SmallStorage(absl::int128(2));
+        Value one = SmallStorage(1);
+        Value two = SmallStorage(2);
         Value guess = eager_div(x, two);
         Value diff;
         size_t iter = 0;
-        const size_t max_iter = NEWTON_MAX_ITER;
         do {
             Value next = eager_div(eager_add(guess, eager_div(x, guess)), two);
             diff = eager_abs(eager_sub(next, guess));
             guess = next;
             ++iter;
-            if (iter > max_iter) break;
+            if (iter > NEWTON_MAX_ITER) break;
         } while (is_greater(diff, eps));
         return guess;
     }
 
     inline Value slow_exp(const Value& x, const Value& eps) {
-        Value one = SmallStorage(absl::int128(1));
-        Value two = SmallStorage(absl::int128(2));
+        Value one = SmallStorage(1);
+        Value two = SmallStorage(2);
 
         int k = 0;
         Value reduced = x;
@@ -585,8 +580,7 @@ namespace delta::internal {
         Value term = one;
         Value n = one;
         size_t iter = 0;
-        const size_t max_iter = DEFAULT_MAX_ITER;
-        while (iter < max_iter) {
+        while (iter < DEFAULT_MAX_ITER) {
             term = eager_mul(term, eager_div(reduced, n));
             sum = eager_add(sum, term);
             n = eager_add(n, one);
@@ -603,9 +597,9 @@ namespace delta::internal {
 
     inline Value slow_log(const Value& x, const Value& eps) {
         if (is_negative(x) || is_zero(x)) throw std::domain_error("log of non-positive");
-        Value one = SmallStorage(absl::int128(1));
-        Value two = SmallStorage(absl::int128(2));
-        Value half = SmallStorage(absl::int128(1), absl::uint128(2));
+        Value one = SmallStorage(1);
+        Value two = SmallStorage(2);
+        Value half = SmallStorage(1, 2);
 
         int k = 0;
         Value m = x;
@@ -626,8 +620,7 @@ namespace delta::internal {
         Value sum = term;
         Value n = one;
         size_t iter = 0;
-        const size_t max_iter = DEFAULT_MAX_ITER;
-        while (iter < max_iter) {
+        while (iter < DEFAULT_MAX_ITER) {
             term = eager_mul(term, y2);
             n = eager_add(n, two);
             sum = eager_add(sum, eager_div(term, n));
@@ -639,12 +632,12 @@ namespace delta::internal {
     }
 
     inline Value slow_pi(const Value& eps) {
-        Value one = SmallStorage(absl::int128(1));
-        Value five = SmallStorage(absl::int128(5));
-        Value two39 = SmallStorage(absl::int128(239));
-        Value sixteen = SmallStorage(absl::int128(16));
-        Value four = SmallStorage(absl::int128(4));
-        Value two = SmallStorage(absl::int128(2));
+        Value one = SmallStorage(1);
+        Value five = SmallStorage(5);
+        Value two39 = SmallStorage(239);
+        Value sixteen = SmallStorage(16);
+        Value four = SmallStorage(4);
+        Value two = SmallStorage(2);
 
         Value a = eager_div(one, five);
         Value a2 = eager_mul(a, a);
@@ -652,8 +645,7 @@ namespace delta::internal {
         Value sum_atan5 = term;
         Value n = one;
         size_t iter = 0;
-        const size_t max_iter = DEFAULT_MAX_ITER;
-        while (iter < max_iter) {
+        while (iter < DEFAULT_MAX_ITER) {
             term = eager_mul(term, eager_neg(a2));
             n = eager_add(n, two);
             sum_atan5 = eager_add(sum_atan5, eager_div(term, n));
@@ -667,7 +659,7 @@ namespace delta::internal {
         Value sum_atan239 = term;
         n = one;
         iter = 0;
-        while (iter < max_iter) {
+        while (iter < DEFAULT_MAX_ITER) {
             term = eager_mul(term, eager_neg(b2));
             n = eager_add(n, two);
             sum_atan239 = eager_add(sum_atan239, eager_div(term, n));
@@ -679,8 +671,8 @@ namespace delta::internal {
     }
 
     inline Value slow_sin(const Value& x, const Value& eps) {
-        Value one = SmallStorage(absl::int128(1));
-        Value two = SmallStorage(absl::int128(2));
+        Value one = SmallStorage(1);
+        Value two = SmallStorage(2);
         Value pi_val = slow_pi(eps);
         Value twopi = eager_mul(pi_val, two);
 
@@ -697,8 +689,7 @@ namespace delta::internal {
         Value sum = term;
         Value k = one;
         size_t iter = 0;
-        const size_t max_iter = DEFAULT_MAX_ITER;
-        while (iter < max_iter) {
+        while (iter < DEFAULT_MAX_ITER) {
             term = eager_mul(term, eager_neg(x2));
             term = eager_div(term, eager_mul(eager_mul(two, k), eager_add(eager_mul(two, k), one)));
             sum = eager_add(sum, term);
@@ -710,8 +701,8 @@ namespace delta::internal {
     }
 
     inline Value slow_cos(const Value& x, const Value& eps) {
-        Value one = SmallStorage(absl::int128(1));
-        Value two = SmallStorage(absl::int128(2));
+        Value one = SmallStorage(1);
+        Value two = SmallStorage(2);
         Value pi_val = slow_pi(eps);
         Value twopi = eager_mul(pi_val, two);
 
@@ -728,8 +719,7 @@ namespace delta::internal {
         Value sum = term;
         Value k = one;
         size_t iter = 0;
-        const size_t max_iter = DEFAULT_MAX_ITER;
-        while (iter < max_iter) {
+        while (iter < DEFAULT_MAX_ITER) {
             term = eager_mul(term, eager_neg(x2));
             term = eager_div(term, eager_mul(eager_mul(two, k), eager_sub(eager_mul(two, k), one)));
             sum = eager_add(sum, term);
@@ -741,8 +731,8 @@ namespace delta::internal {
     }
 
     inline Value slow_acos(const Value& x, const Value& eps) {
-        Value one = SmallStorage(absl::int128(1));
-        Value two = SmallStorage(absl::int128(2));
+        Value one = SmallStorage(1);
+        Value two = SmallStorage(2);
         Value pi_val = slow_pi(eps);
         Value half_pi = eager_div(pi_val, two);
 
@@ -758,8 +748,7 @@ namespace delta::internal {
         }
 
         size_t iter = 0;
-        const size_t max_iter = ACOS_MAX_ITER;
-        while (iter < max_iter) {
+        while (iter < ACOS_MAX_ITER) {
             Value cos_y = slow_cos(y, eps);
             Value sin_y = slow_sin(y, eps);
             if (is_zero(sin_y)) break;
@@ -772,13 +761,12 @@ namespace delta::internal {
     }
 
     inline Value slow_e(const Value& eps) {
-        Value one = SmallStorage(absl::int128(1));
+        Value one = SmallStorage(1);
         Value sum = one;
         Value term = one;
         Value n = one;
         size_t iter = 0;
-        const size_t max_iter = DEFAULT_MAX_ITER;
-        while (iter < max_iter) {
+        while (iter < DEFAULT_MAX_ITER) {
             term = eager_div(term, n);
             sum = eager_add(sum, term);
             n = eager_add(n, one);
@@ -792,12 +780,12 @@ namespace delta::internal {
     // Целочисленное возведение в степень
     // ============================================================================
 
-    inline Value eager_pow_int(const Value& base, const boost::multiprecision::cpp_int& exponent) {
+    inline Value eager_pow_int(const Value& base, const dumb_int& exponent) {
         if (exponent == 0) return SmallStorage(1);
         if (exponent == 1) return base;
 
         bool negative = exponent < 0;
-        boost::multiprecision::cpp_int e = negative ? -exponent : exponent;
+        dumb_int e = negative ? -exponent : exponent;
 
         Value result = SmallStorage(1);
         Value b = base;
@@ -819,22 +807,16 @@ namespace delta::internal {
     // ============================================================================
 
     inline int compute_extra_digits(const Value& eps, double operation_complexity = 1.0) {
-        // operation_complexity: 1 для sqrt, 2 для cbrt, 3 для корня 4-й степени и т.д.
         double eps_double = to_double(eps);
-        if (eps_double <= 0) return 30; // fallback
-        // Желаемое количество значащих цифр после запятой
+        if (eps_double <= 0) return 30;
         int digits_needed = static_cast<int>(std::ceil(-std::log10(eps_double))) + 2;
-        // Добавляем запас, пропорциональный сложности операции
         int safety = static_cast<int>(std::ceil(10.0 * operation_complexity));
         return digits_needed + safety;
     }
 
-
     inline Value fast_nth_root(const Value& x, const Value& n, const Value& eps) {
-        // Обработка отрицательного основания
         bool x_neg = is_negative(x);
         if (x_neg) {
-            // Определяем, является ли показатель чётным целым
             bool n_even = false;
             if (const auto* s = std::get_if<SmallStorage>(&n)) {
                 SmallStorage norm = *s;
@@ -842,68 +824,50 @@ namespace delta::internal {
                 if (norm.den == 1 && (norm.num % 2 == 0)) n_even = true;
             }
             else if (const auto* b = std::get_if<BigStorage>(&n)) {
-                if (b->den() == 1 && (b->num() % 2 == 0)) n_even = true;
+                if (b->denominator() == 1 && (b->numerator() % 2 == 0)) n_even = true;
             }
             if (n_even) {
                 throw std::domain_error("even root of negative number");
             }
-            // Нечётный корень: вычисляем корень от положительного числа и меняем знак
             Value pos_root = fast_nth_root(eager_neg(x), n, eps);
             return eager_neg(pos_root);
         }
 
-        // Проверка на ноль (x >= 0)
-        if (is_zero(x)) {
-            return SmallStorage(0);
-        }
+        if (is_zero(x)) return SmallStorage(0);
 
-        // Преобразуем n в double для вычисления сложности (только для расчёта extra_digits)
         double complexity = 1.0;
         if (const auto* s = std::get_if<SmallStorage>(&n)) {
             SmallStorage norm = *s;
             norm.normalize();
-            if (norm.den == 1) {
-                complexity = static_cast<double>(norm.num);
-            }
-            else {
-                // Для нецелых показателей корня (например, n = 2/3) сложность оцениваем как числитель
-                complexity = static_cast<double>(norm.num);
-            }
+            if (norm.den == 1) complexity = static_cast<double>(norm.num);
+            else complexity = static_cast<double>(norm.num);
         }
         else if (const auto* b = std::get_if<BigStorage>(&n)) {
-            if (b->den() == 1) {
-                complexity = b->num().convert_to<double>();
-            }
-            else {
-                complexity = b->num().convert_to<double>();
-            }
+            if (b->denominator() == 1) complexity = b->numerator().convert_to<double>();
+            else complexity = b->numerator().convert_to<double>();
         }
 
-        // Расчёт дополнительных цифр точности
         int extra = compute_extra_digits(eps, complexity);
-
-        // Вычисление через высокоточную плавающую арифметику
         HighPrecFloat fx = to_high_prec(x);
         HighPrecFloat fn = to_high_prec(n);
         HighPrecFloat exponent = 1.0 / fn;
         HighPrecFloat res = pow(fx, exponent);
-
-        // Преобразование обратно в рациональное с гарантированной точностью
         return to_rational_with_eps(res, eps, extra);
     }
+
     inline Value eager_nth_root(const Value& x, const Value& n, const Value& eps) {
         if (is_zero(n) || is_negative(n)) throw std::domain_error("nth_root: n must be positive");
 
-        boost::multiprecision::cpp_int n_int;
+        dumb_int n_int;
         if (const auto* s = std::get_if<SmallStorage>(&n)) {
             SmallStorage norm = *s;
             norm.normalize();
             if (norm.den != 1) throw std::domain_error("nth_root: n must be integer");
-            n_int = to_cpp_int(norm.num);
+            n_int = to_dumb_int(norm.num);
         }
         else if (const auto* b = std::get_if<BigStorage>(&n)) {
-            if (b->den() != 1) throw std::domain_error("nth_root: n must be integer");
-            n_int = b->num();
+            if (b->denominator() != 1) throw std::domain_error("nth_root: n must be integer");
+            n_int = b->numerator();
         }
         else {
             throw std::domain_error("nth_root: invalid n");
@@ -918,18 +882,14 @@ namespace delta::internal {
             throw std::domain_error("nth_root: even root of negative number");
         }
 
-        // Точный корень, если есть
         if (auto exact = try_exact_nth_root(x, n)) {
             return *exact;
         }
 
-        // Быстрый путь ТОЛЬКО для квадратного корня (n_int == 2)
-        // Для n > 2 быстрый путь через cpp_dec_float_100 недостаточно точен
         if (n_int == 2 && to_double(eps) >= HYBRID_THRESHOLD) {
             return fast_nth_root(x, n, eps);
         }
 
-        // Медленный метод Ньютона для всех n > 2 или маленьких eps
         Value guess;
         if (is_positive(x)) {
             guess = eager_div(x, SmallStorage(2));
@@ -943,8 +903,6 @@ namespace delta::internal {
 
         Value diff;
         size_t iter = 0;
-        const size_t max_iter = NEWTON_MAX_ITER;
-
         do {
             Value pow_n_minus_1 = eager_pow_int(guess, n_int - 1);
             Value next = eager_div(
@@ -957,36 +915,37 @@ namespace delta::internal {
             diff = eager_abs(eager_sub(next, guess));
             guess = next;
             ++iter;
-            if (iter > max_iter) break;
+            if (iter > NEWTON_MAX_ITER) break;
         } while (is_greater(diff, eps));
 
         return guess;
     }
+
     // ============================================================================
     // Общая степень с рациональным показателем
     // ============================================================================
+
     inline Value eager_pow(const Value& base, const Value& exp, const Value& eps) {
         if (is_zero(base)) {
             if (is_zero(exp)) throw std::domain_error("0^0 is undefined");
             if (is_negative(exp)) throw std::domain_error("0^negative is undefined");
-            return base; // 0^positive = 0
+            return base;
         }
         if (is_one(base)) return base;
         if (is_zero(exp)) return SmallStorage(1);
 
-        // Целочисленный показатель?
         bool exp_is_int = false;
-        boost::multiprecision::cpp_int exp_num, exp_den;
+        dumb_int exp_num, exp_den;
         if (const auto* s = std::get_if<SmallStorage>(&exp)) {
             SmallStorage norm = *s;
             norm.normalize();
-            exp_num = to_cpp_int(norm.num);
-            exp_den = to_cpp_int(norm.den);
+            exp_num = to_dumb_int(norm.num);
+            exp_den = to_dumb_int(norm.den);
             if (norm.den == 1) exp_is_int = true;
         }
         else if (const auto* b = std::get_if<BigStorage>(&exp)) {
-            exp_num = b->num();
-            exp_den = b->den();
+            exp_num = b->numerator();
+            exp_den = b->denominator();
             if (exp_den == 1) exp_is_int = true;
         }
 
@@ -999,31 +958,24 @@ namespace delta::internal {
         }
 
         // Рациональный показатель p/q
-        boost::multiprecision::cpp_int p = exp_num;
-        boost::multiprecision::cpp_int q = exp_den;
+        dumb_int p = exp_num;
+        dumb_int q = exp_den;
         bool negative = (p < 0);
         if (negative) p = -p;
 
-        // Случай 1/n – используем nth_root с запасом точности
         if (p == 1) {
             Value n_val = BigStorage(q);
-            // Специальный случай для квадратного корня
-            if (q == 2) {
-                return eager_sqrt(base, eps);
-            }
-            // Для остальных корней – запас 1000
+            if (q == 2) return eager_sqrt(base, eps);
             Value internal_eps = eager_div(eps, SmallStorage(1000));
             return eager_nth_root(base, n_val, internal_eps);
         }
 
-        // Общий случай: p > 1, используем exp(p * log(base) / q)
-        // Увеличенный запас точности: eps / (p * 1000)
         Value internal_eps;
         if (p == 0) {
             internal_eps = eps;
         }
         else {
-            boost::multiprecision::cpp_int divisor = p * 1000;
+            dumb_int divisor = p * 1000;
             Value divisor_val = BigStorage(divisor);
             internal_eps = eager_div(eps, divisor_val);
         }
@@ -1034,7 +986,6 @@ namespace delta::internal {
         Value q_val = BigStorage(q);
         Value p_log_div_q = eager_div(p_log, q_val);
         Value result = eager_exp(p_log_div_q, internal_eps);
-
         return result;
     }
 
