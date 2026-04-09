@@ -1,4 +1,4 @@
-// rational_impl.h
+// rational_impl.h — исправленная версия
 #pragma once
 
 #include "storage.h"    
@@ -24,9 +24,8 @@
 namespace delta {
 
     // ----------------------------------------------------------------------------
-    // eager wrapper functions (formerly in eager.h)
+    // eager wrapper functions (без изменений)
     // ----------------------------------------------------------------------------
-
     inline Rational eager_add(const Rational& a, const Rational& b) {
         internal::Value va = a.to_value();
         internal::Value vb = b.to_value();
@@ -124,7 +123,7 @@ namespace delta {
     }
 
     // ----------------------------------------------------------------------------
-    // In‑place addition for immediate Rationals (zero allocation for BigStorage)
+    // In‑place addition for immediate Rationals – без создания временных Value
     // ----------------------------------------------------------------------------
     inline void inplace_add(Rational& a, const Rational& b) {
         if (!a.is_immediate() || !b.is_immediate()) {
@@ -132,44 +131,74 @@ namespace delta {
             return;
         }
 
+        auto* sa = std::get_if<internal::SmallStorage>(&a.storage_);
+        auto* sb = std::get_if<internal::SmallStorage>(&b.storage_);
+
         // Small + Small
-        if (auto* sa = std::get_if<internal::SmallStorage>(&a.storage_)) {
-            if (const auto* sb = std::get_if<internal::SmallStorage>(&b.storage_)) {
-                internal::Value tmp = internal::eager_add(*sa, *sb);
-                if (const auto* res_small = std::get_if<internal::SmallStorage>(&tmp)) {
-                    a.storage_ = *res_small;
+        if (sa && sb) {
+            internal::SmallStorage sa_n = *sa, sb_n = *sb;
+            sa_n.normalize();
+            sb_n.normalize();
+
+            if (sa_n.den == sb_n.den) {
+                if (!internal::would_overflow_add(sa_n.num, sb_n.num)) {
+                    sa_n.num += sb_n.num;
+                    sa_n.reduced = false;
+                    *sa = sa_n;
+                    return;
                 }
-                else {
-                    a.storage_ = std::get<internal::BigStorage>(tmp);
-                }
+            }
+            // Cross‑multiplication с проверкой переполнения
+            absl::int128 num = static_cast<absl::int128>(sa_n.num) * static_cast<absl::int128>(sb_n.den) +
+                static_cast<absl::int128>(sb_n.num) * static_cast<absl::int128>(sa_n.den);
+            absl::uint128 den = static_cast<absl::uint128>(sa_n.den) * static_cast<absl::uint128>(sb_n.den);
+
+            if (num >= std::numeric_limits<absl::int128>::min() &&
+                num <= std::numeric_limits<absl::int128>::max() &&
+                den <= std::numeric_limits<absl::uint128>::max()) {
+                a.storage_ = internal::SmallStorage(
+                    static_cast<absl::int128>(num),
+                    static_cast<absl::uint128>(den)
+                );
                 return;
             }
-            // Small + Big
-            if (const auto* bb = std::get_if<internal::BigStorage>(&b.storage_)) {
-                internal::BigRationalType sum =
-                    internal::BigRationalType(internal::to_dumb_int(sa->num)) / internal::to_dumb_int(sa->den) + bb->val;
-                a.storage_ = internal::BigStorage(std::move(sum));
-                return;
-            }
+            // Fallback: через BigStorage
+            internal::BigRationalType res =
+                internal::BigRationalType(internal::to_dumb_int(sa_n.num)) / internal::to_dumb_int(sa_n.den) +
+                internal::BigRationalType(internal::to_dumb_int(sb_n.num)) / internal::to_dumb_int(sb_n.den);
+            a.storage_ = internal::BigStorage(std::move(res));
+            return;
         }
 
         // Big + Big
-        if (auto* ba = std::get_if<internal::BigStorage>(&a.storage_)) {
-            if (const auto* bb = std::get_if<internal::BigStorage>(&b.storage_)) {
-                ba->val += bb->val;   // zero allocation
-                return;
-            }
-            // Big + Small
-            if (const auto* sb = std::get_if<internal::SmallStorage>(&b.storage_)) {
-                internal::dumb_int snum = internal::to_dumb_int(sb->num);
-                internal::dumb_int sden = internal::to_dumb_int(sb->den);
-                internal::BigRationalType small_rational = internal::BigRationalType(snum) / sden;
-                ba->val += small_rational;
+        auto* ba = std::get_if<internal::BigStorage>(&a.storage_);
+        if (const auto* bb = std::get_if<internal::BigStorage>(&b.storage_)) {
+            ba->val += bb->val;   // zero allocation
+            return;
+        }
+
+        // Big + Small
+        if (ba && sb) {
+            internal::SmallStorage sb_n = *sb;
+            sb_n.normalize();
+            ba->val += internal::BigRationalType(internal::to_dumb_int(sb_n.num)) / internal::to_dumb_int(sb_n.den);
+            return;
+        }
+
+        // Small + Big
+        if (sa) {
+            const auto* bb = std::get_if<internal::BigStorage>(&b.storage_);
+            if (bb) {
+                internal::SmallStorage sa_n = *sa;
+                sa_n.normalize();
+                internal::BigRationalType res =
+                    internal::BigRationalType(internal::to_dumb_int(sa_n.num)) / internal::to_dumb_int(sa_n.den) + bb->val;
+                a.storage_ = internal::BigStorage(std::move(res));
                 return;
             }
         }
 
-        // Fallback
+        // Fallback (не должно достигаться)
         a = a + b;
     }
 
@@ -188,9 +217,8 @@ namespace delta {
     }
 
     // ----------------------------------------------------------------------------
-    // Constructors
+    // Constructors (без изменений)
     // ----------------------------------------------------------------------------
-
     inline Rational::Rational() noexcept : storage_(internal::SmallStorage{}) {}
 
     inline Rational::Rational(absl::int128 num) : storage_(internal::SmallStorage(num)) {}
@@ -341,9 +369,8 @@ namespace delta {
     }
 
     // ----------------------------------------------------------------------------
-    // Copy, move, destructor, assignment (with reference counting)
+    // Copy, move, destructor, assignment (без изменений)
     // ----------------------------------------------------------------------------
-
     inline Rational::Rational(const Rational& other) : storage_(other.storage_) {
         if (is_lazy()) internal::increment_ref(root_index());
     }
@@ -373,9 +400,8 @@ namespace delta {
     }
 
     // ----------------------------------------------------------------------------
-    // State queries
+    // State queries (без изменений)
     // ----------------------------------------------------------------------------
-
     inline bool Rational::is_immediate() const noexcept {
         return std::holds_alternative<internal::SmallStorage>(storage_) ||
             std::holds_alternative<internal::BigStorage>(storage_);
@@ -386,9 +412,8 @@ namespace delta {
     }
 
     // ----------------------------------------------------------------------------
-    // Numerator/Denominator queries
+    // Numerator/Denominator (без изменений)
     // ----------------------------------------------------------------------------
-
     inline Rational Rational::numerator() const {
         if (is_immediate()) {
             if (auto* s = std::get_if<internal::SmallStorage>(&storage_)) {
@@ -424,9 +449,8 @@ namespace delta {
     }
 
     // ----------------------------------------------------------------------------
-    // Raw accessors
+    // Raw accessors (без изменений)
     // ----------------------------------------------------------------------------
-
     inline const internal::SmallStorage* Rational::as_small() const noexcept {
         return std::get_if<internal::SmallStorage>(&storage_);
     }
@@ -440,9 +464,8 @@ namespace delta {
     }
 
     // ----------------------------------------------------------------------------
-    // Conversions
+    // Conversions (без изменений)
     // ----------------------------------------------------------------------------
-
     inline Rational Rational::lazy() const {
         if (is_lazy()) return *this;
         internal::Value val = to_value();
@@ -461,9 +484,8 @@ namespace delta {
     }
 
     // ----------------------------------------------------------------------------
-    // Simplification and evaluation
+    // Simplification and evaluation (без изменений)
     // ----------------------------------------------------------------------------
-
     inline Rational Rational::simplify() const {
         if (is_immediate()) return *this;
         ExpressionRoot root(root_index());
@@ -494,9 +516,8 @@ namespace delta {
     }
 
     // ----------------------------------------------------------------------------
-    // Internal value conversion
+    // Internal value conversion (без изменений)
     // ----------------------------------------------------------------------------
-
     inline internal::Value Rational::to_value() const {
         if (is_immediate()) {
             if (auto* s = std::get_if<internal::SmallStorage>(&storage_))
@@ -509,9 +530,8 @@ namespace delta {
     }
 
     // ----------------------------------------------------------------------------
-    // Interval estimation
+    // Interval estimation (без изменений)
     // ----------------------------------------------------------------------------
-
     inline internal::Interval Rational::approx_interval() const noexcept {
         if (is_immediate()) {
             internal::Value val;
@@ -528,10 +548,18 @@ namespace delta {
     }
 
     // ----------------------------------------------------------------------------
-    // Arithmetic operators
+    // Arithmetic operators – добавлены fast path для BigStorage + BigStorage
     // ----------------------------------------------------------------------------
-
     inline Rational operator+(const Rational& a, const Rational& b) {
+        // Fast path: два BigStorage – складываем напрямую
+        if (const auto* ba = std::get_if<internal::BigStorage>(&a.storage_)) {
+            if (const auto* bb = std::get_if<internal::BigStorage>(&b.storage_)) {
+                Rational res;
+                res.storage_ = internal::BigStorage(ba->val + bb->val);
+                return res;
+            }
+        }
+
         if (internal::global_eager_mode || (a.is_immediate() && b.is_immediate())) {
             return eager_add(a, b);
         }
@@ -554,6 +582,15 @@ namespace delta {
     }
 
     inline Rational operator*(const Rational& a, const Rational& b) {
+        // Fast path: два BigStorage – умножаем напрямую
+        if (const auto* ba = std::get_if<internal::BigStorage>(&a.storage_)) {
+            if (const auto* bb = std::get_if<internal::BigStorage>(&b.storage_)) {
+                Rational res;
+                res.storage_ = internal::BigStorage(ba->val * bb->val);
+                return res;
+            }
+        }
+
         if (internal::global_eager_mode || (a.is_immediate() && b.is_immediate())) {
             return eager_mul(a, b);
         }
@@ -584,9 +621,8 @@ namespace delta {
     }
 
     // ----------------------------------------------------------------------------
-    // Compound assignment (in‑place where possible)
+    // Compound assignment (используют inplace_add/inplace_mul)
     // ----------------------------------------------------------------------------
-
     inline Rational& operator+=(Rational& a, const Rational& b) {
         if (internal::global_eager_mode || (a.is_immediate() && b.is_immediate())) {
             inplace_add(a, b);
@@ -618,9 +654,8 @@ namespace delta {
     }
 
     // ----------------------------------------------------------------------------
-    // String conversion
+    // String conversion (без изменений)
     // ----------------------------------------------------------------------------
-
     inline std::string to_string(const Rational& r) {
         if (r.is_immediate()) {
             internal::Value v;
@@ -639,7 +674,7 @@ namespace delta {
     }
 
     // ----------------------------------------------------------------------------
-    // Batch addition (optimised for immediate, uses build tree for lazy)
+    // Batch addition (без изменений)
     // ----------------------------------------------------------------------------
     inline Rational batch_add(const std::vector<Rational>& terms) {
         if (terms.empty()) return Rational(0);
@@ -724,7 +759,7 @@ namespace delta {
     }
 
     // ----------------------------------------------------------------------------
-    // Absolute value
+    // Absolute value (без изменений)
     // ----------------------------------------------------------------------------
     inline Rational abs(const Rational& x) {
         if (x.is_immediate()) {
@@ -738,7 +773,7 @@ namespace delta {
     }
 
     // ----------------------------------------------------------------------------
-    // ExpressionRoot method implementations (they need Rational and eps)
+    // ExpressionRoot method implementations (без изменений)
     // ----------------------------------------------------------------------------
     inline ExpressionRoot ExpressionRoot::sqrt(const Rational& eps) const {
         internal::Value eps_val = eps.to_value();
@@ -802,7 +837,7 @@ namespace delta {
     }
 
     // ----------------------------------------------------------------------------
-    // convert_to<T> functionality (unchanged except using dumb_int)
+    // convert_to<T> (без изменений)
     // ----------------------------------------------------------------------------
     template<typename T>
     inline T Rational::convert_to() const {

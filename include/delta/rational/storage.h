@@ -14,9 +14,7 @@
 
 namespace delta::internal {
 
-    // ============================================================================
-    // SmallStorage – 128‑bit rational with lazy normalization
-    // ============================================================================
+    // SmallStorage (без изменений)
     struct SmallStorage {
         absl::int128 num;
         absl::uint128 den;
@@ -49,9 +47,7 @@ namespace delta::internal {
         }
     };
 
-    // ============================================================================
-    // BigRationalType – canonical rational with expression templates disabled
-    // ============================================================================
+    // BigRationalType – без изменений
     using BigRationalType = boost::multiprecision::number<
         boost::multiprecision::rational_adaptor<
         boost::multiprecision::cpp_int_backend<>
@@ -59,9 +55,7 @@ namespace delta::internal {
         boost::multiprecision::et_off
     >;
 
-    // ============================================================================
-    // BigStorage – single‑field wrapper for arbitrary‑precision rationals
-    // ============================================================================
+    // BigStorage – без изменений (оставляем Приоритет 3 – работает везде)
     struct BigStorage {
         BigRationalType val;
 
@@ -69,9 +63,7 @@ namespace delta::internal {
         explicit BigStorage(const dumb_int& n) : val(n) {}
         BigStorage(const dumb_int& n, const dumb_int& d) {
             if (d == 0) throw std::domain_error("BigStorage: denominator cannot be zero");
-            BigRationalType tmp(n);
-            tmp /= d;
-            val = tmp;
+            val = BigRationalType(n) / d;
         }
         explicit BigStorage(BigRationalType v) noexcept : val(std::move(v)) {}
 
@@ -85,19 +77,31 @@ namespace delta::internal {
         void normalize() noexcept {}
     };
 
-    // ============================================================================
-    // Value – variant of immediate rationals
-    // ============================================================================
     using Value = std::variant<SmallStorage, BigStorage>;
 
     // ============================================================================
-    // Optimized comparisons (no normalize_to_dumb_int in hot path)
+    // normalize_to_dumb_int – объявляем до использования в сравнениях
+    // ============================================================================
+    inline std::pair<dumb_int, dumb_int> normalize_to_dumb_int(const Value& v) {
+        if (const auto* small = std::get_if<SmallStorage>(&v)) {
+            SmallStorage s = *small;
+            s.normalize();
+            return { to_dumb_int(s.num), to_dumb_int(s.den) };
+        }
+        else if (const auto* big = std::get_if<BigStorage>(&v)) {
+            return { big->numerator(), big->denominator() };
+        }
+        throw std::invalid_argument("normalize_to_dumb_int: invalid variant");
+    }
+
+    // ============================================================================
+    // Оптимизированные сравнения – только cross‑multiplication, без создания BigRationalType
     // ============================================================================
     inline bool operator==(const Value& a, const Value& b) {
         const auto* sa = std::get_if<SmallStorage>(&a);
         const auto* sb = std::get_if<SmallStorage>(&b);
         if (sa && sb) {
-            // Both SmallStorage: cross-multiplication with overflow check
+            // SmallStorage + SmallStorage – кросс-умножение с проверкой переполнения
             absl::int128 left_num = sa->num;
             absl::uint128 left_den = sa->den;
             absl::int128 right_num = sb->num;
@@ -111,23 +115,10 @@ namespace delta::internal {
             return left_num * static_cast<absl::int128>(right_den) ==
                 right_num * static_cast<absl::int128>(left_den);
         }
-        // At least one BigStorage: convert both to BigRationalType and compare
-        BigRationalType av, bv;
-        if (const auto* ba = std::get_if<BigStorage>(&a)) {
-            av = ba->val;
-        }
-        else {
-            const auto& s = std::get<SmallStorage>(a);
-            av = BigRationalType(to_dumb_int(s.num)) / to_dumb_int(s.den);
-        }
-        if (const auto* bb = std::get_if<BigStorage>(&b)) {
-            bv = bb->val;
-        }
-        else {
-            const auto& s = std::get<SmallStorage>(b);
-            bv = BigRationalType(to_dumb_int(s.num)) / to_dumb_int(s.den);
-        }
-        return av == bv;
+        // Общий случай: нормализуем через dumb_int и сравниваем крест-накрест
+        auto [anum, aden] = normalize_to_dumb_int(a);
+        auto [bnum, bden] = normalize_to_dumb_int(b);
+        return anum * bden == bnum * aden;
     }
 
     inline bool operator<(const Value& a, const Value& b) {
@@ -147,22 +138,9 @@ namespace delta::internal {
             return left_num * static_cast<absl::int128>(right_den) <
                 right_num * static_cast<absl::int128>(left_den);
         }
-        BigRationalType av, bv;
-        if (const auto* ba = std::get_if<BigStorage>(&a)) {
-            av = ba->val;
-        }
-        else {
-            const auto& s = std::get<SmallStorage>(a);
-            av = BigRationalType(to_dumb_int(s.num)) / to_dumb_int(s.den);
-        }
-        if (const auto* bb = std::get_if<BigStorage>(&b)) {
-            bv = bb->val;
-        }
-        else {
-            const auto& s = std::get<SmallStorage>(b);
-            bv = BigRationalType(to_dumb_int(s.num)) / to_dumb_int(s.den);
-        }
-        return av < bv;
+        auto [anum, aden] = normalize_to_dumb_int(a);
+        auto [bnum, bden] = normalize_to_dumb_int(b);
+        return anum * bden < bnum * aden;
     }
 
     inline bool operator>(const Value& a, const Value& b) { return b < a; }
@@ -170,22 +148,7 @@ namespace delta::internal {
     inline bool operator>=(const Value& a, const Value& b) { return !(a < b); }
 
     // ============================================================================
-    // normalize_to_dumb_int – only for batch addition, not for comparisons
-    // ============================================================================
-    inline std::pair<dumb_int, dumb_int> normalize_to_dumb_int(const Value& v) {
-        if (const auto* small = std::get_if<SmallStorage>(&v)) {
-            SmallStorage s = *small;
-            s.normalize();
-            return { to_dumb_int(s.num), to_dumb_int(s.den) };
-        }
-        else if (const auto* big = std::get_if<BigStorage>(&v)) {
-            return { big->numerator(), big->denominator() };
-        }
-        throw std::invalid_argument("normalize_to_dumb_int: invalid variant");
-    }
-
-    // ============================================================================
-    // String conversions (debugging only)
+    // Строковые функции (без изменений, для отладки)
     // ============================================================================
     inline std::string to_string(const SmallStorage& s) {
         SmallStorage norm = s;

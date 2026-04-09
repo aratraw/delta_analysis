@@ -12,7 +12,7 @@
 namespace delta::internal {
 
     // ----------------------------------------------------------------------------
-    // compute_node – вычисление узла по операции и уже готовым детям
+    // compute_node – без изменений
     // ----------------------------------------------------------------------------
     inline Value compute_node(LazyOp op, const Value& left, const Value& right, const Value& eps) {
         switch (op) {
@@ -35,8 +35,8 @@ namespace delta::internal {
     }
 
     // ----------------------------------------------------------------------------
-    // batch_add_values – пакетное сложение с быстрым путём для SmallStorage
-    // (все значения предполагаются нормализованными)
+    // batch_add_values – пакетное сложение с кэшированием нормализованных пар
+    // (устранено двойное чтение кэша)
     // ----------------------------------------------------------------------------
     inline Value batch_add_values(const std::vector<int>& indices,
         const std::vector<std::optional<Value>>& cache) {
@@ -63,7 +63,6 @@ namespace delta::internal {
             nums.reserve(indices.size());
             dens.reserve(indices.size());
 
-            // Сбор чисел (уже нормализованы) и LCM с проверкой переполнения
             for (int idx : indices) {
                 const SmallStorage& s = std::get<SmallStorage>(cache[idx].value());
                 nums.push_back(s.num);
@@ -116,25 +115,22 @@ namespace delta::internal {
             }
         }
 
-        // --- Общий путь с использованием dumb_int (et_off) и конвертаций без .str() ---
+        // --- Общий путь с dumb_int – кэшируем нормализованные пары (num, den) ---
         using delta::internal::dumb_int;
+        std::vector<std::pair<dumb_int, dumb_int>> norms;
+        norms.reserve(indices.size());
         dumb_int common_denom(1);
-        std::vector<dumb_int> numerators;
-        numerators.reserve(indices.size());
 
         for (int idx : indices) {
-            const Value& v = cache[idx].value();
-            auto [num, den] = normalize_to_dumb_int(v);
-            numerators.push_back(num);
-            common_denom = boost::multiprecision::lcm(common_denom, den);
+            auto nd = internal::normalize_to_dumb_int(cache[idx].value());
+            norms.emplace_back(nd.first, nd.second);
+            common_denom = boost::multiprecision::lcm(common_denom, nd.second);
         }
 
         dumb_int sum_num(0);
-        for (size_t i = 0; i < indices.size(); ++i) {
-            const Value& v = cache[indices[i]].value();
-            auto [num, den] = normalize_to_dumb_int(v);
-            dumb_int factor = common_denom / den;
-            sum_num += num * factor;
+        for (size_t i = 0; i < norms.size(); ++i) {
+            dumb_int factor = common_denom / norms[i].second;
+            sum_num += norms[i].first * factor;
         }
 
         dumb_int g = boost::multiprecision::gcd(sum_num, common_denom);
@@ -143,14 +139,12 @@ namespace delta::internal {
             common_denom /= g;
         }
 
-        // Проверяем, помещается ли результат в 128-битные типы, и если да – возвращаем SmallStorage
         if (fits_in_int128(sum_num) && fits_in_uint128(common_denom)) {
             return SmallStorage(
                 dumb_int_to_int128(sum_num),
                 dumb_int_to_uint128(common_denom)
             );
         }
-        // Иначе – BigStorage (без копирования через строки)
         return BigStorage(sum_num, common_denom);
     }
 
@@ -187,16 +181,14 @@ namespace delta::internal {
         const size_t n = nodes.size();
 
         std::vector<std::optional<Value>> cache(n);
-        // Кэш плоских списков операндов для каждого ADD-узла (индексы из cache)
         std::vector<std::optional<std::vector<int>>> add_cache(n);
 
         std::stack<int> st;
         st.push(root_idx);
 
-        // Настройки батчинга
-        constexpr size_t DIRECT_ADD_LIMIT = 3;       // при ≤3 слагаемых – последовательное сложение
-        constexpr size_t MAX_BATCH_SIZE = 64;        // максимальный батч для рациональных чисел
-        constexpr size_t MAX_TRANS_BATCH = 8;        // батч для трансцендентных (приближённых) значений
+        constexpr size_t DIRECT_ADD_LIMIT = 3;
+        constexpr size_t MAX_BATCH_SIZE = 64;
+        constexpr size_t MAX_TRANS_BATCH = 8;
 
         while (!st.empty()) {
             int idx = st.top();
@@ -213,7 +205,6 @@ namespace delta::internal {
                 continue;
             }
 
-            // Узел без детей (PI, E)
             if (node.child0 == -1 && node.child1 == -1) {
                 Value left{}, right{};
                 Value eps = node.value_idx != -1 ? values[node.value_idx] : Value{};
@@ -223,7 +214,6 @@ namespace delta::internal {
                 continue;
             }
 
-            // Проверяем готовность детей
             bool need_children = false;
             if (node.child0 != -1 && !cache[node.child0].has_value()) {
                 st.push(node.child0);
@@ -242,7 +232,6 @@ namespace delta::internal {
                 std::vector<int> operands;
                 operands.reserve(16);
 
-                // Левый ребёнок
                 if (node.child0 != -1) {
                     const Node& left_node = nodes[node.child0];
                     if (left_node.op == LazyOp::ADD && add_cache[node.child0].has_value()) {
@@ -263,7 +252,6 @@ namespace delta::internal {
                     }
                 }
 
-                // Правый ребёнок
                 if (node.child1 != -1) {
                     const Node& right_node = nodes[node.child1];
                     if (right_node.op == LazyOp::ADD && add_cache[node.child1].has_value()) {
@@ -284,11 +272,9 @@ namespace delta::internal {
                     }
                 }
 
-                // Сохраняем для возможного использования родителем
                 add_cache[idx] = std::move(operands);
                 const auto& indices = add_cache[idx].value();
 
-                // Мелкие суммы – старый добрый последовательный расчёт
                 if (indices.size() <= DIRECT_ADD_LIMIT) {
                     Value sum = cache[indices[0]].value();
                     for (size_t i = 1; i < indices.size(); ++i) {
@@ -299,7 +285,6 @@ namespace delta::internal {
                     continue;
                 }
 
-                // Крупные суммы – разделяем на рациональные и трансцендентные операнды
                 std::vector<int> rational_idxs;
                 std::vector<int> trans_idxs;
                 rational_idxs.reserve(indices.size());
@@ -317,17 +302,14 @@ namespace delta::internal {
 
                 Value final_sum;
                 if (trans_idxs.empty()) {
-                    // Только рациональные
                     final_sum = process_batch_list(rational_idxs, MAX_BATCH_SIZE, cache);
                 }
                 else {
-                    // Есть трансцендентные – сначала суммируем их небольшими батчами
                     Value trans_sum = process_batch_list(trans_idxs, MAX_TRANS_BATCH, cache);
                     if (rational_idxs.empty()) {
                         final_sum = trans_sum;
                     }
                     else {
-                        // Суммируем рациональные (они могут быть большими)
                         Value rational_sum = process_batch_list(rational_idxs, MAX_BATCH_SIZE, cache);
                         final_sum = eager_add(trans_sum, rational_sum);
                     }

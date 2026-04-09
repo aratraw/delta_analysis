@@ -14,6 +14,7 @@
 #include <cstdint>
 #include <cmath>
 #include <limits>
+#include <algorithm>
 
 #ifndef M_PI
 #define M_PI 3.14159265358979323846
@@ -23,6 +24,9 @@
 #endif
 
 namespace delta::internal {
+
+    // Forward declaration
+    void collect_garbage();
 
     template <typename H>
     H AbslHashValue(H h, const SmallStorage& s) {
@@ -109,7 +113,7 @@ namespace delta::internal {
     struct NodePool {
         static constexpr size_t DEFAULT_MAX_SIZE = 1'000'000;
         size_t max_size = DEFAULT_MAX_SIZE;
-        size_t gc_threshold = 0;   // порог для сборки мусора (0.9 * max_size)
+        size_t gc_threshold = 0;
         std::vector<Node> nodes;
         std::vector<Value> values;
         std::vector<int> refcount;
@@ -127,11 +131,9 @@ namespace delta::internal {
 
         void ensure_initialized() {
             if (nodes.empty()) {
-                nodes.resize(max_size);
-                refcount.resize(max_size, 0);
-                for (size_t i = 0; i < max_size; ++i) {
-                    nodes[i] = Node(LazyOp::CONST, -1, -1, -1, 0, Interval(), 0);
-                }
+                // Ленивая инициализация: начинаем с 4096 слотов
+                nodes.reserve(4096);
+                refcount.reserve(4096);
                 next_free_index = 0;
                 update_gc_threshold();
             }
@@ -149,11 +151,56 @@ namespace delta::internal {
             value_cache[normalized] = idx;
             return idx;
         }
+
+        // Выделение нового слота с поиском свободного, как в оригинальном allocate_node
+        int allocate_node() {
+            ensure_initialized();
+
+            if (next_free_index >= gc_threshold) {
+                collect_garbage();
+                if (next_free_index >= max_size) {
+                    throw std::runtime_error("NodePool exhausted: all slots occupied by roots");
+                }
+            }
+
+            // Ищем первый свободный слот, начиная с next_free_index
+            size_t idx = next_free_index;
+            while (idx < nodes.size() && is_occupied(nodes[idx])) {
+                ++idx;
+            }
+
+            // Если не нашли свободный в пределах текущего размера, расширяем вектор
+            if (idx >= nodes.size()) {
+                // Расширяем пул блоками по 4096, но не более max_size
+                size_t old_size = nodes.size();
+                size_t new_size = old_size + 4096;
+                if (new_size > max_size) new_size = max_size;
+                if (new_size <= old_size) {
+                    throw std::runtime_error("NodePool exhausted: cannot expand beyond max_size");
+                }
+                nodes.resize(new_size);
+                refcount.resize(new_size, 0);
+                for (size_t i = old_size; i < new_size; ++i) {
+                    nodes[i] = Node(LazyOp::CONST, -1, -1, -1, 0, Interval(), 0);
+                    refcount[i] = 0;
+                }
+                idx = old_size; // первый новый слот
+            }
+
+            // Обновляем next_free_index на следующий за найденным
+            next_free_index = idx + 1;
+            refcount[idx] = 0;
+            return static_cast<int>(idx);
+        }
+
+        bool is_occupied(const Node& node) const {
+            return !(node.value_idx == -1 && node.child0 == -1 && node.child1 == -1);
+        }
     };
 
     inline thread_local NodePool pool;
 
-    // Объявления функций (реализации в gc.h)
+    // Объявления функций
     int add_const(const Value& v);
     int get_binary_node(LazyOp op, int left, int right);
     int get_binary_node(LazyOp op, int left, int right, int value_idx);
@@ -168,15 +215,12 @@ namespace delta::internal {
     inline void set_pool_max_size(size_t new_size);
     inline void force_garbage_collect();
 
-    int allocate_node();
-    void collect_garbage();
-
-    // Реализации (кроме тех, что в gc.h)
+    // Реализации с использованием allocate_node
     inline int add_const(const Value& v) {
         pool.ensure_initialized();
         auto it = pool.constant_cache.find(v);
         if (it != pool.constant_cache.end()) return it->second;
-        int idx = allocate_node();
+        int idx = pool.allocate_node();
         int val_idx = pool.add_value(v);
         Node node(LazyOp::CONST, -1, -1, val_idx, 0, Interval(to_double(v)), compute_hash_const(v));
         pool.nodes[idx] = node;
@@ -196,7 +240,7 @@ namespace delta::internal {
         BinaryKey key{ op, left, right };
         auto it = pool.binary_cache.find(key);
         if (it != pool.binary_cache.end()) return it->second;
-        int idx = allocate_node();
+        int idx = pool.allocate_node();
         int depth = 1 + std::max(pool.nodes[left].depth, pool.nodes[right].depth);
         Interval approx = compute_interval(op, pool.nodes[left].approx, pool.nodes[right].approx);
         uint64_t hash = combine_hash(op, pool.nodes[left].hash, pool.nodes[right].hash);
@@ -218,7 +262,7 @@ namespace delta::internal {
         BinaryKey key{ op, left, right };
         auto it = pool.binary_cache.find(key);
         if (it != pool.binary_cache.end()) return it->second;
-        int idx = allocate_node();
+        int idx = pool.allocate_node();
         int depth = 1 + std::max(pool.nodes[left].depth, pool.nodes[right].depth);
         Interval approx = compute_interval(op, pool.nodes[left].approx, pool.nodes[right].approx);
         uint64_t hash = combine_hash(op, pool.nodes[left].hash, pool.nodes[right].hash, value_idx);
@@ -234,7 +278,7 @@ namespace delta::internal {
         TernaryKey key{ LazyOp::POW, left, right, value_idx };
         auto it = pool.ternary_cache.find(key);
         if (it != pool.ternary_cache.end()) return it->second;
-        int idx = allocate_node();
+        int idx = pool.allocate_node();
         int depth = 1 + std::max(pool.nodes[left].depth, pool.nodes[right].depth);
         Interval approx = compute_interval(LazyOp::POW, pool.nodes[left].approx, pool.nodes[right].approx);
         uint64_t hash = combine_hash(LazyOp::POW, pool.nodes[left].hash, pool.nodes[right].hash, value_idx);
@@ -250,7 +294,7 @@ namespace delta::internal {
         UnaryKey key{ op, child, value_idx };
         auto it = pool.unary_cache.find(key);
         if (it != pool.unary_cache.end()) return it->second;
-        int idx = allocate_node();
+        int idx = pool.allocate_node();
         int depth;
         Interval approx;
         uint64_t hash;
