@@ -1,4 +1,4 @@
-// test_utils.h
+// tests/rational/test_utils.h
 #pragma once
 
 #include <gtest/gtest.h>
@@ -24,7 +24,6 @@ namespace delta::testing {
         Rational old_precision_;
     };
 
-    // Проверка, что дробь находится в нормализованной форме (числитель и знаменатель взаимно просты)
     inline bool is_reduced(const Rational& r) {
         Rational imm = r;
         if (imm.is_lazy()) imm = imm.simplify();
@@ -32,16 +31,20 @@ namespace delta::testing {
 
         internal::Value v = imm.to_value();
         internal::dumb_int num, den;
-        if (const auto* s = std::get_if<internal::SmallStorage>(&v)) {
-            internal::SmallStorage norm = *s;
-            norm.normalize();
+        if (v.tag == internal::ValueType::Small) {
+            internal::SmallStorage norm = v.storage.small;
+            bool red = false;
+            norm.normalize(red);
             num = internal::to_dumb_int(norm.num);
             den = internal::to_dumb_int(norm.den);
         }
-        else {
-            const auto& b = std::get<internal::BigStorage>(v);
+        else if (v.tag == internal::ValueType::Big) {
+            const auto& b = v.storage.big;
             num = b.numerator();
             den = b.denominator();
+        }
+        else {
+            return false;
         }
         if (num == 0) return true;
         if (den < 0) den = -den;

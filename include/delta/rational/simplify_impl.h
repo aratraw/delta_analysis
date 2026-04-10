@@ -1,17 +1,16 @@
-// simplify_impl.h
+// simplify_impl.h (адаптирован под новый tagged union Value, флаг small_reduced в Value)
 #pragma once
 
 #include "node_pool.h"
 #include "evaluation_core.h"
 #include "evaluate_impl.h"
-#include "context.h"          // для default_eps()
+#include "context.h"
 #include <stack>
 #include <vector>
 #include <optional>
 
 namespace delta::internal {
 
-    // Вспомогательная функция: является ли операция алгебраической (вычисляемой точно)
     inline bool is_algebraic(LazyOp op) {
         return op == LazyOp::ADD || op == LazyOp::MUL ||
             op == LazyOp::NEG || op == LazyOp::RECIP;
@@ -41,7 +40,6 @@ namespace delta::internal {
                 continue;
             }
 
-            // Ждём детей
             bool children_ready = true;
             if (node.child0 != -1 && simplified_idx[node.child0] == -1) {
                 st.push(node.child0);
@@ -59,18 +57,16 @@ namespace delta::internal {
             bool is_const0 = (child0_simp != -1 && nodes[child0_simp].op == LazyOp::CONST);
             bool is_const1 = (child1_simp != -1 && nodes[child1_simp].op == LazyOp::CONST);
 
-            int new_idx = idx; // по умолчанию
+            int new_idx = idx;
 
-            // --- Унарные операции (node.child1 == -1) ---
+            // --- Унарные операции ---
             if (node.child1 == -1) {
-                // Узлы без детей (PI, E) уже упрощены
                 if (node.child0 == -1) {
                     simplified_idx[idx] = idx;
                     st.pop();
                     continue;
                 }
 
-                // 1. Структурные правила
                 switch (node.op) {
                 case LazyOp::NEG:
                     if (child0_simp != -1 && nodes[child0_simp].op == LazyOp::NEG) {
@@ -90,7 +86,7 @@ namespace delta::internal {
                         if (grand != -1) new_idx = grand;
                     }
                     else if (is_const0 && is_zero(values[nodes[child0_simp].value_idx])) {
-                        new_idx = add_const(Value(SmallStorage(1))); // exp(0) → 1
+                        new_idx = add_const(Value(SmallStorage(1)));
                     }
                     break;
                 case LazyOp::LOG:
@@ -99,25 +95,23 @@ namespace delta::internal {
                         if (grand != -1) new_idx = grand;
                     }
                     else if (is_const0 && is_one(values[nodes[child0_simp].value_idx])) {
-                        new_idx = add_const(Value(SmallStorage(0))); // log(1) → 0
+                        new_idx = add_const(Value(SmallStorage(0)));
                     }
                     break;
                 case LazyOp::SQRT:
                     if (is_const0) {
                         const Value& arg = values[nodes[child0_simp].value_idx];
                         if (is_one(arg)) {
-                            new_idx = add_const(Value(SmallStorage(1))); // sqrt(1) → 1
+                            new_idx = add_const(Value(SmallStorage(1)));
                         }
                         else if (is_zero(arg)) {
-                            new_idx = add_const(Value(SmallStorage(0))); // sqrt(0) → 0
+                            new_idx = add_const(Value(SmallStorage(0)));
                         }
                     }
                     else if (child0_simp != -1 && nodes[child0_simp].op == LazyOp::EXP) {
-                        // sqrt(exp(x)) → exp(x/2)
                         int inner = nodes[child0_simp].child0;
                         if (inner != -1) {
-                            Value eps = node.value_idx != -1 ? values[node.value_idx]
-                                : internal::default_eps_value;
+                            Value eps = node.value_idx != -1 ? values[node.value_idx] : internal::default_eps_value;
                             int eps_idx = internal::pool.add_value(eps);
                             int two = add_const(Value(SmallStorage(2)));
                             int half = get_unary_node(LazyOp::RECIP, two);
@@ -128,24 +122,22 @@ namespace delta::internal {
                     break;
                 case LazyOp::SIN:
                     if (is_const0 && is_zero(values[nodes[child0_simp].value_idx])) {
-                        new_idx = add_const(Value(SmallStorage(0))); // sin(0) → 0
+                        new_idx = add_const(Value(SmallStorage(0)));
                     }
                     break;
                 case LazyOp::COS:
                     if (is_const0 && is_zero(values[nodes[child0_simp].value_idx])) {
-                        new_idx = add_const(Value(SmallStorage(1))); // cos(0) → 1
+                        new_idx = add_const(Value(SmallStorage(1)));
                     }
                     break;
                 case LazyOp::ACOS:
                     if (is_const0) {
                         const Value& arg = values[nodes[child0_simp].value_idx];
                         if (is_one(arg)) {
-                            new_idx = add_const(Value(SmallStorage(0))); // acos(1) → 0
+                            new_idx = add_const(Value(SmallStorage(0)));
                         }
                         else if (is_zero(arg)) {
-                            // acos(0) → π/2
-                            Value eps = node.value_idx != -1 ? values[node.value_idx]
-                                : internal::default_eps_value;
+                            Value eps = node.value_idx != -1 ? values[node.value_idx] : internal::default_eps_value;
                             int eps_idx = internal::pool.add_value(eps);
                             int pi_node = get_unary_node(LazyOp::PI, -1, eps_idx);
                             int two = add_const(Value(SmallStorage(2)));
@@ -157,14 +149,12 @@ namespace delta::internal {
                 default: break;
                 }
 
-                // Если структурное правило сработало
                 if (new_idx != idx) {
                     simplified_idx[idx] = new_idx;
                     st.pop();
                     continue;
                 }
 
-                // 2. Constant folding только для алгебраических операций
                 if (is_const0 && is_algebraic(node.op)) {
                     Value arg = values[nodes[child0_simp].value_idx];
                     Value eps = node.value_idx != -1 ? values[node.value_idx] : Value{};
@@ -175,16 +165,13 @@ namespace delta::internal {
                     continue;
                 }
 
-                // 3. Ничего не упростилось – создаём новый узел
                 int new_unary = get_unary_node(node.op, child0_simp, node.value_idx);
                 simplified_idx[idx] = new_unary;
                 st.pop();
                 continue;
             }
 
-            // --- Бинарные операции (node.child1 != -1) ---
-
-            // 1. Алгебраические правила
+            // --- Бинарные операции ---
             if (node.op == LazyOp::ADD) {
                 if (is_const0 && is_zero(values[nodes[child0_simp].value_idx]))
                     new_idx = child1_simp;
@@ -218,16 +205,14 @@ namespace delta::internal {
                 }
             }
             else if (node.op == LazyOp::POW) {
-                // Структурные правила
                 if (is_const1 && is_one(values[nodes[child1_simp].value_idx]))
-                    new_idx = child0_simp;                          // x^1 → x
+                    new_idx = child0_simp;
                 else if (is_const1 && is_zero(values[nodes[child1_simp].value_idx]))
-                    new_idx = add_const(Value(SmallStorage(1)));   // x^0 → 1
+                    new_idx = add_const(Value(SmallStorage(1)));
                 else if (is_const0 && is_one(values[nodes[child0_simp].value_idx]))
-                    new_idx = add_const(Value(SmallStorage(1)));   // 1^y → 1
+                    new_idx = add_const(Value(SmallStorage(1)));
                 else if (is_const0 && is_zero(values[nodes[child0_simp].value_idx]) && is_positive(values[nodes[child1_simp].value_idx]))
-                    new_idx = add_const(Value(SmallStorage(0)));   // 0^positive → 0
-                // НОВОЕ ПРАВИЛО: x^(1/2) → sqrt(x)
+                    new_idx = add_const(Value(SmallStorage(0)));
                 else if (is_const1) {
                     const Value& exp_val = values[nodes[child1_simp].value_idx];
                     Value one = SmallStorage(1);
@@ -240,40 +225,42 @@ namespace delta::internal {
                         continue;
                     }
                 }
-                // Дополнительные упрощения (можно расширять):
-                // (a^b)^c → a^(b*c) если a > 0 или показатели целые
+                // (a^b)^c -> a^(b*c) для целых показателей
                 else if (child0_simp != -1 && nodes[child0_simp].op == LazyOp::POW &&
                     nodes[child0_simp].value_idx == -1) {
-                    // Внутренний POW не имеет своего eps (т.е. это не POW с eps, а просто степень)
                     int a = nodes[child0_simp].child0;
                     int b = nodes[child0_simp].child1;
                     int c = child1_simp;
-                    // Проверяем, что b и c константы (целые)
                     if (b != -1 && c != -1 && nodes[b].op == LazyOp::CONST && nodes[c].op == LazyOp::CONST) {
-                        Value vb = values[nodes[b].value_idx];
-                        Value vc = values[nodes[c].value_idx];
-                        // Пока упрощаем только для целых показателей (чтобы избежать сложностей)
+                        const Value& vb = values[nodes[b].value_idx];
+                        const Value& vc = values[nodes[c].value_idx];
                         bool b_int = false, c_int = false;
-                        if (const auto* sb = std::get_if<SmallStorage>(&vb)) {
-                            SmallStorage sb_norm = *sb;
-                            sb_norm.normalize();
+
+                        // Проверка целочисленности vb
+                        if (vb.tag == ValueType::Small) {
+                            SmallStorage sb_norm = vb.storage.small;
+                            bool red_b = false;
+                            if (!vb.small_reduced) sb_norm.normalize(red_b);
                             if (sb_norm.den == 1) b_int = true;
                         }
-                        else if (const auto* bb = std::get_if<BigStorage>(&vb)) {
-                            if (bb->denominator() == 1) b_int = true;
+                        else if (vb.tag == ValueType::Big) {
+                            if (vb.storage.big.denominator() == 1) b_int = true;
                         }
-                        if (const auto* sc = std::get_if<SmallStorage>(&vc)) {
-                            SmallStorage sc_norm = *sc;
-                            sc_norm.normalize();
+
+                        // Проверка целочисленности vc
+                        if (vc.tag == ValueType::Small) {
+                            SmallStorage sc_norm = vc.storage.small;
+                            bool red_c = false;
+                            if (!vc.small_reduced) sc_norm.normalize(red_c);
                             if (sc_norm.den == 1) c_int = true;
                         }
-                        else if (const auto* bc = std::get_if<BigStorage>(&vc)) {
-                            if (bc->denominator() == 1) c_int = true;
+                        else if (vc.tag == ValueType::Big) {
+                            if (vc.storage.big.denominator() == 1) c_int = true;
                         }
+
                         if (b_int && c_int) {
                             Value vprod = eager_mul(vb, vc);
                             int prod_idx = add_const(vprod);
-                            // Создаём новый узел a^(b*c) с тем же eps, что и у внешнего POW
                             int new_pow = get_pow_node(a, prod_idx, node.value_idx);
                             simplified_idx[idx] = new_pow;
                             st.pop();
@@ -281,7 +268,6 @@ namespace delta::internal {
                         }
                     }
                 }
-                // a^(b+c) → a^b * a^c, если b и c константы (можно добавить позже)
             }
 
             if (new_idx != idx) {
@@ -290,9 +276,7 @@ namespace delta::internal {
                 continue;
             }
 
-            // 2. Constant folding для бинарных операций
             if (is_const0 && is_const1) {
-                // Для ADD и MUL используем compute_node, для POW тоже, но с осторожностью
                 if (node.op == LazyOp::ADD || node.op == LazyOp::MUL || node.op == LazyOp::POW) {
                     Value left = values[nodes[child0_simp].value_idx];
                     Value right = values[nodes[child1_simp].value_idx];
@@ -305,7 +289,6 @@ namespace delta::internal {
                 }
             }
 
-            // 3. Ничего не упростилось – создаём новый узел
             int new_binary;
             if (node.op == LazyOp::POW) {
                 new_binary = get_pow_node(child0_simp, child1_simp, node.value_idx);

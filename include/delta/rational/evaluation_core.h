@@ -1,6 +1,6 @@
 // evaluation_core.h
-// Полностью оптимизированная версия: прямые пути для всех комбинаций BigStorage + SmallStorage,
-// устранены лишние normalize_to_dumb_int и GCD в смешанных случаях.
+// Адаптирован под новый tagged union Value из storage.h
+// Переписаны is_*, eager_add, eager_mul, eager_div с учётом нормализованности SmallStorage.
 
 #pragma once
 
@@ -17,6 +17,7 @@
 #include <stack>
 #include <string>
 #include <vector>
+#include <iostream>
 
 namespace delta::internal {
 
@@ -47,100 +48,121 @@ namespace delta::internal {
     Value slow_e(const Value& eps);
     Value slow_ln2(const Value& eps);
 
-    // Вспомогательные функции
+    // ============================================================================
+    // Вспомогательные функции для нового Value (tagged union)
+    // ============================================================================
     inline bool is_zero(const Value& v) {
-        if (const auto* s = std::get_if<SmallStorage>(&v)) return s->num == 0;
-        return std::get<BigStorage>(v).numerator() == 0;
+        if (v.tag == ValueType::Small) return v.storage.small.num == 0;
+        else if (v.tag == ValueType::Big) return v.storage.big.is_zero();
+        else return false; // lazy index не может быть нулём
     }
 
     inline bool is_one(const Value& v) {
-        if (const auto* s = std::get_if<SmallStorage>(&v)) {
-            SmallStorage norm = *s; norm.normalize();
-            return norm.num == 1 && norm.den == 1;
+        if (v.tag == ValueType::Small) {
+            const auto& s = v.storage.small;
+            if (v.small_reduced) return s.num == 1 && s.den == 1;
+            SmallStorage tmp = s;
+            bool red = false;
+            tmp.normalize(red);
+            return tmp.num == 1 && tmp.den == 1;
         }
-        const auto& b = std::get<BigStorage>(v);
-        return b.numerator() == 1 && b.denominator() == 1;
+        else if (v.tag == ValueType::Big) {
+            return v.storage.big.is_one();
+        }
+        else {
+            return false;
+        }
     }
 
     inline bool is_positive(const Value& v) {
-        if (const auto* s = std::get_if<SmallStorage>(&v)) return s->num > 0;
-        return std::get<BigStorage>(v).numerator() > 0;
+        if (v.tag == ValueType::Small) return v.storage.small.num > 0;
+        else if (v.tag == ValueType::Big) return v.storage.big.is_positive();
+        else return false;
     }
 
     inline bool is_negative(const Value& v) {
-        if (const auto* s = std::get_if<SmallStorage>(&v)) return s->num < 0;
-        return std::get<BigStorage>(v).numerator() < 0;
+        if (v.tag == ValueType::Small) return v.storage.small.num < 0;
+        else if (v.tag == ValueType::Big) return v.storage.big.is_negative();
+        else return false;
     }
 
     inline bool is_less(const Value& a, const Value& b) { return a < b; }
     inline bool is_greater(const Value& a, const Value& b) { return a > b; }
 
     inline double to_double(const Value& v) {
-        if (const auto* s = std::get_if<SmallStorage>(&v)) {
-            SmallStorage norm = *s; norm.normalize();
+        if (v.tag == ValueType::Small) {
+            SmallStorage norm = v.storage.small;
+            bool red = false;
+            norm.normalize(red);
             return static_cast<double>(norm.num) / static_cast<double>(norm.den);
         }
-        const auto& b = std::get<BigStorage>(v);
-        boost::multiprecision::cpp_dec_float_100 f = static_cast<boost::multiprecision::cpp_dec_float_100>(b.numerator());
-        f /= static_cast<boost::multiprecision::cpp_dec_float_100>(b.denominator());
-        return f.convert_to<double>();
+        else if (v.tag == ValueType::Big) {
+            const auto& b = v.storage.big;
+            boost::multiprecision::cpp_dec_float_100 f = static_cast<boost::multiprecision::cpp_dec_float_100>(b.numerator());
+            f /= static_cast<boost::multiprecision::cpp_dec_float_100>(b.denominator());
+            return f.convert_to<double>();
+        }
+        else {
+            return 0.0; // lazy – не должно вызываться в горячих путях
+        }
     }
 
     constexpr double HYBRID_THRESHOLD = 1e-35;
 
     // ============================================================================
-    // Арифметические операции – прямые пути для всех комбинаций
+    // Арифметические операции – прямые пути для всех комбинаций, с учётом нормализованности
     // ============================================================================
 
     inline Value eager_add(const Value& a, const Value& b) {
         // Small + Small (быстрый путь)
-        if (const auto* sa = std::get_if<SmallStorage>(&a)) {
-            if (const auto* sb = std::get_if<SmallStorage>(&b)) {
-                SmallStorage sa_norm = *sa, sb_norm = *sb;
-                sa_norm.normalize(); sb_norm.normalize();
-                if (sa_norm.den == sb_norm.den && !would_overflow_add(sa_norm.num, sb_norm.num)) {
-                    SmallStorage res(sa_norm.num + sb_norm.num, sa_norm.den);
-                    res.normalize();
-                    return res;
-                }
-                dumb_int num = to_dumb_int(sa_norm.num) * to_dumb_int(sb_norm.den) +
-                    to_dumb_int(sb_norm.num) * to_dumb_int(sa_norm.den);
-                dumb_int den = to_dumb_int(sa_norm.den) * to_dumb_int(sb_norm.den);
-                if (fits_in_int128(num) && fits_in_uint128(den)) {
-                    dumb_int g = boost::multiprecision::gcd(num, den);
-                    num /= g; den /= g;
-                    return SmallStorage(dumb_int_to_int128(num), dumb_int_to_uint128(den));
-                }
-                return BigStorage(num, den);
+        if (a.tag == ValueType::Small && b.tag == ValueType::Small) {
+            SmallStorage sa = a.storage.small;
+            SmallStorage sb = b.storage.small;
+            bool red_a = false, red_b = false;
+            if (!a.small_reduced) sa.normalize(red_a);
+            if (!b.small_reduced) sb.normalize(red_b);
+            if (sa.den == sb.den && !would_overflow_add(sa.num, sb.num)) {
+                SmallStorage res(sa.num + sb.num, sa.den);
+                Value result(res, false);
+                result.normalize();
+                return result;
             }
+            dumb_int num = to_dumb_int(sa.num) * to_dumb_int(sb.den) +
+                to_dumb_int(sb.num) * to_dumb_int(sa.den);
+            dumb_int den = to_dumb_int(sa.den) * to_dumb_int(sb.den);
+            if (fits_in_int128(num) && fits_in_uint128(den)) {
+                dumb_int g = boost::multiprecision::gcd(num, den);
+                num /= g; den /= g;
+                SmallStorage res(dumb_int_to_int128(num), dumb_int_to_uint128(den));
+                Value result(res, false);
+                result.normalize();
+                return result;
+            }
+            return Value(BigStorage(num, den));
         }
 
         // Прямой путь BigStorage + BigStorage
-        if (const auto* ba = std::get_if<BigStorage>(&a)) {
-            if (const auto* bb = std::get_if<BigStorage>(&b)) {
-                BigRationalType res = ba->val + bb->val;
-                return BigStorage(std::move(res));
-            }
+        if (a.tag == ValueType::Big && b.tag == ValueType::Big) {
+            BigRationalType res = *a.storage.big.ptr + *b.storage.big.ptr;
+            return Value(BigStorage(std::move(res)));
         }
 
-        // Прямой путь BigStorage + SmallStorage (без normalize_to_dumb_int)
-        if (const auto* ba = std::get_if<BigStorage>(&a)) {
-            if (const auto* sb = std::get_if<SmallStorage>(&b)) {
-                SmallStorage sb_norm = *sb;
-                sb_norm.normalize();
-                BigRationalType res = ba->val + (BigRationalType(to_dumb_int(sb_norm.num)) / to_dumb_int(sb_norm.den));
-                return BigStorage(std::move(res));
-            }
+        // Прямой путь BigStorage + SmallStorage
+        if (a.tag == ValueType::Big && b.tag == ValueType::Small) {
+            SmallStorage sb_norm = b.storage.small;
+            bool red = false;
+            if (!b.small_reduced) sb_norm.normalize(red);
+            BigRationalType res = *a.storage.big.ptr + (BigRationalType(to_dumb_int(sb_norm.num)) / to_dumb_int(sb_norm.den));
+            return Value(BigStorage(std::move(res)));
         }
 
         // Прямой путь SmallStorage + BigStorage
-        if (const auto* sa = std::get_if<SmallStorage>(&a)) {
-            if (const auto* bb = std::get_if<BigStorage>(&b)) {
-                SmallStorage sa_norm = *sa;
-                sa_norm.normalize();
-                BigRationalType res = (BigRationalType(to_dumb_int(sa_norm.num)) / to_dumb_int(sa_norm.den)) + bb->val;
-                return BigStorage(std::move(res));
-            }
+        if (a.tag == ValueType::Small && b.tag == ValueType::Big) {
+            SmallStorage sa_norm = a.storage.small;
+            bool red = false;
+            if (!a.small_reduced) sa_norm.normalize(red);
+            BigRationalType res = (BigRationalType(to_dumb_int(sa_norm.num)) / to_dumb_int(sa_norm.den)) + *b.storage.big.ptr;
+            return Value(BigStorage(std::move(res)));
         }
 
         // Fallback (не должен достигаться – все комбинации покрыты)
@@ -151,9 +173,12 @@ namespace delta::internal {
         if (fits_in_int128(num) && fits_in_uint128(den)) {
             dumb_int g = boost::multiprecision::gcd(num, den);
             num /= g; den /= g;
-            return SmallStorage(dumb_int_to_int128(num), dumb_int_to_uint128(den));
+            SmallStorage res(dumb_int_to_int128(num), dumb_int_to_uint128(den));
+            Value result(res, false);
+            result.normalize();
+            return result;
         }
-        return BigStorage(num, den);
+        return Value(BigStorage(num, den));
     }
 
     inline Value eager_sub(const Value& a, const Value& b) {
@@ -161,54 +186,55 @@ namespace delta::internal {
     }
 
     inline Value eager_mul(const Value& a, const Value& b) {
-        // Small + Small
-        if (const auto* sa = std::get_if<SmallStorage>(&a)) {
-            if (const auto* sb = std::get_if<SmallStorage>(&b)) {
-                SmallStorage sa_norm = *sa, sb_norm = *sb;
-                sa_norm.normalize(); sb_norm.normalize();
-                if (!would_overflow_mul(sa_norm.num, sb_norm.num) &&
-                    sa_norm.den <= (std::numeric_limits<absl::uint128>::max)() / sb_norm.den) {
-                    SmallStorage res(sa_norm.num * sb_norm.num, sa_norm.den * sb_norm.den);
-                    res.normalize();
-                    return res;
-                }
-                dumb_int num = to_dumb_int(sa_norm.num) * to_dumb_int(sb_norm.num);
-                dumb_int den = to_dumb_int(sa_norm.den) * to_dumb_int(sb_norm.den);
-                if (fits_in_int128(num) && fits_in_uint128(den)) {
-                    dumb_int g = boost::multiprecision::gcd(num, den);
-                    num /= g; den /= g;
-                    return SmallStorage(dumb_int_to_int128(num), dumb_int_to_uint128(den));
-                }
-                return BigStorage(num, den);
+        // Small * Small
+        if (a.tag == ValueType::Small && b.tag == ValueType::Small) {
+            SmallStorage sa = a.storage.small;
+            SmallStorage sb = b.storage.small;
+            bool red_a = false, red_b = false;
+            if (!a.small_reduced) sa.normalize(red_a);
+            if (!b.small_reduced) sb.normalize(red_b);
+            if (!would_overflow_mul(sa.num, sb.num) &&
+                sa.den <= (std::numeric_limits<absl::uint128>::max)() / sb.den) {
+                SmallStorage res(sa.num * sb.num, sa.den * sb.den);
+                Value result(res, false);
+                result.normalize();
+                return result;
             }
+            dumb_int num = to_dumb_int(sa.num) * to_dumb_int(sb.num);
+            dumb_int den = to_dumb_int(sa.den) * to_dumb_int(sb.den);
+            if (fits_in_int128(num) && fits_in_uint128(den)) {
+                dumb_int g = boost::multiprecision::gcd(num, den);
+                num /= g; den /= g;
+                SmallStorage res(dumb_int_to_int128(num), dumb_int_to_uint128(den));
+                Value result(res, false);
+                result.normalize();
+                return result;
+            }
+            return Value(BigStorage(num, den));
         }
 
         // Прямой путь BigStorage * BigStorage
-        if (const auto* ba = std::get_if<BigStorage>(&a)) {
-            if (const auto* bb = std::get_if<BigStorage>(&b)) {
-                BigRationalType res = ba->val * bb->val;
-                return BigStorage(std::move(res));
-            }
+        if (a.tag == ValueType::Big && b.tag == ValueType::Big) {
+            BigRationalType res = *a.storage.big.ptr * *b.storage.big.ptr;
+            return Value(BigStorage(std::move(res)));
         }
 
         // Прямой путь BigStorage * SmallStorage
-        if (const auto* ba = std::get_if<BigStorage>(&a)) {
-            if (const auto* sb = std::get_if<SmallStorage>(&b)) {
-                SmallStorage sb_norm = *sb;
-                sb_norm.normalize();
-                BigRationalType res = ba->val * (BigRationalType(to_dumb_int(sb_norm.num)) / to_dumb_int(sb_norm.den));
-                return BigStorage(std::move(res));
-            }
+        if (a.tag == ValueType::Big && b.tag == ValueType::Small) {
+            SmallStorage sb_norm = b.storage.small;
+            bool red = false;
+            if (!b.small_reduced) sb_norm.normalize(red);
+            BigRationalType res = *a.storage.big.ptr * (BigRationalType(to_dumb_int(sb_norm.num)) / to_dumb_int(sb_norm.den));
+            return Value(BigStorage(std::move(res)));
         }
 
         // Прямой путь SmallStorage * BigStorage
-        if (const auto* sa = std::get_if<SmallStorage>(&a)) {
-            if (const auto* bb = std::get_if<BigStorage>(&b)) {
-                SmallStorage sa_norm = *sa;
-                sa_norm.normalize();
-                BigRationalType res = (BigRationalType(to_dumb_int(sa_norm.num)) / to_dumb_int(sa_norm.den)) * bb->val;
-                return BigStorage(std::move(res));
-            }
+        if (a.tag == ValueType::Small && b.tag == ValueType::Big) {
+            SmallStorage sa_norm = a.storage.small;
+            bool red = false;
+            if (!a.small_reduced) sa_norm.normalize(red);
+            BigRationalType res = (BigRationalType(to_dumb_int(sa_norm.num)) / to_dumb_int(sa_norm.den)) * *b.storage.big.ptr;
+            return Value(BigStorage(std::move(res)));
         }
 
         // Fallback
@@ -219,63 +245,62 @@ namespace delta::internal {
         if (fits_in_int128(num) && fits_in_uint128(den)) {
             dumb_int g = boost::multiprecision::gcd(num, den);
             num /= g; den /= g;
-            return SmallStorage(dumb_int_to_int128(num), dumb_int_to_uint128(den));
+            SmallStorage res(dumb_int_to_int128(num), dumb_int_to_uint128(den));
+            Value result(res, false);
+            result.normalize();
+            return result;
         }
-        return BigStorage(num, den);
+        return Value(BigStorage(num, den));
     }
 
     inline Value eager_div(const Value& a, const Value& b) {
         if (is_zero(b)) throw std::domain_error("Division by zero");
 
         // Small / Small (быстрый путь через обратное)
-        if (const auto* sa = std::get_if<SmallStorage>(&a)) {
-            if (const auto* sb = std::get_if<SmallStorage>(&b)) {
-                SmallStorage sb_norm = *sb; sb_norm.normalize();
-                if (sb_norm.num == 0) throw std::domain_error("Division by zero");
-                absl::int128 num_recip = static_cast<absl::int128>(sb_norm.den);
-                absl::uint128 den_recip = (sb_norm.num < 0) ? static_cast<absl::uint128>(-sb_norm.num) : static_cast<absl::uint128>(sb_norm.num);
-                if (sb_norm.num < 0) num_recip = -num_recip;
-                SmallStorage recip(num_recip, den_recip);
-                recip.normalize();
-                return eager_mul(a, recip);
-            }
+        if (a.tag == ValueType::Small && b.tag == ValueType::Small) {
+            SmallStorage sb_norm = b.storage.small;
+            bool red = false;
+            if (!b.small_reduced) sb_norm.normalize(red);
+            if (sb_norm.num == 0) throw std::domain_error("Division by zero");
+            absl::int128 num_recip = static_cast<absl::int128>(sb_norm.den);
+            absl::uint128 den_recip = (sb_norm.num < 0) ? static_cast<absl::uint128>(-sb_norm.num) : static_cast<absl::uint128>(sb_norm.num);
+            if (sb_norm.num < 0) num_recip = -num_recip;
+            SmallStorage recip(num_recip, den_recip);
+            recip.normalize(red);
+            return eager_mul(a, Value(recip, false));
         }
 
         // Прямой путь BigStorage / BigStorage
-        if (const auto* ba = std::get_if<BigStorage>(&a)) {
-            if (const auto* bb = std::get_if<BigStorage>(&b)) {
-                if (bb->numerator() == 0) throw std::domain_error("Division by zero");
-                BigRationalType res = ba->val / bb->val;
-                return BigStorage(std::move(res));
-            }
+        if (a.tag == ValueType::Big && b.tag == ValueType::Big) {
+            if (b.storage.big.is_zero()) throw std::domain_error("Division by zero");
+            BigRationalType res = *a.storage.big.ptr / *b.storage.big.ptr;
+            return Value(BigStorage(std::move(res)));
         }
 
         // Прямой путь BigStorage / SmallStorage
-        if (const auto* ba = std::get_if<BigStorage>(&a)) {
-            if (const auto* sb = std::get_if<SmallStorage>(&b)) {
-                SmallStorage sb_norm = *sb; sb_norm.normalize();
-                if (sb_norm.num == 0) throw std::domain_error("Division by zero");
-                absl::int128 num_recip = static_cast<absl::int128>(sb_norm.den);
-                absl::uint128 den_recip = (sb_norm.num < 0) ? static_cast<absl::uint128>(-sb_norm.num) : static_cast<absl::uint128>(sb_norm.num);
-                if (sb_norm.num < 0) num_recip = -num_recip;
-                SmallStorage recip(num_recip, den_recip);
-                recip.normalize();
-                return eager_mul(a, recip);
-            }
+        if (a.tag == ValueType::Big && b.tag == ValueType::Small) {
+            SmallStorage sb_norm = b.storage.small;
+            bool red = false;
+            if (!b.small_reduced) sb_norm.normalize(red);
+            if (sb_norm.num == 0) throw std::domain_error("Division by zero");
+            absl::int128 num_recip = static_cast<absl::int128>(sb_norm.den);
+            absl::uint128 den_recip = (sb_norm.num < 0) ? static_cast<absl::uint128>(-sb_norm.num) : static_cast<absl::uint128>(sb_norm.num);
+            if (sb_norm.num < 0) num_recip = -num_recip;
+            SmallStorage recip(num_recip, den_recip);
+            recip.normalize(red);
+            return eager_mul(a, Value(recip, false));
         }
 
         // Прямой путь SmallStorage / BigStorage
-        if (const auto* sa = std::get_if<SmallStorage>(&a)) {
-            if (const auto* bb = std::get_if<BigStorage>(&b)) {
-                if (bb->numerator() == 0) throw std::domain_error("Division by zero");
-                const dumb_int& num = bb->numerator();
-                const dumb_int& den = bb->denominator();
-                dumb_int recip_num = den;
-                dumb_int recip_den = num;
-                if (recip_den < 0) { recip_den = -recip_den; recip_num = -recip_num; }
-                BigStorage recip(recip_num, recip_den);
-                return eager_mul(a, recip);
-            }
+        if (a.tag == ValueType::Small && b.tag == ValueType::Big) {
+            if (b.storage.big.is_zero()) throw std::domain_error("Division by zero");
+            dumb_int num = b.storage.big.numerator();
+            dumb_int den = b.storage.big.denominator();
+            dumb_int recip_num = den;
+            dumb_int recip_den = num;
+            if (recip_den < 0) { recip_den = -recip_den; recip_num = -recip_num; }
+            BigStorage recip(recip_num, recip_den);
+            return eager_mul(a, Value(recip));
         }
 
         // Fallback
@@ -288,19 +313,27 @@ namespace delta::internal {
         if (fits_in_int128(num) && fits_in_uint128(den)) {
             dumb_int g = boost::multiprecision::gcd(num, den);
             num /= g; den /= g;
-            return SmallStorage(dumb_int_to_int128(num), dumb_int_to_uint128(den));
+            SmallStorage res(dumb_int_to_int128(num), dumb_int_to_uint128(den));
+            Value result(res, false);
+            result.normalize();
+            return result;
         }
-        return BigStorage(num, den);
+        return Value(BigStorage(num, den));
     }
 
     inline Value eager_neg(const Value& a) {
-        if (const auto* s = std::get_if<SmallStorage>(&a)) {
-            SmallStorage res(-(s->num), s->den);
-            res.normalize();
-            return res;
+        if (a.tag == ValueType::Small) {
+            SmallStorage res(-a.storage.small.num, a.storage.small.den);
+            Value result(res, false);
+            result.normalize();
+            return result;
         }
-        const auto& b = std::get<BigStorage>(a);
-        return BigStorage(-b.val);
+        else if (a.tag == ValueType::Big) {
+            return Value(BigStorage(-(*a.storage.big.ptr)));
+        }
+        else {
+            throw std::logic_error("eager_neg called on lazy Value");
+        }
     }
 
     inline Value eager_abs(const Value& a) {
@@ -308,20 +341,27 @@ namespace delta::internal {
     }
 
     // ============================================================================
-    // High‑precision floating‑point helpers (fast path)
+    // High‑precision floating‑point helpers (fast path) – адаптированы
     // ============================================================================
 
     using HighPrecFloat = boost::multiprecision::cpp_dec_float_100;
 
     inline HighPrecFloat to_high_prec(const Value& v) {
-        if (const auto* s = std::get_if<SmallStorage>(&v)) {
-            SmallStorage norm = *s; norm.normalize();
+        if (v.tag == ValueType::Small) {
+            SmallStorage norm = v.storage.small;
+            bool red = false;
+            norm.normalize(red);
             return static_cast<HighPrecFloat>(to_dumb_int(norm.num)) /
                 static_cast<HighPrecFloat>(to_dumb_int(norm.den));
         }
-        const auto& b = std::get<BigStorage>(v);
-        return static_cast<HighPrecFloat>(b.numerator()) /
-            static_cast<HighPrecFloat>(b.denominator());
+        else if (v.tag == ValueType::Big) {
+            const auto& b = v.storage.big;
+            return static_cast<HighPrecFloat>(b.numerator()) /
+                static_cast<HighPrecFloat>(b.denominator());
+        }
+        else {
+            throw std::domain_error("to_high_prec on lazy Value");
+        }
     }
 
     inline Value to_rational_with_eps(const HighPrecFloat& f, const Value& eps, int extra_digits = 2) {
@@ -368,10 +408,10 @@ namespace delta::internal {
         for (size_t i = 0; i < fractional_part.size(); ++i) den *= 10;
         dumb_int g = boost::multiprecision::gcd(num, den);
         num /= g; den /= g;
-        return BigStorage(num, den);
+        return Value(BigStorage(num, den));
     }
 
-    // Быстрые трансцендентные функции (без изменений)
+    // Быстрые трансцендентные функции (без изменений, но используют обновлённый to_high_prec)
     inline Value fast_sqrt(const Value& x, const Value& eps) {
         HighPrecFloat fx = to_high_prec(x);
         if (fx < 0) throw std::domain_error("sqrt of negative number");
@@ -400,22 +440,36 @@ namespace delta::internal {
     }
 
     // ============================================================================
-    // Точные корни (целочисленные) – без изменений
+    // Точные корни (целочисленные) – адаптированы под новый Value
     // ============================================================================
     inline bool is_integer(const Value& v) {
-        if (const auto* s = std::get_if<SmallStorage>(&v)) {
-            SmallStorage norm = *s; norm.normalize();
+        if (v.tag == ValueType::Small) {
+            SmallStorage norm = v.storage.small;
+            bool red = false;
+            norm.normalize(red);
             return norm.den == 1;
         }
-        return std::get<BigStorage>(v).denominator() == 1;
+        else if (v.tag == ValueType::Big) {
+            return v.storage.big.denominator() == 1;
+        }
+        else {
+            return false;
+        }
     }
 
     inline dumb_int get_integer(const Value& v) {
-        if (const auto* s = std::get_if<SmallStorage>(&v)) {
-            SmallStorage norm = *s; norm.normalize();
+        if (v.tag == ValueType::Small) {
+            SmallStorage norm = v.storage.small;
+            bool red = false;
+            norm.normalize(red);
             return to_dumb_int(norm.num);
         }
-        return std::get<BigStorage>(v).numerator();
+        else if (v.tag == ValueType::Big) {
+            return v.storage.big.numerator();
+        }
+        else {
+            throw std::logic_error("get_integer on lazy Value");
+        }
     }
 
     inline dumb_int integer_nth_root(const dumb_int& a, const dumb_int& n) {
@@ -438,21 +492,27 @@ namespace delta::internal {
 
     inline std::optional<Value> try_exact_nth_root(const Value& base, const Value& n_val) {
         dumb_int n;
-        if (const auto* s = std::get_if<SmallStorage>(&n_val)) {
-            SmallStorage norm = *s; norm.normalize();
+        if (n_val.tag == ValueType::Small) {
+            SmallStorage norm = n_val.storage.small;
+            bool red = false;
+            norm.normalize(red);
             if (norm.den != 1) return std::nullopt;
             n = to_dumb_int(norm.num);
         }
+        else if (n_val.tag == ValueType::Big) {
+            if (n_val.storage.big.denominator() != 1) return std::nullopt;
+            n = n_val.storage.big.numerator();
+        }
         else {
-            const auto& b = std::get<BigStorage>(n_val);
-            if (b.denominator() != 1) return std::nullopt;
-            n = b.numerator();
+            return std::nullopt;
         }
         if (n <= 0 || n > 1000) return std::nullopt;
 
-        if (const auto* s = std::get_if<SmallStorage>(&base)) {
-            SmallStorage s_norm = *s; s_norm.normalize();
-            if (s_norm.num == 0) return SmallStorage(0);
+        if (base.tag == ValueType::Small) {
+            SmallStorage s_norm = base.storage.small;
+            bool red = false;
+            s_norm.normalize(red);
+            if (s_norm.num == 0) return Value(SmallStorage(0));
             bool negative = s_norm.num < 0;
             if (negative && n % 2 == 0) return std::nullopt;
             dumb_int num = to_dumb_int(negative ? -s_norm.num : s_norm.num);
@@ -461,21 +521,20 @@ namespace delta::internal {
             dumb_int root_den = integer_nth_root(den, n);
             if (root_num != 0 && root_den != 0) {
                 if (negative) root_num = -root_num;
-                return BigStorage(root_num, root_den);
+                return Value(BigStorage(root_num, root_den));
             }
         }
-        else {
-            const auto& b = std::get<BigStorage>(base);
-            if (b.numerator() == 0) return SmallStorage(0);
-            bool negative = b.numerator() < 0;
+        else if (base.tag == ValueType::Big) {
+            if (base.storage.big.is_zero()) return Value(SmallStorage(0));
+            bool negative = base.storage.big.is_negative();
             if (negative && n % 2 == 0) return std::nullopt;
-            dumb_int num = negative ? -b.numerator() : b.numerator();
-            dumb_int den = b.denominator();
+            dumb_int num = negative ? -base.storage.big.numerator() : base.storage.big.numerator();
+            dumb_int den = base.storage.big.denominator();
             dumb_int root_num = integer_nth_root(num, n);
             dumb_int root_den = integer_nth_root(den, n);
             if (root_num != 0 && root_den != 0) {
                 if (negative) root_num = -root_num;
-                return BigStorage(root_num, root_den);
+                return Value(BigStorage(root_num, root_den));
             }
         }
         return std::nullopt;
@@ -489,14 +548,14 @@ namespace delta::internal {
     constexpr size_t ACOS_MAX_ITER = 100;
 
     // ============================================================================
-    // Медленные (точные) реализации трансцендентных функций
+    // Медленные (точные) реализации трансцендентных функций – адаптированы через новые is_*
     // ============================================================================
     inline Value slow_ln2(const Value& eps) {
-        Value one = SmallStorage(1);
-        Value three = SmallStorage(3);
+        Value one = Value(SmallStorage(1));
+        Value three = Value(SmallStorage(3));
         Value z = eager_div(one, three);
         Value z2 = eager_mul(z, z);
-        Value term = z, sum = term, n = one, two = SmallStorage(2);
+        Value term = z, sum = term, n = one, two = Value(SmallStorage(2));
         size_t iter = 0;
         while (iter < DEFAULT_MAX_ITER) {
             term = eager_mul(term, z2);
@@ -509,9 +568,9 @@ namespace delta::internal {
     }
 
     inline Value slow_sqrt(const Value& x, const Value& eps) {
-        if (is_zero(x)) return SmallStorage(0);
+        if (is_zero(x)) return Value(SmallStorage(0));
         if (is_negative(x)) throw std::domain_error("sqrt of negative number");
-        Value one = SmallStorage(1), two = SmallStorage(2);
+        Value one = Value(SmallStorage(1)), two = Value(SmallStorage(2));
         Value guess = eager_div(x, two), diff;
         size_t iter = 0;
         do {
@@ -525,7 +584,7 @@ namespace delta::internal {
     }
 
     inline Value slow_exp(const Value& x, const Value& eps) {
-        Value one = SmallStorage(1), two = SmallStorage(2);
+        Value one = Value(SmallStorage(1)), two = Value(SmallStorage(2));
         int k = 0;
         Value reduced = x;
         while (is_greater(eager_abs(reduced), one)) { reduced = eager_div(reduced, two); ++k; }
@@ -545,7 +604,7 @@ namespace delta::internal {
 
     inline Value slow_log(const Value& x, const Value& eps) {
         if (is_negative(x) || is_zero(x)) throw std::domain_error("log of non-positive");
-        Value one = SmallStorage(1), two = SmallStorage(2), half = SmallStorage(1, 2);
+        Value one = Value(SmallStorage(1)), two = Value(SmallStorage(2)), half = Value(SmallStorage(1, 2));
         int k = 0;
         Value m = x;
         while (is_greater(m, two)) { m = eager_div(m, two); ++k; }
@@ -563,12 +622,12 @@ namespace delta::internal {
             if (is_less(eager_abs(term), eps)) break;
         }
         Value ln_m = eager_mul(two, sum);
-        return eager_add(ln_m, eager_mul(SmallStorage(absl::int128(k)), ln2));
+        return eager_add(ln_m, eager_mul(Value(SmallStorage(absl::int128(k))), ln2));
     }
 
     inline Value slow_pi(const Value& eps) {
-        Value one = SmallStorage(1), five = SmallStorage(5), two39 = SmallStorage(239);
-        Value sixteen = SmallStorage(16), four = SmallStorage(4), two = SmallStorage(2);
+        Value one = Value(SmallStorage(1)), five = Value(SmallStorage(5)), two39 = Value(SmallStorage(239));
+        Value sixteen = Value(SmallStorage(16)), four = Value(SmallStorage(4)), two = Value(SmallStorage(2));
         Value a = eager_div(one, five), a2 = eager_mul(a, a);
         Value term = a, sum_atan5 = term, n = one;
         size_t iter = 0;
@@ -595,7 +654,7 @@ namespace delta::internal {
     }
 
     inline Value slow_sin(const Value& x, const Value& eps) {
-        Value one = SmallStorage(1), two = SmallStorage(2);
+        Value one = Value(SmallStorage(1)), two = Value(SmallStorage(2));
         Value pi_val = slow_pi(eps), twopi = eager_mul(pi_val, two);
         Value reduced = x;
         while (is_greater(eager_abs(reduced), pi_val)) {
@@ -617,7 +676,7 @@ namespace delta::internal {
     }
 
     inline Value slow_cos(const Value& x, const Value& eps) {
-        Value one = SmallStorage(1), two = SmallStorage(2);
+        Value one = Value(SmallStorage(1)), two = Value(SmallStorage(2));
         Value pi_val = slow_pi(eps), twopi = eager_mul(pi_val, two);
         Value reduced = x;
         while (is_greater(eager_abs(reduced), pi_val)) {
@@ -639,7 +698,7 @@ namespace delta::internal {
     }
 
     inline Value slow_acos(const Value& x, const Value& eps) {
-        Value one = SmallStorage(1), two = SmallStorage(2);
+        Value one = Value(SmallStorage(1)), two = Value(SmallStorage(2));
         Value pi_val = slow_pi(eps), half_pi = eager_div(pi_val, two);
         if (is_less(x, eager_neg(one)) || is_greater(x, one))
             throw std::domain_error("acos argument out of [-1,1]");
@@ -659,7 +718,7 @@ namespace delta::internal {
     }
 
     inline Value slow_e(const Value& eps) {
-        Value one = SmallStorage(1);
+        Value one = Value(SmallStorage(1));
         Value sum = one, term = one, n = one;
         size_t iter = 0;
         while (iter < DEFAULT_MAX_ITER) {
@@ -676,17 +735,17 @@ namespace delta::internal {
     // Целочисленное возведение в степень
     // ============================================================================
     inline Value eager_pow_int(const Value& base, const dumb_int& exponent) {
-        if (exponent == 0) return SmallStorage(1);
+        if (exponent == 0) return Value(SmallStorage(1));
         if (exponent == 1) return base;
         bool negative = exponent < 0;
         dumb_int e = negative ? -exponent : exponent;
-        Value result = SmallStorage(1), b = base;
+        Value result = Value(SmallStorage(1)), b = base;
         while (e > 0) {
             if (e & 1) result = eager_mul(result, b);
             e >>= 1;
             if (e > 0) b = eager_mul(b, b);
         }
-        return negative ? eager_div(SmallStorage(1), result) : result;
+        return negative ? eager_div(Value(SmallStorage(1)), result) : result;
     }
 
     // ============================================================================
@@ -704,24 +763,28 @@ namespace delta::internal {
         bool x_neg = is_negative(x);
         if (x_neg) {
             bool n_even = false;
-            if (const auto* s = std::get_if<SmallStorage>(&n)) {
-                SmallStorage norm = *s; norm.normalize();
+            if (n.tag == ValueType::Small) {
+                SmallStorage norm = n.storage.small;
+                bool red = false;
+                norm.normalize(red);
                 if (norm.den == 1 && (norm.num % 2 == 0)) n_even = true;
             }
-            else if (const auto* b = std::get_if<BigStorage>(&n)) {
-                if (b->denominator() == 1 && (b->numerator() % 2 == 0)) n_even = true;
+            else if (n.tag == ValueType::Big) {
+                if (n.storage.big.denominator() == 1 && (n.storage.big.numerator() % 2 == 0)) n_even = true;
             }
             if (n_even) throw std::domain_error("even root of negative number");
             return eager_neg(fast_nth_root(eager_neg(x), n, eps));
         }
-        if (is_zero(x)) return SmallStorage(0);
+        if (is_zero(x)) return Value(SmallStorage(0));
         double complexity = 1.0;
-        if (const auto* s = std::get_if<SmallStorage>(&n)) {
-            SmallStorage norm = *s; norm.normalize();
+        if (n.tag == ValueType::Small) {
+            SmallStorage norm = n.storage.small;
+            bool red = false;
+            norm.normalize(red);
             complexity = static_cast<double>(norm.num);
         }
-        else if (const auto* b = std::get_if<BigStorage>(&n)) {
-            complexity = b->numerator().convert_to<double>();
+        else if (n.tag == ValueType::Big) {
+            complexity = n.storage.big.numerator().convert_to<double>();
         }
         int extra = compute_extra_digits(eps, complexity);
         HighPrecFloat fx = to_high_prec(x);
@@ -733,15 +796,19 @@ namespace delta::internal {
     inline Value eager_nth_root(const Value& x, const Value& n, const Value& eps) {
         if (is_zero(n) || is_negative(n)) throw std::domain_error("nth_root: n must be positive");
         dumb_int n_int;
-        if (const auto* s = std::get_if<SmallStorage>(&n)) {
-            SmallStorage norm = *s; norm.normalize();
+        if (n.tag == ValueType::Small) {
+            SmallStorage norm = n.storage.small;
+            bool red = false;
+            norm.normalize(red);
             if (norm.den != 1) throw std::domain_error("nth_root: n must be integer");
             n_int = to_dumb_int(norm.num);
         }
+        else if (n.tag == ValueType::Big) {
+            if (n.storage.big.denominator() != 1) throw std::domain_error("nth_root: n must be integer");
+            n_int = n.storage.big.numerator();
+        }
         else {
-            const auto& b = std::get<BigStorage>(n);
-            if (b.denominator() != 1) throw std::domain_error("nth_root: n must be integer");
-            n_int = b.numerator();
+            throw std::domain_error("nth_root: invalid n");
         }
         if (n_int == 0) throw std::domain_error("nth_root: n must be positive");
         if (n_int == 1) return x;
@@ -751,9 +818,9 @@ namespace delta::internal {
         if (auto exact = try_exact_nth_root(x, n)) return *exact;
         if (n_int == 2 && to_double(eps) >= HYBRID_THRESHOLD)
             return fast_nth_root(x, n, eps);
-        Value guess = is_positive(x) ? eager_div(x, SmallStorage(2))
-            : eager_neg(eager_div(eager_abs(x), SmallStorage(2)));
-        Value n_val = n, n_minus_1 = eager_sub(n_val, SmallStorage(1));
+        Value guess = is_positive(x) ? eager_div(x, Value(SmallStorage(2)))
+            : eager_neg(eager_div(eager_abs(x), Value(SmallStorage(2))));
+        Value n_val = n, n_minus_1 = eager_sub(n_val, Value(SmallStorage(1)));
         Value diff;
         size_t iter = 0;
         do {
@@ -777,26 +844,30 @@ namespace delta::internal {
             return base;
         }
         if (is_one(base)) return base;
-        if (is_zero(exp)) return SmallStorage(1);
+        if (is_zero(exp)) return Value(SmallStorage(1));
 
         bool exp_is_int = false;
         dumb_int exp_num, exp_den;
-        if (const auto* s = std::get_if<SmallStorage>(&exp)) {
-            SmallStorage norm = *s; norm.normalize();
+        if (exp.tag == ValueType::Small) {
+            SmallStorage norm = exp.storage.small;
+            bool red = false;
+            norm.normalize(red);
             exp_num = to_dumb_int(norm.num);
             exp_den = to_dumb_int(norm.den);
             if (norm.den == 1) exp_is_int = true;
         }
-        else {
-            const auto& b = std::get<BigStorage>(exp);
-            exp_num = b.numerator();
-            exp_den = b.denominator();
+        else if (exp.tag == ValueType::Big) {
+            exp_num = exp.storage.big.numerator();
+            exp_den = exp.storage.big.denominator();
             if (exp_den == 1) exp_is_int = true;
+        }
+        else {
+            throw std::domain_error("eager_pow: exponent cannot be lazy");
         }
 
         if (exp_is_int) {
             if (exp_num < 0) {
-                Value base_recip = eager_div(SmallStorage(1), base);
+                Value base_recip = eager_div(Value(SmallStorage(1)), base);
                 return eager_pow_int(base_recip, -exp_num);
             }
             return eager_pow_int(base, exp_num);
@@ -807,23 +878,23 @@ namespace delta::internal {
         if (negative) p = -p;
 
         if (p == 1) {
-            Value n_val = BigStorage(q);
+            Value n_val = Value(BigStorage(q));
             if (q == 2) return eager_sqrt(base, eps);
-            Value internal_eps = eager_div(eps, SmallStorage(1000));
+            Value internal_eps = eager_div(eps, Value(SmallStorage(1000)));
             return eager_nth_root(base, n_val, internal_eps);
         }
 
-        Value internal_eps = (p == 0) ? eps : eager_div(eps, BigStorage(p * 1000));
+        Value internal_eps = (p == 0) ? eps : eager_div(eps, Value(BigStorage(p * 1000)));
         Value log_base = eager_log(base, internal_eps);
-        Value p_val = BigStorage(negative ? -p : p);
+        Value p_val = Value(BigStorage(negative ? -p : p));
         Value p_log = eager_mul(p_val, log_base);
-        Value q_val = BigStorage(q);
+        Value q_val = Value(BigStorage(q));
         Value p_log_div_q = eager_div(p_log, q_val);
         return eager_exp(p_log_div_q, internal_eps);
     }
 
     // ============================================================================
-    // Eager dispatchers (выбирают быстрый или медленный путь)
+    // Eager dispatchers
     // ============================================================================
     inline Value eager_sqrt(const Value& x, const Value& eps) {
         return (to_double(eps) >= HYBRID_THRESHOLD) ? fast_sqrt(x, eps) : slow_sqrt(x, eps);

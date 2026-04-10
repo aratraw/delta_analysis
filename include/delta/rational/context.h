@@ -2,17 +2,18 @@
 #pragma once
 
 #include "rational_fwd.h"
-#include "storage.h"   // для internal::Value
+#include "storage.h"
+#include "utils.h"   // для dumb_int
 
 namespace delta::internal {
     inline thread_local bool global_eager_mode = false;
 
-    // Определение default_eps_value как Value, инициализация через BigStorage (10^-30)
-    inline thread_local Value default_eps_value = [] {
-        delta::internal::dumb_int num(1);
-        delta::internal::dumb_int den(1);
-        for (int i = 0; i < 30; ++i) den *= 10;
-        return Value(BigStorage(num, den));
+    // Эпсилон = 1 / 10^30
+    // Инициализируем BigStorage напрямую: числитель 1, знаменатель 10^30
+    inline thread_local Value default_eps_value = []() -> Value {
+        // 10^30 = 1 000 000 000 000 000 000 000 000 000 000
+        dumb_int denominator("1000000000000000000000000000000");
+        return Value(BigStorage(dumb_int(1), denominator));
         }();
 }
 

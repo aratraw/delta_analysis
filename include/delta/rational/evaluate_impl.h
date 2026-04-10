@@ -3,16 +3,16 @@
 
 #include "node_pool.h"
 #include "evaluation_core.h"
-#include <boost/multiprecision/integer.hpp>   // для lcm, gcd (работают с dumb_int)
+#include <boost/multiprecision/integer.hpp>   // для lcm, gcd
 #include <stack>
 #include <optional>
 #include <vector>
-#include <utility>      // для std::move
+#include <utility>
 
 namespace delta::internal {
 
     // ----------------------------------------------------------------------------
-    // compute_node – без изменений
+    // compute_node – без изменений (использует eager_*, которые уже работают с новым Value)
     // ----------------------------------------------------------------------------
     inline Value compute_node(LazyOp op, const Value& left, const Value& right, const Value& eps) {
         switch (op) {
@@ -35,13 +35,12 @@ namespace delta::internal {
     }
 
     // ----------------------------------------------------------------------------
-    // batch_add_values – пакетное сложение с кэшированием нормализованных пар
-    // (устранено двойное чтение кэша)
+    // batch_add_values – адаптирован под новый tagged union Value (флаг small_reduced)
     // ----------------------------------------------------------------------------
     inline Value batch_add_values(const std::vector<int>& indices,
         const std::vector<std::optional<Value>>& cache) {
         if (indices.empty()) {
-            return SmallStorage(0);
+            return Value(SmallStorage(0));
         }
         if (indices.size() == 1) {
             return cache[indices[0]].value();
@@ -50,7 +49,8 @@ namespace delta::internal {
         // --- Быстрый путь: все операнды SmallStorage и количество ≤ 64 ---
         bool all_small = true;
         for (int idx : indices) {
-            if (!std::holds_alternative<SmallStorage>(cache[idx].value())) {
+            const Value& v = cache[idx].value();
+            if (v.tag != ValueType::Small) {
                 all_small = false;
                 break;
             }
@@ -64,8 +64,9 @@ namespace delta::internal {
             dens.reserve(indices.size());
 
             for (int idx : indices) {
-                const SmallStorage& s = std::get<SmallStorage>(cache[idx].value());
+                const SmallStorage& s = cache[idx].value().storage.small;
                 nums.push_back(s.num);
+                // Используем s.den (без битового флага)
                 dens.push_back(s.den);
 
                 absl::uint128 g = binary_gcd(common_denom, s.den);
@@ -107,9 +108,11 @@ namespace delta::internal {
                     if (abs_sum <= static_cast<absl::uint128>((std::numeric_limits<absl::int128>::max)()) &&
                         common_denom <= (std::numeric_limits<absl::uint128>::max)()) {
                         absl::int128 final_num = negative ? -static_cast<absl::int128>(abs_sum) : static_cast<absl::int128>(abs_sum);
-                        SmallStorage result(final_num, common_denom);
-                        result.normalize();
-                        return result;
+                        SmallStorage result_small(final_num, common_denom);
+                        // Создаём Value с флагом false и нормализуем
+                        Value result_val(result_small, false);
+                        result_val.normalize();
+                        return result_val;
                     }
                 }
             }
@@ -140,21 +143,21 @@ namespace delta::internal {
         }
 
         if (fits_in_int128(sum_num) && fits_in_uint128(common_denom)) {
-            return SmallStorage(
-                dumb_int_to_int128(sum_num),
-                dumb_int_to_uint128(common_denom)
-            );
+            SmallStorage result_small(dumb_int_to_int128(sum_num), dumb_int_to_uint128(common_denom));
+            Value result_val(result_small, false);
+            result_val.normalize();
+            return result_val;
         }
-        return BigStorage(sum_num, common_denom);
+        return Value(BigStorage(sum_num, common_denom));
     }
 
     // ----------------------------------------------------------------------------
-    // Вспомогательная функция: обработать список индексов батчами заданного размера
+    // process_batch_list – без изменений (использует eager_add и batch_add_values)
     // ----------------------------------------------------------------------------
     inline Value process_batch_list(const std::vector<int>& indices,
         size_t batch_size,
         const std::vector<std::optional<Value>>& cache) {
-        if (indices.empty()) return SmallStorage(0);
+        if (indices.empty()) return Value(SmallStorage(0));
         if (indices.size() <= batch_size) {
             return batch_add_values(indices, cache);
         }
@@ -173,7 +176,7 @@ namespace delta::internal {
     }
 
     // ----------------------------------------------------------------------------
-    // evaluate – итеративный пост-порядок с локальным кэшем и пакетной обработкой ADD
+    // evaluate – итеративный пост-порядок – адаптирован под новый Value
     // ----------------------------------------------------------------------------
     inline Value evaluate(int root_idx) {
         const auto& nodes = pool.nodes;

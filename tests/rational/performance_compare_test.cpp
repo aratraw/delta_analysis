@@ -66,20 +66,20 @@ namespace delta::testing {
 
         // 2. Lazy delta::Rational – строим дерево и затем eval
         //    Сначала создаём ленивый объект через .lazy() (или изначально lazy-конструктор)
-        set_eager_mode(false); // отключаем eager режим для новых операций
-        Rational lazy_sum = 0_r.lazy(); // делаем начальный ноль ленивым
-        auto build_start = std::chrono::high_resolution_clock::now();
-        for (int i = 1; i <= N; ++i) {
-            lazy_sum = lazy_sum + Rational(1, i).lazy(); // все слагаемые тоже ленивые
-        }
-        auto build_end = std::chrono::high_resolution_clock::now();
-        auto elapsed_lazy_build = std::chrono::duration_cast<std::chrono::milliseconds>(build_end - build_start).count();
+        //set_eager_mode(false); // отключаем eager режим для новых операций
+        //Rational lazy_sum = 0_r.lazy(); // делаем начальный ноль ленивым
+        //auto build_start = std::chrono::high_resolution_clock::now();
+        //for (int i = 1; i <= N; ++i) {
+        //    lazy_sum = lazy_sum + Rational(1, i).lazy(); // все слагаемые тоже ленивые
+        //}
+        //auto build_end = std::chrono::high_resolution_clock::now();
+        //auto elapsed_lazy_build = std::chrono::duration_cast<std::chrono::milliseconds>(build_end - build_start).count();
 
-        auto eval_start = std::chrono::high_resolution_clock::now();
-        Rational result = lazy_sum.eval(true); // eval(true) – без упрощения, только вычисление
-        auto eval_end = std::chrono::high_resolution_clock::now();
-        auto elapsed_lazy_eval = std::chrono::duration_cast<std::chrono::milliseconds>(eval_end - eval_start).count();
-        (void)result;
+        //auto eval_start = std::chrono::high_resolution_clock::now();
+        //Rational result = lazy_sum.eval(true); // eval(true) – без упрощения, только вычисление
+        //auto eval_end = std::chrono::high_resolution_clock::now();
+        //auto elapsed_lazy_eval = std::chrono::duration_cast<std::chrono::milliseconds>(eval_end - eval_start).count();
+        //(void)result;
 
         // 3. Контрольная группа (чистый Boost)
         start = std::chrono::high_resolution_clock::now();
@@ -99,10 +99,10 @@ namespace delta::testing {
         std::cout << std::string(40, '-') << "\n";
         std::cout << std::left << std::setw(25) << "Delta immediate (eager)"
             << std::setw(15) << elapsed_immediate << "\n";
-        std::cout << std::left << std::setw(25) << "Delta lazy (build tree)"
-            << std::setw(15) << elapsed_lazy_build << "\n";
-        std::cout << std::left << std::setw(25) << "Delta lazy (eval only)"
-            << std::setw(15) << elapsed_lazy_eval << "\n";
+        //std::cout << std::left << std::setw(25) << "Delta lazy (build tree)"
+        //    << std::setw(15) << elapsed_lazy_build << "\n";
+        //std::cout << std::left << std::setw(25) << "Delta lazy (eval only)"
+        //    << std::setw(15) << elapsed_lazy_eval << "\n";
         std::cout << std::left << std::setw(25) << "Boost control (et_off)"
             << std::setw(15) << elapsed_control << "\n";
     }
@@ -133,7 +133,7 @@ namespace delta::testing {
         Rational lazy_sum = 0_r.lazy();
         auto build_start = std::chrono::high_resolution_clock::now();
         for (const auto& term : delta_pool) {
-            lazy_sum = lazy_sum + term.lazy();
+            lazy_sum = lazy_sum + term;
         }
         auto build_end = std::chrono::high_resolution_clock::now();
         auto elapsed_lazy_build = std::chrono::duration_cast<std::chrono::milliseconds>(build_end - build_start).count();
@@ -173,7 +173,7 @@ namespace delta::testing {
     // Запуск всех тестов с разными N
     // -------------------------------------------------------------------------
     TEST_F(RationalPerformanceCompareTest, HarmonicSeriesCompare) {
-        std::vector<int> sizes = { 100, 1000, 10000, 20000 };
+        std::vector<int> sizes = { 100, 1000, 10000, 20000,50000,100000 };
         for (int N : sizes) {
             test_harmonic_series(N);
         }

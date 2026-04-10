@@ -180,6 +180,7 @@ namespace delta::testing {
         for (size_t i = 0; i < frac_part.size(); ++i) den_str += "0";
         Rational sin1_expected = Rational(num_str) / Rational(den_str);
         Rational sin1_val = delta::sin(1_r, eps).eval();
+
         EXPECT_RATIONAL_NEAR(sin1_val, sin1_expected, eps * 100_r);
     }
 } // namespace delta::testing

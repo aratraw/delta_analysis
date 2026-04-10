@@ -1,4 +1,4 @@
-// node_pool.h
+// node_pool.h (адаптирован под новый tagged union Value, флаг small_reduced в Value)
 #pragma once
 
 #include "storage.h"
@@ -28,22 +28,35 @@ namespace delta::internal {
     // Forward declaration
     void collect_garbage();
 
+    // ----------------------------------------------------------------------------
+    // AbslHashValue для нового Value (прямой доступ к полям union)
+    // ----------------------------------------------------------------------------
     template <typename H>
     H AbslHashValue(H h, const SmallStorage& s) {
         SmallStorage norm = s;
-        norm.normalize();
+        bool red = false;
+        norm.normalize(red);
         return H::combine(std::move(h), norm.num, norm.den);
     }
 
     template <typename H>
     H AbslHashValue(H h, const BigStorage& b) {
+        // Для хэширования BigStorage используем numerator и denominator (копирование допустимо, т.к. не в горячем пути)
         return H::combine(std::move(h), b.numerator(), b.denominator());
     }
 
     template <typename H>
     H AbslHashValue(H h, const Value& v) {
-        auto [num, den] = normalize_to_dumb_int(v);
-        return H::combine(std::move(h), num, den);
+        if (v.tag == ValueType::Small) {
+            return AbslHashValue(std::move(h), v.storage.small);
+        }
+        else if (v.tag == ValueType::Big) {
+            return AbslHashValue(std::move(h), v.storage.big);
+        }
+        else {
+            // Ленивый индекс – хэшируем сам индекс
+            return H::combine(std::move(h), v.storage.lazy);
+        }
     }
 
     enum class LazyOp : uint8_t {
@@ -119,6 +132,7 @@ namespace delta::internal {
         std::vector<int> refcount;
         size_t next_free_index = 0;
 
+        // Кэши теперь используют Value (который является типом с tag+union) – хэширование и сравнение работают через AbslHashValue
         absl::flat_hash_map<Value, int> value_cache;
         absl::flat_hash_map<Value, int> constant_cache;
         absl::flat_hash_map<BinaryKey, int, BinaryKeyHash> binary_cache;
@@ -131,7 +145,6 @@ namespace delta::internal {
 
         void ensure_initialized() {
             if (nodes.empty()) {
-                // Ленивая инициализация: начинаем с 4096 слотов
                 nodes.reserve(4096);
                 refcount.reserve(4096);
                 next_free_index = 0;
@@ -141,8 +154,8 @@ namespace delta::internal {
 
         int add_value(const Value& v) {
             Value normalized = v;
-            if (auto* s = std::get_if<SmallStorage>(&normalized)) {
-                s->normalize();
+            if (normalized.tag == ValueType::Small && !normalized.small_reduced) {
+                normalized.normalize();
             }
             auto it = value_cache.find(normalized);
             if (it != value_cache.end()) return it->second;
@@ -152,7 +165,7 @@ namespace delta::internal {
             return idx;
         }
 
-        // Выделение нового слота с поиском свободного, как в оригинальном allocate_node
+        // Выделение нового слота – без изменений (использует is_occupied, который теперь работает с новым Value)
         int allocate_node() {
             ensure_initialized();
 
@@ -163,15 +176,12 @@ namespace delta::internal {
                 }
             }
 
-            // Ищем первый свободный слот, начиная с next_free_index
             size_t idx = next_free_index;
             while (idx < nodes.size() && is_occupied(nodes[idx])) {
                 ++idx;
             }
 
-            // Если не нашли свободный в пределах текущего размера, расширяем вектор
             if (idx >= nodes.size()) {
-                // Расширяем пул блоками по 4096, но не более max_size
                 size_t old_size = nodes.size();
                 size_t new_size = old_size + 4096;
                 if (new_size > max_size) new_size = max_size;
@@ -184,15 +194,15 @@ namespace delta::internal {
                     nodes[i] = Node(LazyOp::CONST, -1, -1, -1, 0, Interval(), 0);
                     refcount[i] = 0;
                 }
-                idx = old_size; // первый новый слот
+                idx = old_size;
             }
 
-            // Обновляем next_free_index на следующий за найденным
             next_free_index = idx + 1;
             refcount[idx] = 0;
             return static_cast<int>(idx);
         }
 
+        // Вспомогательная функция для проверки занятости узла (не зависит от Value)
         bool is_occupied(const Node& node) const {
             return !(node.value_idx == -1 && node.child0 == -1 && node.child1 == -1);
         }
@@ -200,7 +210,7 @@ namespace delta::internal {
 
     inline thread_local NodePool pool;
 
-    // Объявления функций
+    // Объявления функций (реализации ниже)
     int add_const(const Value& v);
     int get_binary_node(LazyOp op, int left, int right);
     int get_binary_node(LazyOp op, int left, int right, int value_idx);
@@ -215,7 +225,7 @@ namespace delta::internal {
     inline void set_pool_max_size(size_t new_size);
     inline void force_garbage_collect();
 
-    // Реализации с использованием allocate_node
+    // Реализации с использованием allocate_node (они уже работают с новым Value)
     inline int add_const(const Value& v) {
         pool.ensure_initialized();
         auto it = pool.constant_cache.find(v);
