@@ -22,7 +22,7 @@ namespace delta::internal {
     // ============================================================================
     // The Value type must fit into a single cache line (64 bytes) for optimal
     // performance. After moving the `reduced` flag from SmallStorage into Value,
-    // sizeof(Value) = 48 bytes, which is well within the cache line.
+    // sizeof(Value) = 40 bytes, which is well within the cache line.
     // This design eliminates bit‑twiddling bugs (the previous approach stored
     // the flag in the high bit of the denominator, causing loss of precision
     // for large denominators with bit 127 set).
@@ -57,10 +57,6 @@ namespace delta::internal {
                 return;
             }
             absl::uint128 raw_den = den;
-            if (raw_den < 0) {   // Should never happen for unsigned, but kept for safety
-                raw_den = -raw_den;
-                num = -num;
-            }
             absl::uint128 abs_num = num < 0 ? static_cast<absl::uint128>(-num) : static_cast<absl::uint128>(num);
             absl::uint128 g = binary_gcd(abs_num, raw_den);
             if (g > 1) {
@@ -325,7 +321,7 @@ namespace delta::internal {
     inline bool operator>=(const Value& a, const Value& b) { return !(a < b); }
 
     // ============================================================================
-    // String conversion (debug only)
+    // String conversion (debug only). NOT TO BE USED IN ANY CONVERSION/CALCULATION
     // ============================================================================
     inline std::string to_string(const SmallStorage& s) {
         // We need a normalized copy for string conversion.

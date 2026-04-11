@@ -5,11 +5,14 @@
 #include <iomanip>
 #include <iostream>
 #include <random>
+#include <algorithm>
+#include <numeric>
+#include <functional>
 #include "delta/core/rational.h"
 #include "test_utils.h"
 
 // Контрольная группа: чистый boost::multiprecision::rational_adaptor с et_off
-using ControlRational = boost::multiprecision::number<
+using BoostRational = boost::multiprecision::number<
     boost::multiprecision::rational_adaptor<
     boost::multiprecision::cpp_int_backend<>
     >,
@@ -18,171 +21,193 @@ using ControlRational = boost::multiprecision::number<
 
 namespace delta::testing {
 
-    class RationalPerformanceCompareTest : public RationalTest {};
+    // Количество повторных запусков для каждого N (первый отбрасывается)
+    constexpr int TRIAL_RUNS = 15;
 
-    // Генерация пула случайных дробей для заданного N (фиксированный seed)
-    std::vector<ControlRational> generate_control_pool(size_t N) {
-        std::vector<ControlRational> pool;
-        pool.reserve(N);
+    class RationalPerformanceCompareTest : public RationalTest {
+    public:
+        static void SetUpTestSuite() {
+            std::cout << "\n=== Performance benchmark with " << TRIAL_RUNS
+                << " trial runs per N (first run excluded) ===\n";
+        }
+    };
+
+    // -------------------------------------------------------------------------
+    // 1. Генерация пулов с фиксированным seed (один раз для всех повторений)
+    // -------------------------------------------------------------------------
+    struct Pools {
+        std::vector<BoostRational> boost_pool;
+        std::vector<Rational> delta_pool;
+    };
+
+    // Генерация случайных дробей (числа в [-1000,1000], знаменатели [1,1000])
+    Pools generate_random_pools(size_t N) {
+        Pools pools;
+        pools.boost_pool.reserve(N);
+        pools.delta_pool.reserve(N);
         std::mt19937 rng(12345);
         std::uniform_int_distribution<int> num_dist(-1000, 1000);
         std::uniform_int_distribution<int> den_dist(1, 1000);
+
         for (size_t i = 0; i < N; ++i) {
             int num = num_dist(rng);
             int den = den_dist(rng);
-            pool.emplace_back(num) / den;
+            pools.boost_pool.emplace_back(num, den);
+            pools.delta_pool.emplace_back(static_cast<absl::int128>(num), static_cast<absl::uint128>(den));
         }
-        return pool;
+        return pools;
     }
 
-    std::vector<Rational> convert_pool_to_delta(const std::vector<ControlRational>& pool) {
-        std::vector<Rational> result;
-        result.reserve(pool.size());
-        for (const auto& cr : pool) {
-            std::string s = cr.str();
-            result.emplace_back(s);
+    // Генерация "быстрых" дробей (знаменатели – степени двойки, числители небольшие)
+    Pools generate_fast_pools(size_t N) {
+        Pools pools;
+        pools.boost_pool.reserve(N);
+        pools.delta_pool.reserve(N);
+        std::mt19937 rng(12345);
+        std::uniform_int_distribution<int> num_dist(-1000, 1000);
+        std::uniform_int_distribution<int> exp_dist(0, 20); // 2^20 ~ 1e6
+
+        for (size_t i = 0; i < N; ++i) {
+            int num = num_dist(rng);
+            int den = 1 << exp_dist(rng); // степень двойки, влезает в int
+            pools.boost_pool.emplace_back(num, den);
+            pools.delta_pool.emplace_back(static_cast<absl::int128>(num), static_cast<absl::uint128>(den));
         }
-        return result;
+        return pools;
+    }
+
+    // Генератор гармонического ряда: 1, 1/2, 1/3, ..., 1/N
+    Pools generate_harmonic_pools(int N) {
+        Pools pools;
+        pools.boost_pool.reserve(N);
+        pools.delta_pool.reserve(N);
+        for (int i = 1; i <= N; ++i) {
+            pools.boost_pool.emplace_back(1, i);
+            pools.delta_pool.emplace_back(static_cast<absl::int128>(1), static_cast<absl::uint128>(i));
+        }
+        return pools;
     }
 
     // -------------------------------------------------------------------------
-    // Тест 1: Гармонический ряд (сумма 1/i)
+    // 2. Функции замера (только время, никакого вывода рациональных)
     // -------------------------------------------------------------------------
-    void test_harmonic_series(int N) {
-        std::cout << "\n=== Harmonic series N = " << N << " ===\n";
-
-        // 1. Immediate (eager) delta::Rational
+    template<typename TimeUnit = std::chrono::milliseconds>
+    long long measure_delta_sum(const std::vector<Rational>& terms) {
+        set_eager_mode(true);
         auto start = std::chrono::high_resolution_clock::now();
-        {
-            ScopedEagerEval eager;
-            Rational sum = 0_r;
-            for (int i = 1; i <= N; ++i) {
-                sum = sum + Rational(1, i);
-            }
-            volatile Rational dummy = sum;
+        Rational sum = 0_r;
+        for (const auto& t : terms) {
+            sum += t;
         }
+        volatile Rational dummy = sum;
+        (void)dummy;
         auto end = std::chrono::high_resolution_clock::now();
-        auto elapsed_immediate = std::chrono::duration_cast<std::chrono::milliseconds>(end - start).count();
-
-        // 2. Lazy delta::Rational – строим дерево и затем eval
-        //    Сначала создаём ленивый объект через .lazy() (или изначально lazy-конструктор)
-        //set_eager_mode(false); // отключаем eager режим для новых операций
-        //Rational lazy_sum = 0_r.lazy(); // делаем начальный ноль ленивым
-        //auto build_start = std::chrono::high_resolution_clock::now();
-        //for (int i = 1; i <= N; ++i) {
-        //    lazy_sum = lazy_sum + Rational(1, i).lazy(); // все слагаемые тоже ленивые
-        //}
-        //auto build_end = std::chrono::high_resolution_clock::now();
-        //auto elapsed_lazy_build = std::chrono::duration_cast<std::chrono::milliseconds>(build_end - build_start).count();
-
-        //auto eval_start = std::chrono::high_resolution_clock::now();
-        //Rational result = lazy_sum.eval(true); // eval(true) – без упрощения, только вычисление
-        //auto eval_end = std::chrono::high_resolution_clock::now();
-        //auto elapsed_lazy_eval = std::chrono::duration_cast<std::chrono::milliseconds>(eval_end - eval_start).count();
-        //(void)result;
-
-        // 3. Контрольная группа (чистый Boost)
-        start = std::chrono::high_resolution_clock::now();
-        {
-            ControlRational sum = 0;
-            for (int i = 1; i <= N; ++i) {
-                sum = sum + ControlRational(1) / i;
-            }
-            volatile ControlRational dummy = sum;
-        }
-        end = std::chrono::high_resolution_clock::now();
-        auto elapsed_control = std::chrono::duration_cast<std::chrono::milliseconds>(end - start).count();
-
-        // Вывод таблицы
-        std::cout << std::left << std::setw(25) << "Implementation"
-            << std::setw(15) << "Time (ms)" << "\n";
-        std::cout << std::string(40, '-') << "\n";
-        std::cout << std::left << std::setw(25) << "Delta immediate (eager)"
-            << std::setw(15) << elapsed_immediate << "\n";
-        //std::cout << std::left << std::setw(25) << "Delta lazy (build tree)"
-        //    << std::setw(15) << elapsed_lazy_build << "\n";
-        //std::cout << std::left << std::setw(25) << "Delta lazy (eval only)"
-        //    << std::setw(15) << elapsed_lazy_eval << "\n";
-        std::cout << std::left << std::setw(25) << "Boost control (et_off)"
-            << std::setw(15) << elapsed_control << "\n";
-    }
-
-    // -------------------------------------------------------------------------
-    // Тест 2: Сумма случайных рациональных дробей (фиксированный пул)
-    // -------------------------------------------------------------------------
-    void test_random_sum(int N) {
-        std::cout << "\n=== Random rationals sum N = " << N << " ===\n";
-        auto control_pool = generate_control_pool(N);
-        auto delta_pool = convert_pool_to_delta(control_pool);
-
-        // 1. Immediate delta
-        auto start = std::chrono::high_resolution_clock::now();
-        {
-            ScopedEagerEval eager;
-            Rational sum = 0_r;
-            for (const auto& term : delta_pool) {
-                sum = sum + term;
-            }
-            volatile Rational dummy = sum;
-        }
-        auto end = std::chrono::high_resolution_clock::now();
-        auto elapsed_immediate = std::chrono::duration_cast<std::chrono::milliseconds>(end - start).count();
-
-        // 2. Lazy delta
         set_eager_mode(false);
-        Rational lazy_sum = 0_r.lazy();
-        auto build_start = std::chrono::high_resolution_clock::now();
-        for (const auto& term : delta_pool) {
-            lazy_sum = lazy_sum + term;
+        return std::chrono::duration_cast<TimeUnit>(end - start).count();
+    }
+
+    template<typename TimeUnit = std::chrono::milliseconds>
+    long long measure_boost_sum(const std::vector<BoostRational>& terms) {
+        auto start = std::chrono::high_resolution_clock::now();
+        BoostRational sum = 0;
+        for (const auto& t : terms) {
+            sum += t;
         }
-        auto build_end = std::chrono::high_resolution_clock::now();
-        auto elapsed_lazy_build = std::chrono::duration_cast<std::chrono::milliseconds>(build_end - build_start).count();
+        volatile BoostRational dummy = sum;
+        (void)dummy;
+        auto end = std::chrono::high_resolution_clock::now();
+        return std::chrono::duration_cast<TimeUnit>(end - start).count();
+    }
 
-        auto eval_start = std::chrono::high_resolution_clock::now();
-        Rational result = lazy_sum.eval(true);
-        auto eval_end = std::chrono::high_resolution_clock::now();
-        auto elapsed_lazy_eval = std::chrono::duration_cast<std::chrono::milliseconds>(eval_end - eval_start).count();
-        (void)result;
+    // -------------------------------------------------------------------------
+    // 3. Запуск тестов для заданного пула и N
+    // -------------------------------------------------------------------------
+    void run_benchmark(const std::string& test_name,
+        const std::vector<int>& sizes,
+        std::function<Pools(int)> generator) {
+        std::cout << "\n=== " << test_name << " ===\n";
+        std::cout << std::left << std::setw(10) << "N"
+            << std::setw(20) << "Delta median (ms)"
+            << std::setw(20) << "Boost median (ms)"
+            << "Delta vs Boost (%, abs diff ms)\n";
+        std::cout << std::string(90, '-') << "\n";
 
-        // 3. Контрольная группа (чистый Boost)
-        start = std::chrono::high_resolution_clock::now();
-        {
-            ControlRational sum = 0;
-            for (const auto& term : control_pool) {
-                sum = sum + term;
+        for (int N : sizes) {
+            Pools pools = generator(N);
+
+            std::vector<long long> delta_times, boost_times;
+            delta_times.reserve(TRIAL_RUNS);
+            boost_times.reserve(TRIAL_RUNS);
+
+            for (int rep = 0; rep < TRIAL_RUNS; ++rep) {
+                long long dt = measure_delta_sum(pools.delta_pool);
+                long long bt = measure_boost_sum(pools.boost_pool);
+                if (rep == 0) continue; // прогревочный замер отбрасываем
+                delta_times.push_back(dt);
+                boost_times.push_back(bt);
             }
-            volatile ControlRational dummy = sum;
-        }
-        end = std::chrono::high_resolution_clock::now();
-        auto elapsed_control = std::chrono::duration_cast<std::chrono::milliseconds>(end - start).count();
 
-        std::cout << std::left << std::setw(25) << "Implementation"
-            << std::setw(15) << "Time (ms)" << "\n";
-        std::cout << std::string(40, '-') << "\n";
-        std::cout << std::left << std::setw(25) << "Delta immediate (eager)"
-            << std::setw(15) << elapsed_immediate << "\n";
-        std::cout << std::left << std::setw(25) << "Delta lazy (build tree)"
-            << std::setw(15) << elapsed_lazy_build << "\n";
-        std::cout << std::left << std::setw(25) << "Delta lazy (eval only)"
-            << std::setw(15) << elapsed_lazy_eval << "\n";
-        std::cout << std::left << std::setw(25) << "Boost control (et_off)"
-            << std::setw(15) << elapsed_control << "\n";
+            if (delta_times.empty()) {
+                std::cout << std::setw(10) << N << "  недостаточно данных\n";
+                continue;
+            }
+
+            std::sort(delta_times.begin(), delta_times.end());
+            std::sort(boost_times.begin(), boost_times.end());
+            long long med_delta = delta_times[delta_times.size() / 2];
+            long long med_boost = boost_times[boost_times.size() / 2];
+
+            long long abs_diff = med_delta - med_boost; // Delta - Boost
+            double percent = 0.0;
+            std::string cmp;
+            if (med_delta < med_boost) {
+                percent = 100.0 * (med_boost - med_delta) / med_boost;
+                cmp = "faster";
+            }
+            else if (med_delta > med_boost) {
+                percent = 100.0 * (med_delta - med_boost) / med_boost;
+                cmp = "slower";
+            }
+            else {
+                cmp = "equal";
+            }
+
+            std::cout << std::left << std::setw(10) << N
+                << std::setw(20) << med_delta
+                << std::setw(20) << med_boost
+                << "Delta " << cmp << " by " << std::fixed << std::setprecision(2) << percent << "%"
+                << " (Delta - Boost: " << abs_diff << " ms)\n";
+        }
     }
 
     // -------------------------------------------------------------------------
-    // Запуск всех тестов с разными N
+    // 4. Тесты
     // -------------------------------------------------------------------------
-    TEST_F(RationalPerformanceCompareTest, HarmonicSeriesCompare) {
-        std::vector<int> sizes = { 100, 1000, 10000, 20000,50000,100000 };
-        for (int N : sizes) {
-            test_harmonic_series(N);
-        }
-    }
-
     TEST_F(RationalPerformanceCompareTest, RandomRationalsCompare) {
-        std::vector<int> sizes = { 100, 1000, 10000, 20000 };
-        for (int N : sizes) {
-            test_random_sum(N);
+        std::vector<int> sizes = { 100, 500, 1000, 5000, 10000, 20000 };
+        run_benchmark("Random rationals (uniform)", sizes, generate_random_pools);
+    }
+
+    TEST_F(RationalPerformanceCompareTest, FastRationalsCompare) {
+        std::vector<int> sizes = { 100, 500, 1000, 5000, 10000, 20000, 50000 };
+        run_benchmark("Fast rationals (denominators powers of two)", sizes, generate_fast_pools);
+    }
+
+    TEST_F(RationalPerformanceCompareTest, HarmonicSeriesCompare) {
+        std::vector<int> sizes = { 100, 500, 1000, 5000, 10000, 20000, 50000 };
+        run_benchmark("Harmonic series (1 + 1/2 + ... + 1/N)", sizes, generate_harmonic_pools);
+    }
+
+    // Проверка корректности (чтобы суммы совпадали)
+    TEST_F(RationalPerformanceCompareTest, CorrectnessCheck) {
+        for (int N : {10, 100, 500}) {
+            Pools pools = generate_random_pools(N);
+            set_eager_mode(true);
+            Rational delta_sum = 0_r;
+            for (const auto& t : pools.delta_pool) delta_sum = delta_sum + t;
+            BoostRational boost_sum = 0;
+            for (const auto& t : pools.boost_pool) boost_sum = boost_sum + t;
+            EXPECT_EQ(to_string(delta_sum), boost_sum.str());
         }
     }
 
