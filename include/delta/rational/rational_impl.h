@@ -1,4 +1,6 @@
 // rational_impl.h — адаптирован под новый tagged union Value (флаг small_reduced в Value)
+// Реализует оптимизации SmallStorage согласно спецификации: никакого GCD после арифметики,
+// только при переполнении (try_reduce_to_small). In-place операции модифицируют поля напрямую.
 #pragma once
 
 #include "storage.h"    
@@ -122,7 +124,8 @@ namespace delta {
     }
 
     // ----------------------------------------------------------------------------
-    // In‑place addition for immediate Rationals – адаптирован под новый флаг
+    // In‑place addition for immediate Rationals – согласно спецификации
+    // (прямая модификация полей, сброс флага, при переполнении – пересоздание)
     // ----------------------------------------------------------------------------
     inline void inplace_add(Rational& a, const Rational& b) {
         if (!a.is_immediate() || !b.is_immediate()) {
@@ -132,41 +135,75 @@ namespace delta {
 
         // Small + Small
         if (a.storage_.tag == internal::ValueType::Small && b.storage_.tag == internal::ValueType::Small) {
-            internal::SmallStorage sa = a.storage_.storage.small;
-            internal::SmallStorage sb = b.storage_.storage.small;
-            bool red_a = false, red_b = false;
-            if (!a.storage_.small_reduced) sa.normalize(red_a);
-            if (!b.storage_.small_reduced) sb.normalize(red_b);
+            auto& sa = a.storage_.storage.small;
+            const auto& sb = b.storage_.storage.small;
 
-            if (sa.den == sb.den) {
-                if (!internal::would_overflow_add(sa.num, sb.num)) {
-                    sa.num += sb.num;
-                    // Результат может быть не нормализован, создаём Value с флагом false и нормализуем
-                    internal::Value res_val(sa, false);
-                    res_val.normalize();
-                    a.storage_ = res_val;
-                    return;
-                }
-            }
-            // Cross‑multiplication с проверкой переполнения
-            absl::int128 num = static_cast<absl::int128>(sa.num) * static_cast<absl::int128>(sb.den) +
-                static_cast<absl::int128>(sb.num) * static_cast<absl::int128>(sa.den);
-            absl::uint128 den = static_cast<absl::uint128>(sa.den) * static_cast<absl::uint128>(sb.den);
-
-            if (num >= std::numeric_limits<absl::int128>::min() &&
-                num <= std::numeric_limits<absl::int128>::max() &&
-                den <= std::numeric_limits<absl::uint128>::max()) {
-                internal::SmallStorage res_s(num, den);
-                internal::Value res_val(res_s, false);
-                res_val.normalize();
-                a.storage_ = res_val;
+            // Быстрый путь для нуля (используем is_zero)
+            if (sb.is_zero()) return;
+            if (sa.is_zero()) {
+                sa = sb;
+                a.storage_.small_reduced = false;  // копия может быть несокращённой
                 return;
             }
-            // Fallback: через BigStorage
-            internal::BigRationalType res =
-                internal::BigRationalType(internal::to_dumb_int(sa.num)) / internal::to_dumb_int(sa.den) +
-                internal::BigRationalType(internal::to_dumb_int(sb.num)) / internal::to_dumb_int(sb.den);
-            a.storage_ = internal::Value(internal::BigStorage(std::move(res)));
+
+            // Равные знаменатели – проверяем переполнение до сложения
+            if (sa.den == sb.den) {
+                if (internal::would_overflow_add(sa.num, sb.num)) {
+                    a = a + b;  // переполнение – пересоздаём
+                    return;
+                }
+                sa.num += sb.num;
+                if (sa.is_zero()) {
+                    sa.den = 1;
+                    a.storage_.small_reduced = true;
+                }
+                else {
+                    a.storage_.small_reduced = false;
+                }
+                return;
+            }
+
+            // Разные знаменатели – in-place вычисление нового числителя и знаменателя
+            bool denoms_small = (sa.den < (absl::uint128(1) << 62)) && (sb.den < (absl::uint128(1) << 62));
+            if (denoms_small) {
+                absl::int128 left = sa.num * static_cast<absl::int128>(sb.den);
+                absl::int128 right = sb.num * static_cast<absl::int128>(sa.den);
+                if (internal::would_overflow_add(left, right)) {
+                    a = a + b;
+                    return;
+                }
+                absl::int128 new_num = left + right;
+                absl::uint128 new_den = sa.den * sb.den;
+                // Произведение знаменателей при denoms_small всегда помещается в uint128
+                sa.num = new_num;
+                sa.den = new_den;
+                a.storage_.small_reduced = false;
+                return;
+            }
+
+            // Большие знаменатели – используем проверки переполнения
+            absl::int128 left, right;
+            if (internal::would_overflow_mul(sa.num, static_cast<absl::int128>(sb.den)) ||
+                internal::would_overflow_mul(sb.num, static_cast<absl::int128>(sa.den))) {
+                a = a + b;
+                return;
+            }
+            left = sa.num * static_cast<absl::int128>(sb.den);
+            right = sb.num * static_cast<absl::int128>(sa.den);
+            if (internal::would_overflow_add(left, right)) {
+                a = a + b;
+                return;
+            }
+            absl::int128 new_num = left + right;
+            absl::uint128 new_den;
+            if (internal::would_overflow_mul(sa.den, sb.den)) {
+                a = a + b;
+                return;
+            }
+            new_den = sa.den * sb.den;
+            sa.num = new_num;
+            sa.den = new_den;
+            a.storage_.small_reduced = false;
             return;
         }
 
@@ -178,18 +215,14 @@ namespace delta {
 
         // Big + Small
         if (a.storage_.tag == internal::ValueType::Big && b.storage_.tag == internal::ValueType::Small) {
-            internal::SmallStorage sb = b.storage_.storage.small;
-            bool red = false;
-            if (!b.storage_.small_reduced) sb.normalize(red);
+            const auto& sb = b.storage_.storage.small;
             *a.storage_.storage.big.ptr += internal::BigRationalType(internal::to_dumb_int(sb.num)) / internal::to_dumb_int(sb.den);
             return;
         }
 
         // Small + Big
         if (a.storage_.tag == internal::ValueType::Small && b.storage_.tag == internal::ValueType::Big) {
-            internal::SmallStorage sa = a.storage_.storage.small;
-            bool red = false;
-            if (!a.storage_.small_reduced) sa.normalize(red);
+            auto& sa = a.storage_.storage.small;
             internal::BigRationalType res =
                 (internal::BigRationalType(internal::to_dumb_int(sa.num)) / internal::to_dumb_int(sa.den)) +
                 *b.storage_.storage.big.ptr;
@@ -201,15 +234,55 @@ namespace delta {
         a = a + b;
     }
 
+    // ----------------------------------------------------------------------------
+    // In‑place multiplication for immediate Rationals – согласно спецификации
+    // ----------------------------------------------------------------------------
     inline void inplace_mul(Rational& a, const Rational& b) {
         if (!a.is_immediate() || !b.is_immediate()) {
             a = a * b;
             return;
         }
+
+        // Small * Small
+        if (a.storage_.tag == internal::ValueType::Small && b.storage_.tag == internal::ValueType::Small) {
+            auto& sa = a.storage_.storage.small;
+            const auto& sb = b.storage_.storage.small;
+
+            if (sb.is_zero()) {
+                sa.num = 0;
+                sa.den = 1;
+                a.storage_.small_reduced = true;
+                return;
+            }
+            if (sa.is_zero()) return;
+
+            bool denoms_small = (sa.den < (absl::uint128(1) << 62)) && (sb.den < (absl::uint128(1) << 62));
+            if (denoms_small) {
+                sa.num *= sb.num;
+                sa.den *= sb.den;
+                a.storage_.small_reduced = false;
+                return;
+            }
+
+            // Большие знаменатели – проверяем переполнение
+            if (internal::would_overflow_mul(sa.num, sb.num) ||
+                internal::would_overflow_mul(sa.den, sb.den)) {
+                a = a * b;
+                return;
+            }
+            sa.num *= sb.num;
+            sa.den *= sb.den;
+            a.storage_.small_reduced = false;
+            return;
+        }
+
+        // Big * Big
         if (a.storage_.tag == internal::ValueType::Big && b.storage_.tag == internal::ValueType::Big) {
             *a.storage_.storage.big.ptr *= *b.storage_.storage.big.ptr;
             return;
         }
+
+        // В остальных случаях – через обычный оператор (он вызовет eager_mul или ленивый путь)
         a = a * b;
     }
 
@@ -228,7 +301,7 @@ namespace delta {
         if (den == 0) throw std::domain_error("Denominator cannot be zero");
         internal::SmallStorage s(num, den);
         internal::Value v(s, false);
-        v.normalize();
+        v.normalize();   // нормализация при создании из пары (num,den)
         storage_ = v;
     }
 
@@ -521,35 +594,10 @@ namespace delta {
     }
 
     // ----------------------------------------------------------------------------
-    // Arithmetic operators
+    // Arithmetic operators – используют eager_add/eager_mul для immediate,
+    // lazy – строят выражения.
     // ----------------------------------------------------------------------------
     inline Rational operator+(const Rational& a, const Rational& b) {
-        // Fast path: SmallStorage + SmallStorage
-        if (a.storage_.tag == internal::ValueType::Small && b.storage_.tag == internal::ValueType::Small) {
-            const auto& sa = a.storage_.storage.small;
-            const auto& sb = b.storage_.storage.small;
-            internal::SmallStorage sa_n = sa, sb_n = sb;
-            bool red_a = false, red_b = false;
-            if (!a.storage_.small_reduced) sa_n.normalize(red_a);
-            if (!b.storage_.small_reduced) sb_n.normalize(red_b);
-            if (sa_n.den == sb_n.den && !internal::would_overflow_add(sa_n.num, sb_n.num)) {
-                internal::SmallStorage res_s(sa_n.num + sb_n.num, sa_n.den);
-                internal::Value res_v(res_s, false);
-                res_v.normalize();
-                Rational r;
-                r.storage_ = res_v;
-                return r;
-            }
-            // fallback через eager_add (редко)
-        }
-
-        // Fast path: BigStorage + BigStorage
-        if (a.storage_.tag == internal::ValueType::Big && b.storage_.tag == internal::ValueType::Big) {
-            Rational res;
-            res.storage_ = internal::Value(internal::BigStorage(*a.storage_.storage.big.ptr + *b.storage_.storage.big.ptr));
-            return res;
-        }
-
         if (internal::global_eager_mode || (a.is_immediate() && b.is_immediate())) {
             return eager_add(a, b);
         }
@@ -572,13 +620,6 @@ namespace delta {
     }
 
     inline Rational operator*(const Rational& a, const Rational& b) {
-        // Fast path: BigStorage * BigStorage
-        if (a.storage_.tag == internal::ValueType::Big && b.storage_.tag == internal::ValueType::Big) {
-            Rational res;
-            res.storage_ = internal::Value(internal::BigStorage(*a.storage_.storage.big.ptr * *b.storage_.storage.big.ptr));
-            return res;
-        }
-
         if (internal::global_eager_mode || (a.is_immediate() && b.is_immediate())) {
             return eager_mul(a, b);
         }
@@ -609,7 +650,7 @@ namespace delta {
     }
 
     // ----------------------------------------------------------------------------
-    // Compound assignment
+    // Compound assignment – используют inplace_add/inplace_mul для immediate
     // ----------------------------------------------------------------------------
     inline Rational& operator+=(Rational& a, const Rational& b) {
         if (internal::global_eager_mode || (a.is_immediate() && b.is_immediate())) {
@@ -652,7 +693,7 @@ namespace delta {
     }
 
     // ----------------------------------------------------------------------------
-    // Batch addition
+    // Batch addition (оптимизировано: без лишней нормализации)
     // ----------------------------------------------------------------------------
     inline Rational batch_add(const std::vector<Rational>& terms) {
         if (terms.empty()) return Rational(0);
@@ -669,8 +710,7 @@ namespace delta {
             for (const Rational& term : terms) {
                 if (term.as_small()) {
                     internal::SmallStorage s = *term.as_small();
-                    bool red = false;
-                    s.normalize(red);
+                    // НЕ нормализуем – работаем с сырыми значениями
                     nums.push_back(internal::to_dumb_int(s.num));
                     dumb_int den = internal::to_dumb_int(s.den);
                     common_denom = boost::multiprecision::lcm(common_denom, den);
@@ -692,8 +732,7 @@ namespace delta {
                     dumb_int factor = common_denom;
                     if (terms[i].as_small()) {
                         internal::SmallStorage s = *terms[i].as_small();
-                        bool red = false;
-                        s.normalize(red);
+                        // знаменатель уже сырой, но для factor/den нужно деление – корректно
                         factor /= internal::to_dumb_int(s.den);
                         sum_num += nums[i] * factor;
                     }

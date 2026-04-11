@@ -12,6 +12,20 @@
 #include <limits>
 #include <stdexcept>
 
+// Cross‑platform 64‑bit ctz
+#ifdef _MSC_VER
+#include <intrin.h>
+static inline int ctz64(uint64_t x) {
+    unsigned long index;
+    if (_BitScanForward64(&index, x)) return static_cast<int>(index);
+    return 64; // x != 0, so this line is never reached
+}
+#else
+static inline int ctz64(uint64_t x) {
+    return __builtin_ctzll(x);
+}
+#endif
+
 namespace delta::internal {
 
     // ============================================================================
@@ -23,8 +37,37 @@ namespace delta::internal {
     >;
 
     // ============================================================================
+    // 1b. Вспомогательные 128-битные функции (ctz, степень двойки, GCD)
+    // ============================================================================
+    inline int ctz128(absl::uint128 x) {
+        uint64_t lo = static_cast<uint64_t>(x);
+        if (lo != 0) return ctz64(lo);
+        uint64_t hi = static_cast<uint64_t>(x >> 64);
+        return 64 + ctz64(hi);
+    }
+
+    inline bool is_power_of_two(absl::uint128 x) {
+        return x != 0 && (x & (x - 1)) == 0;
+    }
+
+    // Оптимизированный бинарный GCD (алгоритм Стейна с ctz)
+    inline absl::uint128 binary_gcd(absl::uint128 a, absl::uint128 b) noexcept {
+        if (a == 0) return b;
+        if (b == 0) return a;
+        if (a == b) return a;
+        int shift = ctz128(a | b);
+        a >>= shift;
+        b >>= shift;
+        while (a != b) {
+            if (a > b) std::swap(a, b);
+            b -= a;
+            b >>= ctz128(b);
+        }
+        return a << shift;
+    }
+
+    // ============================================================================
     // 2. Конвертации между absl::int128 / absl::uint128 и dumb_int
-    //    (без .str() и без прямого доступа к лимбам)
     // ============================================================================
 
     inline dumb_int to_dumb_int(absl::uint128 val) {
@@ -96,28 +139,7 @@ namespace delta::internal {
     }
 
     // ============================================================================
-    // 3. Оптимизированный GCD для 128-битных беззнаковых (алгоритм Стейна)
-    // ============================================================================
-    inline absl::uint128 binary_gcd(absl::uint128 a, absl::uint128 b) noexcept {
-        if (a == 0) return b;
-        if (b == 0) return a;
-        int shift = 0;
-        while (((a | b) & 1) == 0) {
-            a >>= 1;
-            b >>= 1;
-            ++shift;
-        }
-        while ((a & 1) == 0) a >>= 1;
-        do {
-            while ((b & 1) == 0) b >>= 1;
-            if (a > b) std::swap(a, b);
-            b -= a;
-        } while (b != 0);
-        return a << shift;
-    }
-
-    // ============================================================================
-    // 4. Быстрое удаление малых простых множителей из числителя и знаменателя
+    // 3. Быстрое удаление малых простых множителей из числителя и знаменателя
     // ============================================================================
     inline void extract_small_primes(dumb_int& num, dumb_int& den) {
         auto shift_num = boost::multiprecision::lsb(num);
@@ -137,7 +159,7 @@ namespace delta::internal {
     }
 
     // ============================================================================
-    // 5. Проверки переполнения для 128-битной арифметики
+    // 4. Проверки переполнения для 128-битной арифметики
     // ============================================================================
     inline bool would_overflow_mul(absl::int128 a, absl::int128 b) noexcept {
 #if defined(__GNUC__) || defined(__clang__)
@@ -152,6 +174,18 @@ namespace delta::internal {
             ? static_cast<absl::uint128>(std::numeric_limits<absl::int128>::min())
             : static_cast<absl::uint128>(std::numeric_limits<absl::int128>::max());
         return aa > max_val / bb;
+#endif
+    }
+
+    // Перегрузка для беззнаковых (знаменатели)
+    inline bool would_overflow_mul(absl::uint128 a, absl::uint128 b) noexcept {
+#if defined(__GNUC__) || defined(__clang__)
+        unsigned __int128 result;
+        return __builtin_mul_overflow(a, b, &result);
+#else
+        if (a == 0 || b == 0) return false;
+        absl::uint128 max_val = (std::numeric_limits<absl::uint128>::max)();
+        return a > max_val / b;
 #endif
     }
 
@@ -171,7 +205,7 @@ namespace delta::internal {
     }
 
     // ============================================================================
-    // 6. Строковые преобразования (только для отладки, не в горячих путях)
+    // 5. Строковые преобразования (только для отладки)
     // ============================================================================
     inline std::string int128_to_string(absl::int128 n) {
         if (n == 0) return "0";

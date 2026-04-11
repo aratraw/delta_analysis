@@ -11,6 +11,7 @@
 
 #include <cassert>
 #include <memory>
+#include <optional>
 #include <stdexcept>
 #include <string>
 #include <utility>
@@ -37,7 +38,7 @@ namespace delta::internal {
 
     // ============================================================================
     // SmallStorage – 128‑bit rational, NO internal flag. Normalization flag is
-    // stored in the Value structure.
+    // stored in the Value structure. Definition must come before try_reduce_to_small.
     // ============================================================================
     struct SmallStorage {
         absl::int128 num;
@@ -47,7 +48,14 @@ namespace delta::internal {
         constexpr explicit SmallStorage(absl::int128 n) noexcept : num(n), den(1) {}
         constexpr SmallStorage(absl::int128 n, absl::uint128 d) noexcept : num(n), den(d) {}
 
+        // Fast predicates (no normalisation)
+        constexpr bool is_zero() const noexcept { return num == 0; }
+        constexpr bool is_one() const noexcept { return num == den; }
+        constexpr bool is_positive() const noexcept { return num > 0; }
+        constexpr bool is_negative() const noexcept { return num < 0; }
+
         // Normalize in‑place. The caller must provide the reduced flag.
+        // Optimisation for powers of two.
         void normalize(bool& reduced) {
             if (reduced) return;
             if (den == 0) throw std::domain_error("SmallStorage: denominator cannot be zero");
@@ -56,23 +64,53 @@ namespace delta::internal {
                 reduced = true;
                 return;
             }
-            absl::uint128 raw_den = den;
-            absl::uint128 abs_num = num < 0 ? static_cast<absl::uint128>(-num) : static_cast<absl::uint128>(num);
-            absl::uint128 g = binary_gcd(abs_num, raw_den);
-            if (g > 1) {
-                abs_num /= g;
-                raw_den /= g;
-                num = (num < 0) ? -static_cast<absl::int128>(abs_num) : static_cast<absl::int128>(abs_num);
-                den = raw_den;
+
+            absl::uint128 abs_num = (num < 0) ? static_cast<absl::uint128>(-num) : static_cast<absl::uint128>(num);
+            absl::uint128 g;
+
+            // Оптимизация для знаменателей – степеней двойки
+            if (is_power_of_two(den)) {
+                int shift_den = ctz128(den);
+                int shift_num = ctz128(abs_num);
+                int shift = std::min(shift_den, shift_num);
+                if (shift) {
+                    abs_num >>= shift;
+                    den >>= shift;
+                    // !!! КЛЮЧЕВОЕ ИСПРАВЛЕНИЕ: обновляем числитель с учётом знака
+                    num = (num < 0) ? -static_cast<absl::int128>(abs_num) : static_cast<absl::int128>(abs_num);
+                }
+                g = 1; // дальнейшее сокращение не требуется
             }
+            else {
+                g = binary_gcd(abs_num, den);
+                if (g > 1) {
+                    abs_num /= g;
+                    den /= g;
+                    num = (num < 0) ? -static_cast<absl::int128>(abs_num) : static_cast<absl::int128>(abs_num);
+                }
+            }
+
             reduced = true;
         }
-
-        // No is_normalized() method – flag is outside.
     };
 
     // ============================================================================
-    // BigRationalType – без изменений
+    // try_reduce_to_small – attempt to reduce a (num, den) pair and fit into SmallStorage
+    // ============================================================================
+    inline std::optional<SmallStorage> try_reduce_to_small(const dumb_int& num, const dumb_int& den) {
+        if (den == 0) throw std::domain_error("denominator zero");
+        dumb_int g = boost::multiprecision::gcd(num, den);
+        dumb_int num2 = num / g;
+        dumb_int den2 = den / g;
+        if (den2 < 0) { den2 = -den2; num2 = -num2; }
+        if (fits_in_int128(num2) && fits_in_uint128(den2)) {
+            return SmallStorage(dumb_int_to_int128(num2), dumb_int_to_uint128(den2));
+        }
+        return std::nullopt;
+    }
+
+    // ============================================================================
+    // BigRationalType – unchanged
     // ============================================================================
     using BigRationalType = boost::multiprecision::number<
         boost::multiprecision::rational_adaptor<
@@ -149,7 +187,7 @@ namespace delta::internal {
     };
 
     // ============================================================================
-    // Value – ручной tagged union, now with explicit `small_reduced` flag.
+    // Value – manual tagged union, now with explicit `small_reduced` flag.
     // ============================================================================
     enum class ValueType : uint8_t { Small, Big, Lazy };
 
@@ -202,7 +240,6 @@ namespace delta::internal {
             case ValueType::Big:   new (&storage.big)   BigStorage(std::move(other.storage.big));     break;
             case ValueType::Lazy:  storage.lazy = other.storage.lazy; break;
             }
-            // Leave other in a valid but unspecified state (small_reduced stays)
         }
 
         ~Value() {
@@ -237,23 +274,41 @@ namespace delta::internal {
             }
         }
         absl::uint128 denominator() const {
-            if (tag != ValueType::Small) return 1; // For Big/Lazy, denominator is not defined this way
+            if (tag != ValueType::Small) return 1;
             return storage.small.den;
+        }
+
+        // Fast predicates
+        bool is_zero() const {
+            if (tag == ValueType::Small) return storage.small.is_zero();
+            if (tag == ValueType::Big) return storage.big.is_zero();
+            return false;
+        }
+        bool is_one() const {
+            if (tag == ValueType::Small) return storage.small.is_one();
+            if (tag == ValueType::Big) return storage.big.is_one();
+            return false;
+        }
+        bool is_positive() const {
+            if (tag == ValueType::Small) return storage.small.is_positive();
+            if (tag == ValueType::Big) return storage.big.is_positive();
+            return false;
+        }
+        bool is_negative() const {
+            if (tag == ValueType::Small) return storage.small.is_negative();
+            if (tag == ValueType::Big) return storage.big.is_negative();
+            return false;
         }
     };
 
-    static_assert(sizeof(Value) == 40, "Value size must be 40 bytes (fits in cache line, stores BigStorage by pointer, allows additional payload)");
+    static_assert(sizeof(Value) == 40, "Value size must be 40 bytes");
 
     // ============================================================================
-    // normalize_to_dumb_int – adapted to use the flag from Value
+    // normalize_to_dumb_int – NO normalisation for SmallStorage (only raw conversion)
     // ============================================================================
     inline std::pair<dumb_int, dumb_int> normalize_to_dumb_int(const Value& v) {
         if (v.tag == ValueType::Small) {
-            SmallStorage s = v.storage.small;
-            if (!v.small_reduced) {
-                bool dummy = false;
-                s.normalize(dummy);
-            }
+            const SmallStorage& s = v.storage.small;
             return { to_dumb_int(s.num), to_dumb_int(s.den) };
         }
         else if (v.tag == ValueType::Big) {
@@ -266,7 +321,8 @@ namespace delta::internal {
     }
 
     // ============================================================================
-    // Optimized comparisons – cross multiplication, now using raw denominator.
+    // Optimised comparisons – cross multiplication, now using raw denominator.
+    // No normalisation is performed.
     // ============================================================================
     inline bool operator==(const Value& a, const Value& b) {
         if (a.tag == ValueType::Small && b.tag == ValueType::Small) {
@@ -276,10 +332,6 @@ namespace delta::internal {
             absl::uint128 left_den = sa.den;
             absl::int128 right_num = sb.num;
             absl::uint128 right_den = sb.den;
-
-            // If one is not normalized, we need to normalize? Actually cross multiplication works regardless,
-            // because we compare a.num * b.den vs b.num * a.den. The flag doesn't affect equality.
-            // But we must be careful about overflow.
             if (would_overflow_mul(left_num, static_cast<absl::int128>(right_den)) ||
                 would_overflow_mul(right_num, static_cast<absl::int128>(left_den))) {
                 dumb_int l = to_dumb_int(left_num) * to_dumb_int(right_den);
@@ -324,7 +376,6 @@ namespace delta::internal {
     // String conversion (debug only). NOT TO BE USED IN ANY CONVERSION/CALCULATION
     // ============================================================================
     inline std::string to_string(const SmallStorage& s) {
-        // We need a normalized copy for string conversion.
         SmallStorage norm = s;
         bool red = false;
         norm.normalize(red);

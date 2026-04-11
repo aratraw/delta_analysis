@@ -11,6 +11,9 @@
 #include "delta/core/rational.h"
 #include "test_utils.h"
 
+
+// ЧТОБЫ УВИДЕТЬ КОНКРЕТЫЙ ВКЛАД ОПТИМИЗАЦИИ РАБОТЫ DELTA СО SMALLSTORAGE - ЗАМЕНИ sum+= term на sum = sum + term;
+// ЧТОБЫ УВИДЕТЬ КАК DELTA::RATIONAL ОБХОДИТ БУСТ НА ПИКЕ В 10 РАЗ ПО МЕДИАННОМУ ВРЕМЕНИ БЕЗ ВИДИМОЙ ПРИЧИНЫ - ЗАМЕНИТЕ sum = sum+term на sum+=term;
 // Контрольная группа: чистый boost::multiprecision::rational_adaptor с et_off
 using BoostRational = boost::multiprecision::number<
     boost::multiprecision::rational_adaptor<
@@ -200,7 +203,7 @@ namespace delta::testing {
 
     // Проверка корректности (чтобы суммы совпадали)
     TEST_F(RationalPerformanceCompareTest, CorrectnessCheck) {
-        for (int N : {10, 100, 500}) {
+        for (int N : {10, 100, 500,10000,20000}) {
             Pools pools = generate_random_pools(N);
             set_eager_mode(true);
             Rational delta_sum = 0_r;
