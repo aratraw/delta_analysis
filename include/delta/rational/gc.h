@@ -8,10 +8,8 @@
 
 namespace delta::internal {
 
-    // Проверка, занят ли слот (используем метод из NodePool)
-    inline bool is_occupied(const Node& node) {
-        return !(node.value_idx == -1 && node.child0 == -1 && node.child1 == -1);
-    }
+    // Функция is_occupied теперь определена как метод NodePool в node_pool.h,
+    // поэтому локальное определение удалено.
 
     // Сборка мусора: создаём новый пул, копируем в него живые узлы (refcount > 0),
     // превращая их в константы. Новый пул имеет размер ровно столько, сколько живых узлов,
@@ -35,7 +33,8 @@ namespace delta::internal {
         NodePool new_pool;
         new_pool.max_size = pool.max_size;
         new_pool.update_gc_threshold();
-        new_pool.nodes.assign(pool.max_size, Node());
+        // Используем resize вместо assign, чтобы избежать копирования Node
+        new_pool.nodes.resize(pool.max_size);
         new_pool.refcount.assign(pool.max_size, 0);
 
         // Копируем живые узлы в новый пул (на те же индексы)
@@ -46,15 +45,17 @@ namespace delta::internal {
                 int val_idx = new_pool.add_value(v);
                 Node const_node(LazyOp::CONST, -1, -1, val_idx, 0,
                     Interval(to_double(v)), compute_hash_const(v));
-                new_pool.nodes[i] = const_node;
+                // Используем перемещение, так как Node некопируемый (из-за unique_ptr)
+                new_pool.nodes[i] = std::move(const_node);
                 new_pool.refcount[i] = pool.refcount[i];
             }
         }
 
-        // Находим первый свободный слот для next_free_index
+        // Находим первый свободный слот для next_free_index,
+        // используя метод is_occupied объекта new_pool
         new_pool.next_free_index = 0;
         while (new_pool.next_free_index < new_pool.max_size &&
-            is_occupied(new_pool.nodes[new_pool.next_free_index])) {
+            new_pool.is_occupied(new_pool.nodes[new_pool.next_free_index])) {
             ++new_pool.next_free_index;
         }
 

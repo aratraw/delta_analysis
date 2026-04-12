@@ -65,6 +65,7 @@ namespace delta {
         internal::Interval approx_interval() const noexcept;
 
         friend Rational operator+(const Rational&, const Rational&);
+        friend Rational& operator+=(Rational& a, const Rational& b);
         friend Rational operator-(const Rational&, const Rational&);
         friend Rational operator*(const Rational&, const Rational&);
         friend Rational operator/(const Rational&, const Rational&);

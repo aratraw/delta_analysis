@@ -1,4 +1,4 @@
-    // simplify.h
+// simplify.h
 #pragma once
 
 #include "expression_root.h"          // для delta::ExpressionRoot
@@ -29,6 +29,16 @@ namespace delta::internal {
             const Node& nb = pool.nodes[idx_b];
 
             if (na.op != nb.op) return false;
+
+            // Сравнение SUM узлов
+            if (na.op == LazyOp::SUM && nb.op == LazyOp::SUM) {
+                if (!na.sum_children || !nb.sum_children) return false;
+                if (na.sum_children->size() != nb.sum_children->size()) return false;
+                for (size_t i = 0; i < na.sum_children->size(); ++i) {
+                    if ((*na.sum_children)[i] != (*nb.sum_children)[i]) return false;
+                }
+                continue;
+            }
 
             if (na.op == LazyOp::CONST) {
                 const Value& va = pool.values[na.value_idx];

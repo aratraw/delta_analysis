@@ -5,6 +5,7 @@
 #include "node_pool.h"
 #include "evaluate_impl.h"
 #include "simplify_impl.h"
+#include <vector>   // для std::vector в make_sum
 
 namespace delta {
 
@@ -54,7 +55,7 @@ namespace delta {
             return ExpressionRoot(node_idx);
         }
 
-        //generally for POW
+        // generally for POW
         static ExpressionRoot make_binary_with_eps(internal::LazyOp op, const ExpressionRoot& left,
             const ExpressionRoot& right, const internal::Value& eps) {
             int val_idx = internal::pool.add_value(eps);
@@ -63,6 +64,20 @@ namespace delta {
             int node_idx = internal::get_binary_node(op, left_idx, right_idx, val_idx);
             return ExpressionRoot(node_idx);
         }
+
+        // ------------------------------------------------------------------------
+        // Фабричный метод для создания N-арной суммы
+        // ------------------------------------------------------------------------
+        static ExpressionRoot make_sum(const std::vector<ExpressionRoot>& terms) {
+            std::vector<int> indices;
+            indices.reserve(terms.size());
+            for (const auto& term : terms) {
+                indices.push_back(term.root_index());
+            }
+            int sum_idx = internal::make_sum_node(std::move(indices));
+            return ExpressionRoot(sum_idx);
+        }
+
         // ------------------------------------------------------------------------
         // Арифметические операции
         // ------------------------------------------------------------------------
@@ -100,7 +115,6 @@ namespace delta {
         ExpressionRoot sin(const Rational& eps) const;
         ExpressionRoot cos(const Rational& eps) const;
         ExpressionRoot acos(const Rational& eps) const;
- 
 
         static ExpressionRoot pi(const Rational& eps);
         static ExpressionRoot e(const Rational& eps);

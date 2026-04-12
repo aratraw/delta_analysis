@@ -16,6 +16,27 @@ namespace delta::internal {
             op == LazyOp::NEG || op == LazyOp::RECIP;
     }
 
+    // ----------------------------------------------------------------------------
+    // collect_add_operands – собирает все листья (не ADD) из бинарного дерева ADD
+    // ----------------------------------------------------------------------------
+    inline void collect_add_operands(int idx, std::vector<int>& out) {
+        std::vector<int> stack;
+        stack.reserve(256);
+        stack.push_back(idx);
+        while (!stack.empty()) {
+            int cur = stack.back();
+            stack.pop_back();
+            const Node& node = pool.nodes[cur];
+            if (node.op == LazyOp::ADD) {
+                if (node.child1 != -1) stack.push_back(node.child1);
+                if (node.child0 != -1) stack.push_back(node.child0);
+            }
+            else {
+                out.push_back(cur);
+            }
+        }
+    }
+
     inline int simplify_impl(int root_idx) {
         const auto& nodes = pool.nodes;
         const auto& values = pool.values;
@@ -40,32 +61,90 @@ namespace delta::internal {
                 continue;
             }
 
-            bool children_ready = true;
-            if (node.child0 != -1 && simplified_idx[node.child0] == -1) {
-                st.push(node.child0);
-                children_ready = false;
+            // --------------------------------------------------------------------
+            // НОВАЯ ВЕТКА ДЛЯ LazyOp::SUM
+            // --------------------------------------------------------------------
+            if (node.op == LazyOp::SUM) {
+                // Сначала убеждаемся, что все дети упрощены
+                bool children_ready = true;
+                if (node.sum_children) {
+                    for (int child : *node.sum_children) {
+                        if (simplified_idx[child] == -1) {
+                            st.push(child);
+                            children_ready = false;
+                        }
+                    }
+                }
+                if (!children_ready) continue;
+
+                // Собираем упрощённых детей, отфильтровывая нулевые константы
+                std::vector<int> simplified_children;
+                if (node.sum_children) {
+                    simplified_children.reserve(node.sum_children->size());
+                    for (int child : *node.sum_children) {
+                        int simp_child = simplified_idx[child];
+                        const Node& cnode = nodes[simp_child];
+                        if (cnode.op == LazyOp::CONST && is_zero(values[cnode.value_idx]))
+                            continue;
+                        simplified_children.push_back(simp_child);
+                    }
+                }
+
+                int new_idx;
+                if (simplified_children.empty()) {
+                    new_idx = add_const(Value(SmallStorage(0)));
+                }
+                else if (simplified_children.size() == 1) {
+                    new_idx = simplified_children[0];
+                }
+                else if (simplified_children.size() == 2) {
+                    new_idx = get_binary_node(LazyOp::ADD, simplified_children[0], simplified_children[1]);
+                }
+                else {
+                    // Проверка: все ли дети константы?
+                    bool all_const = true;
+                    for (int c : simplified_children) {
+                        if (nodes[c].op != LazyOp::CONST) {
+                            all_const = false;
+                            break;
+                        }
+                    }
+                    if (all_const) {
+                        Value sum = values[nodes[simplified_children[0]].value_idx];
+                        for (size_t i = 1; i < simplified_children.size(); ++i) {
+                            sum = eager_add(sum, values[nodes[simplified_children[i]].value_idx]);
+                        }
+                        new_idx = add_const(sum);
+                    }
+                    else {
+                        new_idx = make_sum_node(std::move(simplified_children));
+                    }
+                }
+                simplified_idx[idx] = new_idx;
+                st.pop();
+                continue;
             }
-            if (node.child1 != -1 && simplified_idx[node.child1] == -1) {
-                st.push(node.child1);
-                children_ready = false;
-            }
-            if (!children_ready) continue;
 
-            int child0_simp = node.child0 != -1 ? simplified_idx[node.child0] : -1;
-            int child1_simp = node.child1 != -1 ? simplified_idx[node.child1] : -1;
-
-            bool is_const0 = (child0_simp != -1 && nodes[child0_simp].op == LazyOp::CONST);
-            bool is_const1 = (child1_simp != -1 && nodes[child1_simp].op == LazyOp::CONST);
-
-            int new_idx = idx;
-
-            // --- Унарные операции ---
+            // --------------------------------------------------------------------
+            // Унарные операции (child1 == -1)
+            // --------------------------------------------------------------------
             if (node.child1 == -1) {
                 if (node.child0 == -1) {
+                    // без детей (константа уже обработана выше)
                     simplified_idx[idx] = idx;
                     st.pop();
                     continue;
                 }
+
+                // Убеждаемся, что ребёнок упрощён
+                if (node.child0 != -1 && simplified_idx[node.child0] == -1) {
+                    st.push(node.child0);
+                    continue;
+                }
+                int child0_simp = node.child0 != -1 ? simplified_idx[node.child0] : -1;
+                bool is_const0 = (child0_simp != -1 && nodes[child0_simp].op == LazyOp::CONST);
+
+                int new_idx = idx;
 
                 switch (node.op) {
                 case LazyOp::NEG:
@@ -171,7 +250,41 @@ namespace delta::internal {
                 continue;
             }
 
-            // --- Бинарные операции ---
+            // --------------------------------------------------------------------
+            // Бинарные операции (child0 != -1 && child1 != -1)
+            // --------------------------------------------------------------------
+            if (node.child0 != -1 && simplified_idx[node.child0] == -1) {
+                st.push(node.child0);
+                continue;
+            }
+            if (node.child1 != -1 && simplified_idx[node.child1] == -1) {
+                st.push(node.child1);
+                continue;
+            }
+
+            int child0_simp = node.child0 != -1 ? simplified_idx[node.child0] : -1;
+            int child1_simp = node.child1 != -1 ? simplified_idx[node.child1] : -1;
+
+            bool is_const0 = (child0_simp != -1 && nodes[child0_simp].op == LazyOp::CONST);
+            bool is_const1 = (child1_simp != -1 && nodes[child1_simp].op == LazyOp::CONST);
+
+            int new_idx = idx;
+
+            // --------------------------------------------------------------------
+            // Специальная обработка для ADD: превращаем глубокие деревья в SUM
+            // --------------------------------------------------------------------
+            if (node.op == LazyOp::ADD) {
+                std::vector<int> operands;
+                collect_add_operands(idx, operands);
+                if (operands.size() > 2) {
+                    int new_sum = make_sum_node(operands);
+                    simplified_idx[idx] = new_sum;
+                    st.pop();
+                    continue;
+                }
+            }
+
+            // Остальные упрощения для бинарных операций
             if (node.op == LazyOp::ADD) {
                 if (is_const0 && is_zero(values[nodes[child0_simp].value_idx]))
                     new_idx = child1_simp;

@@ -333,4 +333,111 @@ namespace delta::testing {
         EXPECT_EQ(imm, expr.eval());
     }
 
+    // ============================================================================
+// Тесты для LazyOp::SUM в сборщике мусора (при правильном контракте)
+// ============================================================================
+
+    TEST_F(GarbageCollectionTest, SumSurvivesGCWithNonConstantChildren) {
+        reset_pool_with_size(200);
+        set_eager_mode(false);
+
+        Rational a = "1/2"_r.lazy();
+        Rational b = delta::sqrt(2_r);   // ленивый, не константа
+        Rational sum = a + b;             // должен стать SUM
+
+        int sum_idx = sum.root_index();
+
+        for (int i = 0; i < 150; ++i) {
+            Rational tmp = Rational(i).lazy();
+        }
+
+        internal::force_garbage_collect();
+
+        const auto& node = internal::pool.nodes[sum_idx];
+        // GC превращает любой живой узел в константу
+        EXPECT_EQ(node.op, internal::LazyOp::CONST);
+        internal::Value v = internal::pool.values[node.value_idx];
+        Rational const_val = (v.tag == internal::ValueType::Small) ? Rational(v.storage.small) : Rational(v.storage.big);
+        // Проверяем, что значение равно a + b (приближённо)
+        EXPECT_RATIONAL_NEAR(const_val, (a + b).eval(), default_eps());
+    }
+    TEST_F(GarbageCollectionTest, SumBecomesConstantAfterGCWhenAllChildrenConstant) {
+        reset_pool_with_size(200);
+        set_eager_mode(false);
+
+        Rational sum = Rational(1, 2).lazy() + Rational(1, 3).lazy() + Rational(1, 6).lazy();
+        int sum_idx = sum.root_index();
+
+        for (int i = 0; i < 150; ++i) {
+            Rational tmp = Rational(i).lazy();
+        }
+
+        internal::force_garbage_collect();
+
+        const auto& node = internal::pool.nodes[sum_idx];
+        EXPECT_EQ(node.op, internal::LazyOp::CONST);
+        internal::Value v = internal::pool.values[node.value_idx];
+        Rational const_val = (v.tag == internal::ValueType::Small) ? Rational(v.storage.small) : Rational(v.storage.big);
+        EXPECT_EQ(const_val, 1_r);
+    }
+
+    TEST_F(GarbageCollectionTest, SumIndexInvariantAfterGC) {
+        reset_pool_with_size(150);
+        set_eager_mode(false);
+
+        Rational a = "1/3"_r.lazy();
+        Rational b = "1/5"_r.lazy();
+        Rational c = "1/7"_r.lazy();
+        Rational sum = a + b + c;   // SUM узел
+        int idx = sum.root_index();
+
+        for (int i = 0; i < 200; ++i) {
+            Rational tmp = Rational(i).lazy();
+        }
+
+        EXPECT_EQ(sum.root_index(), idx);
+        EXPECT_EQ(sum.eval(), Rational(1, 3) + Rational(1, 5) + Rational(1, 7));
+    }
+
+    TEST_F(GarbageCollectionTest, SumRefcountWithPlusEqual) {
+        reset_pool_with_size(1000);
+        set_eager_mode(false);
+
+        Rational acc = 0_r.lazy();
+        acc += Rational(1).lazy();
+        acc += Rational(2).lazy();
+
+        int sum_idx = acc.root_index();
+        EXPECT_EQ(internal::pool.refcount[sum_idx], 1);
+
+        Rational copy = acc;
+        EXPECT_EQ(internal::pool.refcount[sum_idx], 2);
+
+        copy = Rational(0_r);
+        EXPECT_EQ(internal::pool.refcount[sum_idx], 1);
+    }
+    TEST_F(GarbageCollectionTest, SumMutationAfterGC) {
+        reset_pool_with_size(100);
+        set_eager_mode(false);
+
+        Rational a = "1/2"_r.lazy();
+        Rational b = "1/3"_r.lazy();
+        Rational sum = a + b;           // SUM
+        int idx = sum.root_index();
+
+        // Вызываем GC – узел sum превратится в константу (все дети константы)
+        internal::force_garbage_collect();
+
+        const auto& node = internal::pool.nodes[idx];
+        EXPECT_EQ(node.op, internal::LazyOp::CONST);
+
+        // Пытаемся мутировать sum (теперь immediate)
+        sum += Rational(1).lazy();
+
+        // sum должен стать ленивым с новым SUM узлом
+        EXPECT_TRUE(sum.is_lazy());
+        const auto& new_node = internal::pool.nodes[sum.root_index()];
+        EXPECT_EQ(new_node.op, internal::LazyOp::SUM);
+        EXPECT_EQ(sum.eval(), (a + b + 1_r).eval());
+    }
 } // namespace delta::testing

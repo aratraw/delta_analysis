@@ -208,6 +208,29 @@ namespace delta::internal {
                 continue;
             }
 
+            // НОВАЯ ВЕТКА ДЛЯ SUM
+            if (node.op == LazyOp::SUM) {
+                bool all_computed = true;
+                if (node.sum_children) {
+                    for (int child : *node.sum_children) {
+                        if (!cache[child].has_value()) {
+                            st.push(child);
+                            all_computed = false;
+                        }
+                    }
+                }
+                if (!all_computed) continue;
+
+                // Линейная свёртка через eager_add
+                Value acc = cache[(*node.sum_children)[0]].value();
+                for (size_t i = 1; i < node.sum_children->size(); ++i) {
+                    acc = eager_add(acc, cache[(*node.sum_children)[i]].value());
+                }
+                cache[idx] = std::move(acc);
+                st.pop();
+                continue;
+            }
+
             if (node.child0 == -1 && node.child1 == -1) {
                 Value left{}, right{};
                 Value eps = node.value_idx != -1 ? values[node.value_idx] : Value{};

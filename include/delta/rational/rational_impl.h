@@ -601,11 +601,28 @@ namespace delta {
         if (internal::global_eager_mode || (a.is_immediate() && b.is_immediate())) {
             return eager_add(a, b);
         }
-        ExpressionRoot left = a.is_lazy() ? ExpressionRoot(a.root_index())
-            : ExpressionRoot::make_const(a.to_value());
-        ExpressionRoot right = b.is_lazy() ? ExpressionRoot(b.root_index())
-            : ExpressionRoot::make_const(b.to_value());
-        return Rational::from_lazy_index(left.add(right).root_index());
+        // Собираем детей, расплющивая вложенные SUM
+        std::vector<int> children;
+        auto collect = [&](const Rational& r) {
+            if (r.is_lazy()) {
+                int idx = r.root_index();
+                const auto& node = internal::pool.nodes[idx];
+                if (node.op == internal::LazyOp::SUM && node.sum_children) {
+                    for (int c : *node.sum_children) children.push_back(c);
+                }
+                else {
+                    children.push_back(idx);
+                }
+            }
+            else {
+                int const_idx = internal::add_const(r.to_value());
+                children.push_back(const_idx);
+            }
+            };
+        collect(a);
+        collect(b);
+        int sum_idx = internal::make_sum_node(std::move(children));
+        return Rational::from_lazy_index(sum_idx);
     }
 
     inline Rational operator-(const Rational& a, const Rational& b) {
@@ -652,13 +669,39 @@ namespace delta {
     // ----------------------------------------------------------------------------
     // Compound assignment – используют inplace_add/inplace_mul для immediate
     // ----------------------------------------------------------------------------
+// Новая версия operator+= (заменяет старую)
     inline Rational& operator+=(Rational& a, const Rational& b) {
         if (internal::global_eager_mode || (a.is_immediate() && b.is_immediate())) {
             inplace_add(a, b);
+            return a;
+        }
+        // Ленивый случай
+        if (!a.is_lazy()) {
+            a = a.lazy();   // делаем ленивым
+        }
+        int a_idx = a.root_index();
+        // Пытаемся мутировать a на месте (COW)
+        if (internal::can_mutate_sum(a_idx)) {
+            int b_idx = b.is_lazy() ? b.root_index() : internal::add_const(b.to_value());
+            internal::append_to_sum(a_idx, b_idx);
+            return a;
+        }
+        // COW: создаём новый узел SUM, объединяя детей a и b
+        std::vector<int> children;
+        const auto& a_node = internal::pool.nodes[a_idx];
+        if (a_node.op == internal::LazyOp::SUM && a_node.sum_children) {
+            for (int c : *a_node.sum_children) children.push_back(c);
         }
         else {
-            a = a + b;
+            children.push_back(a_idx);
         }
+        int b_idx = b.is_lazy() ? b.root_index() : internal::add_const(b.to_value());
+        children.push_back(b_idx);
+        int new_sum_idx = internal::make_sum_node(std::move(children));
+        // Заменяем a
+        internal::decrement_ref(a_idx);
+        a.storage_ = internal::Value(new_sum_idx);
+        internal::increment_ref(new_sum_idx);
         return a;
     }
 

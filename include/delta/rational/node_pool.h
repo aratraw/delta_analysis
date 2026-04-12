@@ -10,11 +10,12 @@
 #include <absl/numeric/int128.h>
 #include <absl/container/flat_hash_map.h>
 
+#include <memory>          // для std::unique_ptr
+#include <algorithm>       // для std::sort, std::swap, std::max
 #include <vector>
 #include <cstdint>
 #include <cmath>
 #include <limits>
-#include <algorithm>
 
 #ifndef M_PI
 #define M_PI 3.14159265358979323846
@@ -62,7 +63,8 @@ namespace delta::internal {
     enum class LazyOp : uint8_t {
         CONST, ADD, MUL, NEG, RECIP,
         SQRT, EXP, LOG, SIN, COS, ACOS,
-        PI, E, POW
+        PI, E, POW,
+        SUM   // N-арный оператор сложения
     };
 
     struct Node {
@@ -73,14 +75,63 @@ namespace delta::internal {
         int32_t depth;
         Interval approx;
         uint64_t hash;
+        std::unique_ptr<std::vector<int>> sum_children;   // только для SUM
 
-        Node() : op(LazyOp::CONST), child0(-1), child1(-1), value_idx(-1), depth(0), approx(Interval()), hash(0) {}
+        // Конструктор по умолчанию
+        Node() : op(LazyOp::CONST), child0(-1), child1(-1), value_idx(-1), depth(0), approx(Interval()), hash(0), sum_children(nullptr) {}
 
+        // Конструктор для бинарных/унарных/константных узлов
         Node(LazyOp op, int32_t c0, int32_t c1, int32_t v_idx, int32_t depth,
             Interval approx, uint64_t hash)
             : op(op), child0(c0), child1(c1), value_idx(v_idx),
-            depth(depth), approx(approx), hash(hash) {
+            depth(depth), approx(approx), hash(hash), sum_children(nullptr) {
         }
+
+        // Конструктор для SUM
+        Node(LazyOp op, std::vector<int>&& children, int32_t depth, Interval approx, uint64_t hash)
+            : op(op), child0(-1), child1(-1), value_idx(-1),
+            depth(depth), approx(approx), hash(hash),
+            sum_children(std::make_unique<std::vector<int>>(std::move(children))) {
+        }
+
+        // Запрет копирования (из-за unique_ptr)
+        Node(const Node&) = delete;
+        Node& operator=(const Node&) = delete;
+
+        // Move-конструктор
+        Node(Node&& other) noexcept
+            : op(other.op), child0(other.child0), child1(other.child1),
+            value_idx(other.value_idx), depth(other.depth),
+            approx(other.approx), hash(other.hash),
+            sum_children(std::move(other.sum_children)) {
+            other.child0 = other.child1 = -1;
+            other.value_idx = -1;
+            other.depth = 0;
+            other.hash = 0;
+            other.op = LazyOp::CONST;   // необязательно, но безопасно
+        }
+
+        // Move-присваивание
+        Node& operator=(Node&& other) noexcept {
+            if (this != &other) {
+                op = other.op;
+                child0 = other.child0;
+                child1 = other.child1;
+                value_idx = other.value_idx;
+                depth = other.depth;
+                approx = other.approx;
+                hash = other.hash;
+                sum_children = std::move(other.sum_children);
+                other.child0 = other.child1 = -1;
+                other.value_idx = -1;
+                other.depth = 0;
+                other.hash = 0;
+                other.op = LazyOp::CONST;
+            }
+            return *this;
+        }
+
+        ~Node() = default;
     };
 
     struct BinaryKey {
@@ -123,6 +174,24 @@ namespace delta::internal {
         }
     };
 
+    // Ключ и хэш для SUM
+    struct SumKey {
+        std::vector<int> children; // уже отсортированы, без нулей
+        bool operator==(const SumKey& other) const {
+            return children == other.children;
+        }
+    };
+
+    struct SumKeyHash {
+        size_t operator()(const SumKey& key) const {
+            size_t h = key.children.size();
+            for (int c : key.children) {
+                h = absl::HashOf(h, c);
+            }
+            return h;
+        }
+    };
+
     struct NodePool {
         static constexpr size_t DEFAULT_MAX_SIZE = 1'000'000;
         size_t max_size = DEFAULT_MAX_SIZE;
@@ -132,12 +201,13 @@ namespace delta::internal {
         std::vector<int> refcount;
         size_t next_free_index = 0;
 
-        // Кэши теперь используют Value (который является типом с tag+union) – хэширование и сравнение работают через AbslHashValue
+        // Кэши
         absl::flat_hash_map<Value, int> value_cache;
         absl::flat_hash_map<Value, int> constant_cache;
         absl::flat_hash_map<BinaryKey, int, BinaryKeyHash> binary_cache;
         absl::flat_hash_map<UnaryKey, int, UnaryKeyHash> unary_cache;
         absl::flat_hash_map<TernaryKey, int, TernaryKeyHash> ternary_cache;
+        absl::flat_hash_map<SumKey, int, SumKeyHash> sum_cache;   // кэш для SUM
 
         void update_gc_threshold() {
             gc_threshold = static_cast<size_t>(0.9 * max_size);
@@ -165,7 +235,6 @@ namespace delta::internal {
             return idx;
         }
 
-        // Выделение нового слота – без изменений (использует is_occupied, который теперь работает с новым Value)
         int allocate_node() {
             ensure_initialized();
 
@@ -202,20 +271,27 @@ namespace delta::internal {
             return static_cast<int>(idx);
         }
 
-        // Вспомогательная функция для проверки занятости узла (не зависит от Value)
+        // Вспомогательная функция для проверки занятости узла
         bool is_occupied(const Node& node) const {
+            if (node.op == LazyOp::SUM) {
+                return node.sum_children && !node.sum_children->empty();
+            }
             return !(node.value_idx == -1 && node.child0 == -1 && node.child1 == -1);
         }
     };
 
     inline thread_local NodePool pool;
 
-    // Объявления функций (реализации ниже)
+
+    // ----------------------------------------------------------------------------
+    // Объявления функций
+    // ----------------------------------------------------------------------------
     int add_const(const Value& v);
     int get_binary_node(LazyOp op, int left, int right);
     int get_binary_node(LazyOp op, int left, int right, int value_idx);
     int get_pow_node(int left, int right, int value_idx);
     int get_unary_node(LazyOp op, int child, int value_idx = -1);
+    int make_sum_node(std::vector<int> raw_children);
     Interval compute_interval(LazyOp op, const Interval& a, const Interval& b = Interval());
     uint64_t combine_hash(LazyOp op, uint64_t h0, uint64_t h1 = 0, int64_t extra = 0);
     uint64_t compute_hash_const(const Value& v);
@@ -225,7 +301,9 @@ namespace delta::internal {
     inline void set_pool_max_size(size_t new_size);
     inline void force_garbage_collect();
 
-    // Реализации с использованием allocate_node (они уже работают с новым Value)
+    // ----------------------------------------------------------------------------
+    // Реализации
+    // ----------------------------------------------------------------------------
     inline int add_const(const Value& v) {
         pool.ensure_initialized();
         auto it = pool.constant_cache.find(v);
@@ -233,7 +311,7 @@ namespace delta::internal {
         int idx = pool.allocate_node();
         int val_idx = pool.add_value(v);
         Node node(LazyOp::CONST, -1, -1, val_idx, 0, Interval(to_double(v)), compute_hash_const(v));
-        pool.nodes[idx] = node;
+        pool.nodes[idx] = std::move(node);
         pool.refcount[idx] = 0;
         pool.constant_cache[v] = idx;
         return idx;
@@ -255,7 +333,7 @@ namespace delta::internal {
         Interval approx = compute_interval(op, pool.nodes[left].approx, pool.nodes[right].approx);
         uint64_t hash = combine_hash(op, pool.nodes[left].hash, pool.nodes[right].hash);
         Node node(op, left, right, -1, depth, approx, hash);
-        pool.nodes[idx] = node;
+        pool.nodes[idx] = std::move(node);
         pool.refcount[idx] = 0;
         pool.binary_cache[key] = idx;
         return idx;
@@ -277,7 +355,7 @@ namespace delta::internal {
         Interval approx = compute_interval(op, pool.nodes[left].approx, pool.nodes[right].approx);
         uint64_t hash = combine_hash(op, pool.nodes[left].hash, pool.nodes[right].hash, value_idx);
         Node node(op, left, right, value_idx, depth, approx, hash);
-        pool.nodes[idx] = node;
+        pool.nodes[idx] = std::move(node);
         pool.refcount[idx] = 0;
         pool.binary_cache[key] = idx;
         return idx;
@@ -293,7 +371,7 @@ namespace delta::internal {
         Interval approx = compute_interval(LazyOp::POW, pool.nodes[left].approx, pool.nodes[right].approx);
         uint64_t hash = combine_hash(LazyOp::POW, pool.nodes[left].hash, pool.nodes[right].hash, value_idx);
         Node node(LazyOp::POW, left, right, value_idx, depth, approx, hash);
-        pool.nodes[idx] = node;
+        pool.nodes[idx] = std::move(node);
         pool.refcount[idx] = 0;
         pool.ternary_cache[key] = idx;
         return idx;
@@ -319,9 +397,69 @@ namespace delta::internal {
             hash = combine_hash(op, pool.nodes[child].hash, value_idx);
         }
         Node node(op, child, -1, value_idx, depth, approx, hash);
-        pool.nodes[idx] = node;
+        pool.nodes[idx] = std::move(node);
         pool.refcount[idx] = 0;
         pool.unary_cache[key] = idx;
+        return idx;
+    }
+
+    // ----------------------------------------------------------------------------
+    // make_sum_node – создание N-арного узла SUM (каноническое создание)
+    // ----------------------------------------------------------------------------
+    inline int make_sum_node(std::vector<int> raw_children) {
+        pool.ensure_initialized();
+
+        // 1. Фильтрация нулевых констант
+        std::vector<int> filtered;
+        filtered.reserve(raw_children.size());
+        for (int child : raw_children) {
+            const Node& node = pool.nodes[child];
+            if (node.op == LazyOp::CONST && is_zero(pool.values[node.value_idx]))
+                continue;
+            filtered.push_back(child);
+        }
+
+        // 2. Дегенерация
+        if (filtered.empty()) {
+            return add_const(Value(SmallStorage(0)));
+        }
+        if (filtered.size() == 1) {
+            return filtered[0];
+        }
+        // ДЕГЕНЕРАЦИЯ SUM ОТ ДВУХ ОПЕРАНДОВ ДО БИНАРНОГО ADD - ТОЛЬКО В SIMPLIFY
+
+        // 3. Канонизация: сортировка по (hash, индекс)
+        std::sort(filtered.begin(), filtered.end(),
+            [&](int a, int b) {
+                uint64_t ha = pool.nodes[a].hash;
+                uint64_t hb = pool.nodes[b].hash;
+                if (ha != hb) return ha < hb;
+                return a < b;
+            });
+
+        // 4. Проверка кэша
+        SumKey key{ filtered };
+        auto it = pool.sum_cache.find(key);
+        if (it != pool.sum_cache.end()) {
+            return it->second;
+        }
+
+        // 5. Расчёт метаданных
+        int depth = 0;
+        Interval approx = Interval::zero();
+        uint64_t hash = static_cast<uint64_t>(LazyOp::SUM);
+        for (int child : filtered) {
+            depth = std::max(depth, pool.nodes[child].depth + 1);
+            approx = approx + pool.nodes[child].approx;
+            hash = combine_hash(LazyOp::SUM, hash, pool.nodes[child].hash);
+        }
+
+        // 6. Выделение узла
+        int idx = pool.allocate_node();
+        Node node(LazyOp::SUM, std::move(filtered), depth, approx, hash);
+        pool.nodes[idx] = std::move(node);
+        pool.refcount[idx] = 0;
+        pool.sum_cache[std::move(key)] = idx;
         return idx;
     }
 
@@ -375,6 +513,9 @@ namespace delta::internal {
             double hi = std::pow(a.upper(), b.upper());
             return Interval(lo, hi);
         }
+        case LazyOp::SUM:
+            // Для SUM интервал вычисляется при создании узла; здесь он не используется.
+            return Interval();
         default: return Interval();
         }
     }
@@ -404,10 +545,46 @@ namespace delta::internal {
     inline void decrement_ref(int idx) {
         if (idx < 0) return;
         if (static_cast<size_t>(idx) >= pool.nodes.size()) return;
-        if (pool.refcount[idx] > 0)
+        if (pool.refcount[idx] > 0) {
             --pool.refcount[idx];
+            if (pool.refcount[idx] == 0) {
+                const Node& node = pool.nodes[idx];
+                if (node.op == LazyOp::SUM && node.sum_children) {
+                    for (int child : *node.sum_children) {
+                        decrement_ref(child);
+                    }
+                }
+            }
+        }
     }
 
+    // ----------------------------------------------------------------------------
+    // Функции для мутации SUM (COW-семантика)
+    // ----------------------------------------------------------------------------
+    inline bool can_mutate_sum(int idx) {
+        if (idx < 0 || static_cast<size_t>(idx) >= pool.nodes.size()) return false;
+        const Node& node = pool.nodes[idx];
+        return node.op == LazyOp::SUM && pool.refcount[idx] == 1 && node.sum_children != nullptr;
+    }
+
+    //if something breaks mysteriously - you should definitely look closely if you have tampered with this function
+    // check if you invalidate cache when needed, if you even use this cache. 
+    inline void append_to_sum(int idx, int child_idx) {
+        assert(can_mutate_sum(idx));
+        Node& node = pool.nodes[idx];
+        auto& children = *node.sum_children;
+
+        // Просто добавляем в конец (без сортировки, без кэша)
+        children.push_back(child_idx);
+        increment_ref(child_idx);
+
+        // Инкрементальное обновление метаданных
+        node.depth = std::max(node.depth, pool.nodes[child_idx].depth + 1);
+        node.approx = node.approx + pool.nodes[child_idx].approx;
+
+        // Узел стал неканоническим
+        node.hash = 0;
+    }
 } // namespace delta::internal
 
 #include "gc.h"
