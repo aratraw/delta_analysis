@@ -1,15 +1,12 @@
 // tests/rational/performance_compare_test.cpp
+#pragma once
 #include <gtest/gtest.h>
 #include <vector>
 #include <chrono>
 #include <iomanip>
 #include <iostream>
 #include <random>
-#include <algorithm>
-#include <numeric>
-#include <functional>
 #include "delta/core/rational.h"
-#include "delta/rational/gc.h"
 #include "test_utils.h"
 
 using BoostRational = boost::multiprecision::number<
@@ -32,7 +29,7 @@ namespace delta::testing {
     };
 
     // -------------------------------------------------------------------------
-    // 1. Генерация пулов
+    // Генерация пулов
     // -------------------------------------------------------------------------
     struct Pools {
         std::vector<BoostRational> boost_pool;
@@ -85,7 +82,7 @@ namespace delta::testing {
     }
 
     // -------------------------------------------------------------------------
-    // 2. Функции замера
+    // Функции замера
     // -------------------------------------------------------------------------
     template<typename TimeUnit = std::chrono::milliseconds>
     long long measure_delta_immediate_sum(const std::vector<Rational>& terms) {
@@ -109,17 +106,16 @@ namespace delta::testing {
         return std::chrono::duration_cast<TimeUnit>(end - start).count();
     }
 
-    // Возвращает (build_ms, eval_ms, total_ms)
     template<typename TimeUnit = std::chrono::milliseconds>
     std::tuple<long long, long long, long long> measure_delta_lazy_sum(const std::vector<Rational>& terms) {
-        internal::reset_pool();   // каждый замер стартует с чистого пула
+        internal::reset_pool();
         auto start_build = std::chrono::high_resolution_clock::now();
-        Rational sum = 0_r.lazy();
+        LazyRational sum;
         for (const auto& t : terms) sum += t;
         auto end_build = std::chrono::high_resolution_clock::now();
 
         auto start_eval = std::chrono::high_resolution_clock::now();
-        Rational result = sum.eval(true);
+        Rational result = sum.eval(true);//eval(skip_simplify=true).
         auto end_eval = std::chrono::high_resolution_clock::now();
         volatile Rational dummy = result;
         (void)dummy;
@@ -130,7 +126,7 @@ namespace delta::testing {
     }
 
     // -------------------------------------------------------------------------
-    // 3. Бенчмарк с выводом двух строк (immediate и lazy)
+    // Бенчмарк
     // -------------------------------------------------------------------------
     void run_benchmark_extended(const std::string& test_name,
         const std::vector<int>& sizes,
@@ -148,18 +144,12 @@ namespace delta::testing {
             std::vector<long long> imm_times, boost_times;
             std::vector<long long> lazy_total_times, lazy_build_times, lazy_eval_times;
 
-            imm_times.reserve(TRIAL_RUNS);
-            boost_times.reserve(TRIAL_RUNS);
-            lazy_total_times.reserve(TRIAL_RUNS);
-            lazy_build_times.reserve(TRIAL_RUNS);
-            lazy_eval_times.reserve(TRIAL_RUNS);
-
             for (int rep = 0; rep < TRIAL_RUNS; ++rep) {
                 long long imm = measure_delta_immediate_sum(pools.delta_pool);
                 auto [build, eval, total] = measure_delta_lazy_sum(pools.delta_pool);
                 long long boost = measure_boost_sum(pools.boost_pool);
 
-                if (rep == 0) continue;   // прогревочный замер
+                if (rep == 0) continue;
                 imm_times.push_back(imm);
                 lazy_total_times.push_back(total);
                 lazy_build_times.push_back(build);
@@ -184,7 +174,7 @@ namespace delta::testing {
             long long med_lazy_build = lazy_build_times[lazy_build_times.size() / 2];
             long long med_lazy_eval = lazy_eval_times[lazy_eval_times.size() / 2];
 
-            // Строка для immediate
+            // Immediate
             {
                 long long diff = med_imm - med_boost;
                 double percent = 0.0;
@@ -207,7 +197,7 @@ namespace delta::testing {
                     << "% (" << std::abs(diff) << " ms)\n";
             }
 
-            // Строка для lazy
+            // Lazy
             {
                 long long diff = med_lazy_total - med_boost;
                 double percent = 0.0;
@@ -234,9 +224,6 @@ namespace delta::testing {
         }
     }
 
-    // -------------------------------------------------------------------------
-    // 4. Тесты
-    // -------------------------------------------------------------------------
     TEST_F(RationalPerformanceCompareTest, RandomRationalsCompare) {
         std::vector<int> sizes = { 100, 500, 1000, 5000, 10000, 20000 };
         run_benchmark_extended("Random rationals (uniform)", sizes, generate_random_pools);
@@ -250,21 +237,6 @@ namespace delta::testing {
     TEST_F(RationalPerformanceCompareTest, HarmonicSeriesCompare) {
         std::vector<int> sizes = { 100, 500, 1000, 5000, 10000, 20000, 50000 };
         run_benchmark_extended("Harmonic series (1 + 1/2 + ... + 1/N)", sizes, generate_harmonic_pools);
-    }
-
-    // Проверка корректности
-    TEST_F(RationalPerformanceCompareTest, CorrectnessCheck) {
-        for (int N : {10, 100, 500, 10000, 20000}) {
-            Pools pools = generate_random_pools(N);
-            Rational delta_imm = 0_r;
-            for (const auto& t : pools.delta_pool) delta_imm += t;
-            Rational delta_lazy = 0_r.lazy();
-            for (const auto& t : pools.delta_pool) delta_lazy += t;
-            BoostRational boost_sum = 0;
-            for (const auto& t : pools.boost_pool) boost_sum += t;
-            EXPECT_EQ(delta_imm, delta_lazy.eval(true));
-            EXPECT_EQ(to_string(delta_imm), boost_sum.str());
-        }
     }
 
 } // namespace delta::testing

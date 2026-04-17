@@ -1,419 +1,471 @@
-// simplify_impl.h (адаптирован под новый tagged union Value, флаг small_reduced в Value)
+// simplify_impl.h
+// ============================================================================
+// СТРАТЕГИЯ УПРОЩЕНИЯ (SIMPLIFICATION) ВЕРСИИ 2.0
+// ============================================================================
+//
+// 1.  ОСНОВНАЯ ЦЕЛЬ: ПРЕОБРАЗОВАНИЕ ДЕРЕВА В КАНОНИЧЕСКУЮ ФОРМУ
+//     БЕЗ ВЫЧИСЛЕНИЯ КОНСТАНТНЫХ ПОДВЫРАЖЕНИЙ.
+//
+//     Упрощение НЕ ДОЛЖНО:
+//       - сворачивать 1+2 в 3
+//       - вычислять sqrt(2) или exp(1) до рационального значения
+//       - выполнять любые нетривиальные арифметические действия над константами
+//         (сложение, умножение, GCD, LCM, перевод в double и т.д.)
+//
+//     Упрощение ДОЛЖНО:
+//       - расплющивать вложенные SUM и PRODUCT (flattening), если они есть.
+//       - удалять нейтральные элементы (0 в сумме, 1 в произведении)
+//       - канонизировать операции по порядку операндов: сортировать детей SUM/PRODUCT по хэшу (детерминированный порядок)
+//       - сокращать противоположные пары: x + NEG(x) → 0, x * RECIP(x) → 1
+//       - выполнять алгебраические упрощения: NEG(NEG(x)) → x, RECIP(RECIP(x)) → x,
+//         EXP(LOG(x)) → x, LOG(EXP(x)) → x, x^0 → 1, x^1 → x, 1^x → 1, 0^positive → 0,
+//         (a^b)^c → a^(b*c) для целых показателей.
+//
+// 2.  ПОЧЕМУ НЕЛЬЗЯ "ПРОСТО СВЕРНУТЬ ВСЁ В КОНСТАНТЫ"?
+//
+//     А) РАЗДЕЛЕНИЕ ОТВЕТСТВЕННОСТИ:
+//        Упрощение готовит дерево к будущему вычислению, но не выполняет само
+//        вычисление. Вычисление (eval) – отдельная операция, которая может быть
+//        выполнена позже - ОПТИМАЛЬНЫМ АЛГОРИТМОМ КОТОРЫЙ ЗАНИМАЕТСЯ ТОЛЬКО ВЫЧИСЛЕНИЕМ.
+//
+//     Б) ПРОИЗВОДИТЕЛЬНОСТЬ:
+//        Свёртка констант в процессе упрощения приводит к преждевременным
+//        затратам на GCD/LCM и переход в BigStorage. Например, гармонический ряд
+//        из 10 000 членов, если каждый раз сворачивать константы, вызовет
+//        многократное сокращение дробей, что катастрофически медленно.
+//
+// 3.  БУДУЩЕЕ РАСШИРЕНИЕ: СИМВОЛЬНЫЕ ВЫЧИСЛЕНИЯ
+//
+//     Если в библиотеку будут добавлены неизвестные (symbolic variables),
+//     будет введена отдельная функция упрощения – "решение дерева
+//     относительно неизвестных". В этой функции можно будет выполнять полную свёртку
+//     констант (например, вычислять 2+3, но не вычислять sin(pi/4)), а также
+//     применять дистрибутивность, группировку подобных членов и другие
+//     преобразования. Будет ли эта функция реализована как simplify_* или eval_*, пока не имеет значения.
+//
+// 4.  РЕАЛИЗАЦИЯ В ДАННОМ ФАЙЛЕ:
+//
+//     Функция simplify_tree() получает на вход временное дерево (TempNode) и
+//     локальный пул значений (values). Она выполняет пост-порядный обход и
+//     применяет описанные выше правила. В результате возвращается индекс
+//     упрощённого корня в том же массиве TempNode. После этого канонизированное
+//     дерево интернируется в глобальный пул NodePool.
+//
+//     ВАЖНО: Все ветки, которые ранее сворачивали константы (для NEG, RECIP,
+//     EXP, LOG, SQRT, SIN, COS, ACOS, POW), удалены. Оставлены только чисто
+//     алгебраические преобразования. Исключение – случаи, когда результат
+//     очевидно не зависит от значения (x^0 → 1, 0^positive → 0 и т.п.).
+//
+// ============================================================================
+
 #pragma once
 
-#include "node_pool.h"
+#include "lazy_nodes.h"
+#include "storage.h"
 #include "evaluation_core.h"
-#include "evaluate_impl.h"
-#include "context.h"
-#include <stack>
 #include <vector>
+#include <algorithm>
+#include <stack>
+#include <unordered_map>
+#include <optional>
+
+namespace delta::internal {
+    // ... (остальной код без изменений, как в предыдущем ответе)
+}
+#pragma once
+
+#include "lazy_nodes.h"   // для TempNode
+#include "storage.h"
+#include "evaluation_core.h"
+#include <vector>
+#include <algorithm>
+#include <stack>
+#include <unordered_map>
 #include <optional>
 
 namespace delta::internal {
 
-    inline bool is_algebraic(LazyOp op) {
-        return op == LazyOp::ADD || op == LazyOp::MUL ||
-            op == LazyOp::NEG || op == LazyOp::RECIP;
+    // ----------------------------------------------------------------------------
+    // Вспомогательные функции для работы с TempNode
+    // ----------------------------------------------------------------------------
+
+    inline bool is_temp_zero(const TempNode& node, const std::vector<Value>& values) {
+        if (node.op != LazyOp::CONST) return false;
+        return is_zero(values[node.value_idx]);
     }
 
-    // ----------------------------------------------------------------------------
-    // collect_add_operands – собирает все листья (не ADD) из бинарного дерева ADD
-    // ----------------------------------------------------------------------------
-    inline void collect_add_operands(int idx, std::vector<int>& out) {
-        std::vector<int> stack;
-        stack.reserve(256);
-        stack.push_back(idx);
-        while (!stack.empty()) {
-            int cur = stack.back();
-            stack.pop_back();
-            const Node& node = pool.nodes[cur];
-            if (node.op == LazyOp::ADD) {
-                if (node.child1 != -1) stack.push_back(node.child1);
-                if (node.child0 != -1) stack.push_back(node.child0);
-            }
-            else {
-                out.push_back(cur);
+    inline bool is_temp_one(const TempNode& node, const std::vector<Value>& values) {
+        if (node.op != LazyOp::CONST) return false;
+        return is_one(values[node.value_idx]);
+    }
+
+    inline bool is_temp_minus_one(const TempNode& node, const std::vector<Value>& values) {
+        if (node.op != LazyOp::CONST) return false;
+        const Value& v = values[node.value_idx];
+        if (v.tag == ValueType::Small) {
+            const SmallStorage& s = v.storage.small;
+            return s.num == -1 && s.den == 1;
+        }
+        return false;
+    }
+
+    inline double temp_const_value(const TempNode& node, const std::vector<Value>& values) {
+        return to_double(values[node.value_idx]);
+    }
+
+    inline int make_temp_const(std::vector<Value>& values, const Value& v) {
+        int idx = static_cast<int>(values.size());
+        values.push_back(v);
+        return idx;
+    }
+
+    inline int make_temp_node(std::vector<TempNode>& nodes,
+        std::vector<Value>& values,
+        LazyOp op,
+        std::vector<int> children,
+        int value_idx = -1,
+        int eps_idx = -1) {
+        uint64_t hash = static_cast<uint64_t>(op);
+        Interval approx;
+        int32_t depth = 0;
+
+        if (op == LazyOp::CONST) {
+            const Value& v = values[value_idx];
+            hash = compute_hash_const(v);
+            approx = Interval(to_double(v));
+            depth = 0;
+        }
+        else if (op == LazyOp::SUM) {
+            approx = Interval::zero();
+            for (int c : children) {
+                depth = std::max(depth, nodes[c].depth + 1);
+                approx = approx + nodes[c].approx;
+                hash = combine_hash(LazyOp::SUM, hash, nodes[c].hash);
             }
         }
+        else if (op == LazyOp::PRODUCT) {
+            approx = Interval::one();
+            for (int c : children) {
+                depth = std::max(depth, nodes[c].depth + 1);
+                approx = approx * nodes[c].approx;
+                hash = combine_hash(LazyOp::PRODUCT, hash, nodes[c].hash);
+            }
+        }
+        else if (op == LazyOp::NEG || op == LazyOp::RECIP || op == LazyOp::SQRT ||
+            op == LazyOp::EXP || op == LazyOp::LOG || op == LazyOp::SIN ||
+            op == LazyOp::COS || op == LazyOp::ACOS) {
+            int c = children[0];
+            depth = 1 + nodes[c].depth;
+            approx = compute_interval(op, nodes[c].approx);
+            hash = combine_hash(op, nodes[c].hash, 0, eps_idx);
+        }
+        else if (op == LazyOp::PI || op == LazyOp::E) {
+            depth = 0;
+            approx = compute_interval(op, Interval());
+            hash = combine_hash(op, 0, eps_idx);
+        }
+        else if (op == LazyOp::POW) {
+            int base = children[0];
+            int exp = children[1];
+            depth = 1 + std::max(nodes[base].depth, nodes[exp].depth);
+            approx = compute_interval(LazyOp::POW, nodes[base].approx, nodes[exp].approx);
+            hash = combine_hash(LazyOp::POW, nodes[base].hash, nodes[exp].hash, eps_idx);
+        }
+        else {
+            throw std::logic_error("make_temp_node: unknown op");
+        }
+
+        int idx = static_cast<int>(nodes.size());
+        nodes.emplace_back(op, std::move(children), value_idx, eps_idx, hash, approx, depth);
+        return idx;
     }
 
-    inline int simplify_impl(int root_idx) {
-        const auto& nodes = pool.nodes;
-        const auto& values = pool.values;
-        const size_t n = nodes.size();
-
-        std::vector<int> simplified_idx(n, -1);
+    // ----------------------------------------------------------------------------
+    // Основная функция упрощения дерева TempNode
+    // ----------------------------------------------------------------------------
+    inline int simplify_tree(std::vector<TempNode>& nodes,
+        std::vector<Value>& values,
+        int root) {
+        std::vector<int> simplified(nodes.size(), -1);
         std::stack<int> st;
-        st.push(root_idx);
-
+        st.push(root);
+        std::vector<int> postorder;
         while (!st.empty()) {
-            int idx = st.top();
-            if (simplified_idx[idx] != -1) {
-                st.pop();
-                continue;
+            int idx = st.top(); st.pop();
+            postorder.push_back(idx);
+            for (int child : nodes[idx].children) {
+                st.push(child);
+            }
+        }
+
+        for (auto it = postorder.rbegin(); it != postorder.rend(); ++it) {
+            int idx = *it;
+            TempNode& node = nodes[idx];
+            std::vector<int> simp_children;
+            for (int child : node.children) {
+                simp_children.push_back(simplified[child]);
             }
 
-            const Node& node = nodes[idx];
-
-            if (node.op == LazyOp::CONST) {
-                simplified_idx[idx] = idx;
-                st.pop();
-                continue;
+            if (node.op != LazyOp::CONST && !simp_children.empty()) {
+                node.children = std::move(simp_children);
             }
 
-            // --------------------------------------------------------------------
-            // НОВАЯ ВЕТКА ДЛЯ LazyOp::SUM
-            // --------------------------------------------------------------------
-            if (node.op == LazyOp::SUM) {
-                // Сначала убеждаемся, что все дети упрощены
-                bool children_ready = true;
-                if (node.sum_children) {
-                    for (int child : *node.sum_children) {
-                        if (simplified_idx[child] == -1) {
-                            st.push(child);
-                            children_ready = false;
-                        }
-                    }
-                }
-                if (!children_ready) continue;
+            switch (node.op) {
+            case LazyOp::CONST:
+                simplified[idx] = idx;
+                break;
 
-                // Собираем упрощённых детей, отфильтровывая нулевые константы
-                std::vector<int> simplified_children;
-                if (node.sum_children) {
-                    simplified_children.reserve(node.sum_children->size());
-                    for (int child : *node.sum_children) {
-                        int simp_child = simplified_idx[child];
-                        const Node& cnode = nodes[simp_child];
-                        if (cnode.op == LazyOp::CONST && is_zero(values[cnode.value_idx]))
-                            continue;
-                        simplified_children.push_back(simp_child);
-                    }
-                }
-
-                int new_idx;
-                if (simplified_children.empty()) {
-                    new_idx = add_const(Value(SmallStorage(0)));
-                }
-                else if (simplified_children.size() == 1) {
-                    new_idx = simplified_children[0];
-                }
-                else if (simplified_children.size() == 2) {
-                    new_idx = get_binary_node(LazyOp::ADD, simplified_children[0], simplified_children[1]);
-                }
-                else {
-                    // Проверка: все ли дети константы?
-                    bool all_const = true;
-                    for (int c : simplified_children) {
-                        if (nodes[c].op != LazyOp::CONST) {
-                            all_const = false;
-                            break;
+            case LazyOp::SUM: {
+                std::vector<int> flat_children;
+                for (int child : node.children) {
+                    if (nodes[child].op == LazyOp::SUM) {
+                        for (int sub : nodes[child].children) {
+                            flat_children.push_back(sub);
                         }
-                    }
-                    if (all_const) {
-                        Value sum = values[nodes[simplified_children[0]].value_idx];
-                        for (size_t i = 1; i < simplified_children.size(); ++i) {
-                            sum = eager_add(sum, values[nodes[simplified_children[i]].value_idx]);
-                        }
-                        new_idx = add_const(sum);
                     }
                     else {
-                        new_idx = make_sum_node(std::move(simplified_children));
+                        flat_children.push_back(child);
                     }
                 }
-                simplified_idx[idx] = new_idx;
-                st.pop();
-                continue;
-            }
 
-            // --------------------------------------------------------------------
-            // Унарные операции (child1 == -1)
-            // --------------------------------------------------------------------
-            if (node.child1 == -1) {
-                if (node.child0 == -1) {
-                    // без детей (константа уже обработана выше)
-                    simplified_idx[idx] = idx;
-                    st.pop();
-                    continue;
+                std::vector<int> filtered;
+                for (int child : flat_children) {
+                    if (!(nodes[child].op == LazyOp::CONST && is_zero(values[nodes[child].value_idx]))) {
+                        filtered.push_back(child);
+                    }
                 }
 
-                // Убеждаемся, что ребёнок упрощён
-                if (node.child0 != -1 && simplified_idx[node.child0] == -1) {
-                    st.push(node.child0);
-                    continue;
-                }
-                int child0_simp = node.child0 != -1 ? simplified_idx[node.child0] : -1;
-                bool is_const0 = (child0_simp != -1 && nodes[child0_simp].op == LazyOp::CONST);
+                std::sort(filtered.begin(), filtered.end(),
+                    [&](int a, int b) {
+                        uint64_t ha = nodes[a].hash;
+                        uint64_t hb = nodes[b].hash;
+                        if (ha != hb) return ha < hb;
+                        return a < b;
+                    });
 
-                int new_idx = idx;
-
-                switch (node.op) {
-                case LazyOp::NEG:
-                    if (child0_simp != -1 && nodes[child0_simp].op == LazyOp::NEG) {
-                        int grand = nodes[child0_simp].child0;
-                        if (grand != -1) new_idx = grand;
-                    }
-                    break;
-                case LazyOp::RECIP:
-                    if (child0_simp != -1 && nodes[child0_simp].op == LazyOp::RECIP) {
-                        int grand = nodes[child0_simp].child0;
-                        if (grand != -1) new_idx = grand;
-                    }
-                    break;
-                case LazyOp::EXP:
-                    if (child0_simp != -1 && nodes[child0_simp].op == LazyOp::LOG) {
-                        int grand = nodes[child0_simp].child0;
-                        if (grand != -1) new_idx = grand;
-                    }
-                    else if (is_const0 && is_zero(values[nodes[child0_simp].value_idx])) {
-                        new_idx = add_const(Value(SmallStorage(1)));
-                    }
-                    break;
-                case LazyOp::LOG:
-                    if (child0_simp != -1 && nodes[child0_simp].op == LazyOp::EXP) {
-                        int grand = nodes[child0_simp].child0;
-                        if (grand != -1) new_idx = grand;
-                    }
-                    else if (is_const0 && is_one(values[nodes[child0_simp].value_idx])) {
-                        new_idx = add_const(Value(SmallStorage(0)));
-                    }
-                    break;
-                case LazyOp::SQRT:
-                    if (is_const0) {
-                        const Value& arg = values[nodes[child0_simp].value_idx];
-                        if (is_one(arg)) {
-                            new_idx = add_const(Value(SmallStorage(1)));
-                        }
-                        else if (is_zero(arg)) {
-                            new_idx = add_const(Value(SmallStorage(0)));
+                std::vector<bool> keep(filtered.size(), true);
+                for (size_t i = 0; i < filtered.size(); ++i) {
+                    if (!keep[i]) continue;
+                    int child_i = filtered[i];
+                    if (nodes[child_i].op == LazyOp::NEG && nodes[child_i].children.size() == 1) {
+                        int neg_child = nodes[child_i].children[0];
+                        for (size_t j = i + 1; j < filtered.size(); ++j) {
+                            if (!keep[j]) continue;
+                            int child_j = filtered[j];
+                            if (child_j == neg_child) {
+                                keep[i] = false;
+                                keep[j] = false;
+                                break;
+                            }
                         }
                     }
-                    else if (child0_simp != -1 && nodes[child0_simp].op == LazyOp::EXP) {
-                        int inner = nodes[child0_simp].child0;
-                        if (inner != -1) {
-                            Value eps = node.value_idx != -1 ? values[node.value_idx] : internal::default_eps_value;
-                            int eps_idx = internal::pool.add_value(eps);
-                            int two = add_const(Value(SmallStorage(2)));
-                            int half = get_unary_node(LazyOp::RECIP, two);
-                            int x_half = get_binary_node(LazyOp::MUL, inner, half);
-                            new_idx = get_unary_node(LazyOp::EXP, x_half, eps_idx);
+                }
+                std::vector<int> after_cancel;
+                for (size_t i = 0; i < filtered.size(); ++i) {
+                    if (keep[i]) after_cancel.push_back(filtered[i]);
+                }
+
+                if (after_cancel.empty()) {
+                    int zero_idx = make_temp_const(values, Value(SmallStorage(0)));
+                    int new_idx = make_temp_node(nodes, values, LazyOp::CONST, {}, zero_idx);
+                    simplified[idx] = new_idx;
+                }
+                else if (after_cancel.size() == 1) {
+                    simplified[idx] = after_cancel[0];
+                }
+                else {
+                    int new_idx = make_temp_node(nodes, values, LazyOp::SUM, std::move(after_cancel));
+                    simplified[idx] = new_idx;
+                }
+                break;
+            }
+
+            case LazyOp::PRODUCT: {
+                std::vector<int> flat_children;
+                for (int child : node.children) {
+                    if (nodes[child].op == LazyOp::PRODUCT) {
+                        for (int sub : nodes[child].children) {
+                            flat_children.push_back(sub);
                         }
                     }
-                    break;
-                case LazyOp::SIN:
-                    if (is_const0 && is_zero(values[nodes[child0_simp].value_idx])) {
-                        new_idx = add_const(Value(SmallStorage(0)));
+                    else {
+                        flat_children.push_back(child);
                     }
-                    break;
-                case LazyOp::COS:
-                    if (is_const0 && is_zero(values[nodes[child0_simp].value_idx])) {
-                        new_idx = add_const(Value(SmallStorage(1)));
+                }
+
+                std::vector<int> filtered;
+                for (int child : flat_children) {
+                    if (!(nodes[child].op == LazyOp::CONST && is_one(values[nodes[child].value_idx]))) {
+                        filtered.push_back(child);
                     }
-                    break;
-                case LazyOp::ACOS:
-                    if (is_const0) {
-                        const Value& arg = values[nodes[child0_simp].value_idx];
-                        if (is_one(arg)) {
-                            new_idx = add_const(Value(SmallStorage(0)));
+                }
+
+                std::sort(filtered.begin(), filtered.end(),
+                    [&](int a, int b) {
+                        uint64_t ha = nodes[a].hash;
+                        uint64_t hb = nodes[b].hash;
+                        if (ha != hb) return ha < hb;
+                        return a < b;
+                    });
+
+                std::vector<bool> keep(filtered.size(), true);
+                for (size_t i = 0; i < filtered.size(); ++i) {
+                    if (!keep[i]) continue;
+                    int child_i = filtered[i];
+                    if (nodes[child_i].op == LazyOp::RECIP && nodes[child_i].children.size() == 1) {
+                        int recip_child = nodes[child_i].children[0];
+                        for (size_t j = i + 1; j < filtered.size(); ++j) {
+                            if (!keep[j]) continue;
+                            int child_j = filtered[j];
+                            if (child_j == recip_child) {
+                                keep[i] = false;
+                                keep[j] = false;
+                                break;
+                            }
                         }
-                        else if (is_zero(arg)) {
-                            Value eps = node.value_idx != -1 ? values[node.value_idx] : internal::default_eps_value;
-                            int eps_idx = internal::pool.add_value(eps);
-                            int pi_node = get_unary_node(LazyOp::PI, -1, eps_idx);
-                            int two = add_const(Value(SmallStorage(2)));
-                            int half = get_unary_node(LazyOp::RECIP, two);
-                            new_idx = get_binary_node(LazyOp::MUL, pi_node, half);
-                        }
                     }
+                }
+                std::vector<int> after_cancel;
+                for (size_t i = 0; i < filtered.size(); ++i) {
+                    if (keep[i]) after_cancel.push_back(filtered[i]);
+                }
+
+                if (after_cancel.empty()) {
+                    int one_idx = make_temp_const(values, Value(SmallStorage(1)));
+                    int new_idx = make_temp_node(nodes, values, LazyOp::CONST, {}, one_idx);
+                    simplified[idx] = new_idx;
+                }
+                else if (after_cancel.size() == 1) {
+                    simplified[idx] = after_cancel[0];
+                }
+                else {
+                    int new_idx = make_temp_node(nodes, values, LazyOp::PRODUCT, std::move(after_cancel));
+                    simplified[idx] = new_idx;
+                }
+                break;
+            }
+
+            case LazyOp::NEG: {
+                int child = node.children[0];
+                if (nodes[child].op == LazyOp::NEG) {
+                    simplified[idx] = nodes[child].children[0];
                     break;
-                default: break;
                 }
-
-                if (new_idx != idx) {
-                    simplified_idx[idx] = new_idx;
-                    st.pop();
-                    continue;
-                }
-
-                if (is_const0 && is_algebraic(node.op)) {
-                    Value arg = values[nodes[child0_simp].value_idx];
-                    Value eps = node.value_idx != -1 ? values[node.value_idx] : Value{};
-                    Value const_result = compute_node(node.op, arg, Value{}, eps);
-                    int const_node = add_const(const_result);
-                    simplified_idx[idx] = const_node;
-                    st.pop();
-                    continue;
-                }
-
-                int new_unary = get_unary_node(node.op, child0_simp, node.value_idx);
-                simplified_idx[idx] = new_unary;
-                st.pop();
-                continue;
+                // Убрано сворачивание констант
+                simplified[idx] = idx;
+                break;
             }
 
-            // --------------------------------------------------------------------
-            // Бинарные операции (child0 != -1 && child1 != -1)
-            // --------------------------------------------------------------------
-            if (node.child0 != -1 && simplified_idx[node.child0] == -1) {
-                st.push(node.child0);
-                continue;
-            }
-            if (node.child1 != -1 && simplified_idx[node.child1] == -1) {
-                st.push(node.child1);
-                continue;
-            }
-
-            int child0_simp = node.child0 != -1 ? simplified_idx[node.child0] : -1;
-            int child1_simp = node.child1 != -1 ? simplified_idx[node.child1] : -1;
-
-            bool is_const0 = (child0_simp != -1 && nodes[child0_simp].op == LazyOp::CONST);
-            bool is_const1 = (child1_simp != -1 && nodes[child1_simp].op == LazyOp::CONST);
-
-            int new_idx = idx;
-
-            // --------------------------------------------------------------------
-            // Специальная обработка для ADD: превращаем глубокие деревья в SUM
-            // --------------------------------------------------------------------
-            if (node.op == LazyOp::ADD) {
-                std::vector<int> operands;
-                collect_add_operands(idx, operands);
-                if (operands.size() > 2) {
-                    int new_sum = make_sum_node(operands);
-                    simplified_idx[idx] = new_sum;
-                    st.pop();
-                    continue;
+            case LazyOp::RECIP: {
+                int child = node.children[0];
+                if (nodes[child].op == LazyOp::RECIP) {
+                    simplified[idx] = nodes[child].children[0];
+                    break;
                 }
+                // Убрано сворачивание констант
+                simplified[idx] = idx;
+                break;
             }
 
-            // Остальные упрощения для бинарных операций
-            if (node.op == LazyOp::ADD) {
-                if (is_const0 && is_zero(values[nodes[child0_simp].value_idx]))
-                    new_idx = child1_simp;
-                else if (is_const1 && is_zero(values[nodes[child1_simp].value_idx]))
-                    new_idx = child0_simp;
-                else if (child0_simp != -1 && child1_simp != -1) {
-                    const Node& left_n = nodes[child0_simp];
-                    const Node& right_n = nodes[child1_simp];
-                    if (right_n.op == LazyOp::NEG && right_n.child0 == child0_simp)
-                        new_idx = add_const(Value(SmallStorage(0)));
-                    if (left_n.op == LazyOp::NEG && left_n.child0 == child1_simp)
-                        new_idx = add_const(Value(SmallStorage(0)));
+            case LazyOp::EXP: {
+                int child = node.children[0];
+                if (nodes[child].op == LazyOp::LOG) {
+                    simplified[idx] = nodes[child].children[0];
+                    break;
                 }
+                // Убрано сворачивание констант
+                simplified[idx] = idx;
+                break;
             }
-            else if (node.op == LazyOp::MUL) {
-                if (is_const1 && is_one(values[nodes[child1_simp].value_idx]))
-                    new_idx = child0_simp;
-                else if (is_const0 && is_one(values[nodes[child0_simp].value_idx]))
-                    new_idx = child1_simp;
-                else if (is_const1 && is_zero(values[nodes[child1_simp].value_idx]))
-                    new_idx = add_const(Value(SmallStorage(0)));
-                else if (is_const0 && is_zero(values[nodes[child0_simp].value_idx]))
-                    new_idx = add_const(Value(SmallStorage(0)));
-                else if (child0_simp != -1 && child1_simp != -1) {
-                    const Node& right_n = nodes[child1_simp];
-                    if (right_n.op == LazyOp::RECIP && right_n.child0 == child0_simp)
-                        new_idx = add_const(Value(SmallStorage(1)));
-                    const Node& left_n = nodes[child0_simp];
-                    if (left_n.op == LazyOp::RECIP && left_n.child0 == child1_simp)
-                        new_idx = add_const(Value(SmallStorage(1)));
+
+            case LazyOp::LOG: {
+                int child = node.children[0];
+                if (nodes[child].op == LazyOp::EXP) {
+                    simplified[idx] = nodes[child].children[0];
+                    break;
                 }
+                // Убрано сворачивание констант
+                simplified[idx] = idx;
+                break;
             }
-            else if (node.op == LazyOp::POW) {
-                if (is_const1 && is_one(values[nodes[child1_simp].value_idx]))
-                    new_idx = child0_simp;
-                else if (is_const1 && is_zero(values[nodes[child1_simp].value_idx]))
-                    new_idx = add_const(Value(SmallStorage(1)));
-                else if (is_const0 && is_one(values[nodes[child0_simp].value_idx]))
-                    new_idx = add_const(Value(SmallStorage(1)));
-                else if (is_const0 && is_zero(values[nodes[child0_simp].value_idx]) && is_positive(values[nodes[child1_simp].value_idx]))
-                    new_idx = add_const(Value(SmallStorage(0)));
-                else if (is_const1) {
-                    const Value& exp_val = values[nodes[child1_simp].value_idx];
-                    Value one = SmallStorage(1);
-                    Value two = SmallStorage(2);
-                    Value half = eager_div(one, two);
-                    if (exp_val == half) {
-                        int sqrt_node = get_unary_node(LazyOp::SQRT, child0_simp, node.value_idx);
-                        simplified_idx[idx] = sqrt_node;
-                        st.pop();
-                        continue;
-                    }
+
+            case LazyOp::SQRT:
+            case LazyOp::SIN:
+            case LazyOp::COS:
+            case LazyOp::ACOS: {
+                // Убрано сворачивание констант; оставлены только алгебраические упрощения (пока нет)
+                simplified[idx] = idx;
+                break;
+            }
+
+            case LazyOp::PI:
+            case LazyOp::E:
+                simplified[idx] = idx;
+                break;
+
+            case LazyOp::POW: {
+                int base = node.children[0];
+                int exp = node.children[1];
+
+                // x^0 -> 1
+                if (nodes[exp].op == LazyOp::CONST && is_zero(values[nodes[exp].value_idx])) {
+                    int one_idx = make_temp_const(values, Value(SmallStorage(1)));
+                    int new_idx = make_temp_node(nodes, values, LazyOp::CONST, {}, one_idx);
+                    simplified[idx] = new_idx;
+                    break;
+                }
+                // x^1 -> x
+                if (nodes[exp].op == LazyOp::CONST && is_one(values[nodes[exp].value_idx])) {
+                    simplified[idx] = base;
+                    break;
+                }
+                // 1^x -> 1
+                if (nodes[base].op == LazyOp::CONST && is_one(values[nodes[base].value_idx])) {
+                    int one_idx = make_temp_const(values, Value(SmallStorage(1)));
+                    int new_idx = make_temp_node(nodes, values, LazyOp::CONST, {}, one_idx);
+                    simplified[idx] = new_idx;
+                    break;
+                }
+                // 0^positive -> 0
+                if (nodes[base].op == LazyOp::CONST && is_zero(values[nodes[base].value_idx]) &&
+                    nodes[exp].op == LazyOp::CONST && is_positive(values[nodes[exp].value_idx])) {
+                    int zero_idx = make_temp_const(values, Value(SmallStorage(0)));
+                    int new_idx = make_temp_node(nodes, values, LazyOp::CONST, {}, zero_idx);
+                    simplified[idx] = new_idx;
+                    break;
                 }
                 // (a^b)^c -> a^(b*c) для целых показателей
-                else if (child0_simp != -1 && nodes[child0_simp].op == LazyOp::POW &&
-                    nodes[child0_simp].value_idx == -1) {
-                    int a = nodes[child0_simp].child0;
-                    int b = nodes[child0_simp].child1;
-                    int c = child1_simp;
-                    if (b != -1 && c != -1 && nodes[b].op == LazyOp::CONST && nodes[c].op == LazyOp::CONST) {
-                        const Value& vb = values[nodes[b].value_idx];
-                        const Value& vc = values[nodes[c].value_idx];
-                        bool b_int = false, c_int = false;
-
-                        // Проверка целочисленности vb
-                        if (vb.tag == ValueType::Small) {
-                            SmallStorage sb_norm = vb.storage.small;
-                            bool red_b = false;
-                            if (!vb.small_reduced) sb_norm.normalize(red_b);
-                            if (sb_norm.den == 1) b_int = true;
-                        }
-                        else if (vb.tag == ValueType::Big) {
-                            if (vb.storage.big.denominator() == 1) b_int = true;
-                        }
-
-                        // Проверка целочисленности vc
-                        if (vc.tag == ValueType::Small) {
-                            SmallStorage sc_norm = vc.storage.small;
-                            bool red_c = false;
-                            if (!vc.small_reduced) sc_norm.normalize(red_c);
-                            if (sc_norm.den == 1) c_int = true;
-                        }
-                        else if (vc.tag == ValueType::Big) {
-                            if (vc.storage.big.denominator() == 1) c_int = true;
-                        }
-
-                        if (b_int && c_int) {
-                            Value vprod = eager_mul(vb, vc);
-                            int prod_idx = add_const(vprod);
-                            int new_pow = get_pow_node(a, prod_idx, node.value_idx);
-                            simplified_idx[idx] = new_pow;
-                            st.pop();
-                            continue;
-                        }
+                if (nodes[base].op == LazyOp::POW &&
+                    nodes[nodes[base].children[1]].op == LazyOp::CONST &&
+                    nodes[exp].op == LazyOp::CONST) {
+                    const Value& b_val = values[nodes[nodes[base].children[1]].value_idx];
+                    const Value& c_val = values[nodes[exp].value_idx];
+                    auto is_integer_val = [](const Value& v) {
+                        if (v.tag == ValueType::Small) return v.storage.small.den == 1;
+                        if (v.tag == ValueType::Big) return v.storage.big.denominator() == 1;
+                        return false;
+                        };
+                    if (is_integer_val(b_val) && is_integer_val(c_val)) {
+                        Value prod = eager_mul(b_val, c_val);
+                        int new_exp = make_temp_const(values, prod);
+                        int new_base = nodes[base].children[0];
+                        int new_pow = make_temp_node(nodes, values, LazyOp::POW, { new_base, new_exp }, -1, node.eps_idx);
+                        simplified[idx] = new_pow;
+                        break;
                     }
                 }
+                // Убрано сворачивание констант (блок, вычисляющий eager_pow)
+                simplified[idx] = idx;
+                break;
             }
 
-            if (new_idx != idx) {
-                simplified_idx[idx] = new_idx;
-                st.pop();
-                continue;
+            default:
+                simplified[idx] = idx;
+                break;
             }
-
-            if (is_const0 && is_const1) {
-                if (node.op == LazyOp::ADD || node.op == LazyOp::MUL || node.op == LazyOp::POW) {
-                    Value left = values[nodes[child0_simp].value_idx];
-                    Value right = values[nodes[child1_simp].value_idx];
-                    Value eps = node.value_idx != -1 ? values[node.value_idx] : Value{};
-                    Value const_result = compute_node(node.op, left, right, eps);
-                    int const_node = add_const(const_result);
-                    simplified_idx[idx] = const_node;
-                    st.pop();
-                    continue;
-                }
-            }
-
-            int new_binary;
-            if (node.op == LazyOp::POW) {
-                new_binary = get_pow_node(child0_simp, child1_simp, node.value_idx);
-            }
-            else {
-                new_binary = get_binary_node(node.op, child0_simp, child1_simp);
-            }
-            simplified_idx[idx] = new_binary;
-            st.pop();
         }
 
-        return simplified_idx[root_idx];
+        return simplified[root];
     }
 
 } // namespace delta::internal

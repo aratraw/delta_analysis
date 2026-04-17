@@ -3,39 +3,42 @@
 
 #include "node_pool.h"
 #include "evaluation_core.h"
-#include <boost/multiprecision/integer.hpp>   // для lcm, gcd
+
 #include <stack>
-#include <optional>
 #include <vector>
-#include <utility>
+#include <optional>
+#include <algorithm>
+#include <stdexcept>
 
 namespace delta::internal {
 
     // ----------------------------------------------------------------------------
-    // compute_node – без изменений (использует eager_*, которые уже работают с новым Value)
+    // compute_node – вычисление значения узла по его операции и аргументам
     // ----------------------------------------------------------------------------
     inline Value compute_node(LazyOp op, const Value& left, const Value& right, const Value& eps) {
         switch (op) {
-        case LazyOp::ADD:   return eager_add(left, right);
-        case LazyOp::MUL:   return eager_mul(left, right);
-        case LazyOp::NEG:   return eager_neg(left);
-        case LazyOp::RECIP: return eager_div(Value(SmallStorage(1)), left);
-        case LazyOp::SQRT:  return eager_sqrt(left, eps);
-        case LazyOp::EXP:   return eager_exp(left, eps);
-        case LazyOp::LOG:   return eager_log(left, eps);
-        case LazyOp::SIN:   return eager_sin(left, eps);
-        case LazyOp::COS:   return eager_cos(left, eps);
-        case LazyOp::ACOS:  return eager_acos(left, eps);
-        case LazyOp::PI:    return eager_pi(eps);
-        case LazyOp::E:     return eager_e(eps);
-        case LazyOp::POW:   return eager_pow(left, right, eps);
+        case LazyOp::SUM:      // не должен вызываться для SUM (он обрабатывается отдельно в evaluate)
+            throw std::logic_error("compute_node: SUM not supported (use batch_add)");
+        case LazyOp::PRODUCT:  // аналогично, PRODUCT обрабатывается отдельно
+            throw std::logic_error("compute_node: PRODUCT not supported (use eager_mul loop)");
+        case LazyOp::NEG:      return eager_neg(left);
+        case LazyOp::RECIP:    return eager_div(Value(SmallStorage(1)), left);
+        case LazyOp::SQRT:     return eager_sqrt(left, eps);
+        case LazyOp::EXP:      return eager_exp(left, eps);
+        case LazyOp::LOG:      return eager_log(left, eps);
+        case LazyOp::SIN:      return eager_sin(left, eps);
+        case LazyOp::COS:      return eager_cos(left, eps);
+        case LazyOp::ACOS:     return eager_acos(left, eps);
+        case LazyOp::PI:       return eager_pi(eps);
+        case LazyOp::E:        return eager_e(eps);
+        case LazyOp::POW:      return eager_pow(left, right, eps);
         default:
             throw std::logic_error("compute_node: unknown LazyOp");
         }
     }
 
     // ----------------------------------------------------------------------------
-    // batch_add_values – адаптирован под новый tagged union Value (флаг small_reduced)
+    // batch_add_values – эффективное суммирование группы Value с общим знаменателем
     // ----------------------------------------------------------------------------
     inline Value batch_add_values(const std::vector<int>& indices,
         const std::vector<std::optional<Value>>& cache) {
@@ -46,7 +49,7 @@ namespace delta::internal {
             return cache[indices[0]].value();
         }
 
-        // --- Быстрый путь: все операнды SmallStorage и количество ≤ 64 ---
+        // Быстрый путь: все SmallStorage и количество ≤ 64
         bool all_small = true;
         for (int idx : indices) {
             const Value& v = cache[idx].value();
@@ -66,7 +69,6 @@ namespace delta::internal {
             for (int idx : indices) {
                 const SmallStorage& s = cache[idx].value().storage.small;
                 nums.push_back(s.num);
-                // Используем s.den (без битового флага)
                 dens.push_back(s.den);
 
                 absl::uint128 g = binary_gcd(common_denom, s.den);
@@ -109,7 +111,6 @@ namespace delta::internal {
                         common_denom <= (std::numeric_limits<absl::uint128>::max)()) {
                         absl::int128 final_num = negative ? -static_cast<absl::int128>(abs_sum) : static_cast<absl::int128>(abs_sum);
                         SmallStorage result_small(final_num, common_denom);
-                        // Создаём Value с флагом false и нормализуем
                         Value result_val(result_small, false);
                         result_val.normalize();
                         return result_val;
@@ -118,14 +119,14 @@ namespace delta::internal {
             }
         }
 
-        // --- Общий путь с dumb_int – кэшируем нормализованные пары (num, den) ---
+        // Общий путь через dumb_int
         using delta::internal::dumb_int;
         std::vector<std::pair<dumb_int, dumb_int>> norms;
         norms.reserve(indices.size());
         dumb_int common_denom(1);
 
         for (int idx : indices) {
-            auto nd = internal::normalize_to_dumb_int(cache[idx].value());
+            auto nd = normalize_to_dumb_int(cache[idx].value());
             norms.emplace_back(nd.first, nd.second);
             common_denom = boost::multiprecision::lcm(common_denom, nd.second);
         }
@@ -152,7 +153,7 @@ namespace delta::internal {
     }
 
     // ----------------------------------------------------------------------------
-    // process_batch_list – без изменений (использует eager_add и batch_add_values)
+    // process_batch_list – разбивает большой список на батчи и суммирует
     // ----------------------------------------------------------------------------
     inline Value process_batch_list(const std::vector<int>& indices,
         size_t batch_size,
@@ -176,7 +177,7 @@ namespace delta::internal {
     }
 
     // ----------------------------------------------------------------------------
-    // evaluate – итеративный пост-порядок – адаптирован под новый Value
+    // evaluate – итеративное вычисление чистого дерева
     // ----------------------------------------------------------------------------
     inline Value evaluate(int root_idx) {
         const auto& nodes = pool.nodes;
@@ -184,14 +185,10 @@ namespace delta::internal {
         const size_t n = nodes.size();
 
         std::vector<std::optional<Value>> cache(n);
-        std::vector<std::optional<std::vector<int>>> add_cache(n);
-
         std::stack<int> st;
         st.push(root_idx);
 
-        constexpr size_t DIRECT_ADD_LIMIT = 3;
         constexpr size_t MAX_BATCH_SIZE = 64;
-        constexpr size_t MAX_TRANS_BATCH = 8;
 
         while (!st.empty()) {
             int idx = st.top();
@@ -202,155 +199,84 @@ namespace delta::internal {
 
             const Node& node = nodes[idx];
 
+            // CONST – сразу вычисляем
             if (node.op == LazyOp::CONST) {
                 cache[idx] = values[node.value_idx];
                 st.pop();
                 continue;
             }
 
-            // НОВАЯ ВЕТКА ДЛЯ SUM
-            if (node.op == LazyOp::SUM) {
-                bool all_computed = true;
-                if (node.sum_children) {
-                    for (int child : *node.sum_children) {
-                        if (!cache[child].has_value()) {
-                            st.push(child);
-                            all_computed = false;
-                        }
+            // Проверяем готовность детей
+            bool children_ready = true;
+            if (node.children) {
+                for (int32_t child : *node.children) {
+                    if (!cache[child].has_value()) {
+                        st.push(child);
+                        children_ready = false;
                     }
                 }
-                if (!all_computed) continue;
-
-                // Линейная свёртка через eager_add
-                Value acc = cache[(*node.sum_children)[0]].value();
-                for (size_t i = 1; i < node.sum_children->size(); ++i) {
-                    acc = eager_add(acc, cache[(*node.sum_children)[i]].value());
-                }
-                cache[idx] = std::move(acc);
-                st.pop();
-                continue;
             }
-
-            if (node.child0 == -1 && node.child1 == -1) {
-                Value left{}, right{};
-                Value eps = node.value_idx != -1 ? values[node.value_idx] : Value{};
-                Value result = compute_node(node.op, left, right, eps);
-                cache[idx] = result;
-                st.pop();
-                continue;
-            }
-
-            bool need_children = false;
-            if (node.child0 != -1 && !cache[node.child0].has_value()) {
-                st.push(node.child0);
-                need_children = true;
-            }
-            if (node.child1 != -1 && !cache[node.child1].has_value()) {
-                st.push(node.child1);
-                need_children = true;
-            }
-            if (need_children) {
-                continue;
-            }
-
-            // --- Специальная обработка для ADD ---
-            if (node.op == LazyOp::ADD) {
-                std::vector<int> operands;
-                operands.reserve(16);
-
-                if (node.child0 != -1) {
-                    const Node& left_node = nodes[node.child0];
-                    if (left_node.op == LazyOp::ADD && add_cache[node.child0].has_value()) {
-                        auto& child_vec = add_cache[node.child0].value();
-                        if (pool.refcount[node.child0] == 1) {
-                            operands.insert(operands.end(),
-                                std::make_move_iterator(child_vec.begin()),
-                                std::make_move_iterator(child_vec.end()));
-                            child_vec.clear();
-                            add_cache[node.child0].reset();
-                        }
-                        else {
-                            operands.insert(operands.end(), child_vec.begin(), child_vec.end());
-                        }
-                    }
-                    else {
-                        operands.push_back(node.child0);
-                    }
+            else {
+                if (node.child0 != -1 && !cache[node.child0].has_value()) {
+                    st.push(node.child0);
+                    children_ready = false;
                 }
-
-                if (node.child1 != -1) {
-                    const Node& right_node = nodes[node.child1];
-                    if (right_node.op == LazyOp::ADD && add_cache[node.child1].has_value()) {
-                        auto& child_vec = add_cache[node.child1].value();
-                        if (pool.refcount[node.child1] == 1) {
-                            operands.insert(operands.end(),
-                                std::make_move_iterator(child_vec.begin()),
-                                std::make_move_iterator(child_vec.end()));
-                            child_vec.clear();
-                            add_cache[node.child1].reset();
-                        }
-                        else {
-                            operands.insert(operands.end(), child_vec.begin(), child_vec.end());
-                        }
-                    }
-                    else {
-                        operands.push_back(node.child1);
-                    }
+                if (node.child1 != -1 && !cache[node.child1].has_value()) {
+                    st.push(node.child1);
+                    children_ready = false;
                 }
+            }
+            if (!children_ready) continue;
 
-                add_cache[idx] = std::move(operands);
-                const auto& indices = add_cache[idx].value();
-
-                if (indices.size() <= DIRECT_ADD_LIMIT) {
-                    Value sum = cache[indices[0]].value();
-                    for (size_t i = 1; i < indices.size(); ++i) {
-                        sum = eager_add(sum, cache[indices[i]].value());
-                    }
-                    cache[idx] = sum;
-                    st.pop();
-                    continue;
-                }
-
-                std::vector<int> rational_idxs;
-                std::vector<int> trans_idxs;
-                rational_idxs.reserve(indices.size());
-                trans_idxs.reserve(indices.size() / 2);
-
-                for (int operand_idx : indices) {
-                    LazyOp op = nodes[operand_idx].op;
-                    if (op == LazyOp::CONST || op == LazyOp::MUL || op == LazyOp::NEG || op == LazyOp::RECIP) {
-                        rational_idxs.push_back(operand_idx);
-                    }
-                    else {
-                        trans_idxs.push_back(operand_idx);
-                    }
-                }
-
-                Value final_sum;
-                if (trans_idxs.empty()) {
-                    final_sum = process_batch_list(rational_idxs, MAX_BATCH_SIZE, cache);
+            // Все дети готовы – вычисляем текущий узел
+            Value result;
+            switch (node.op) {
+            // БАТЧ-ВЕРСИЯ КОТОРАЯ В ТЕОРИИ ДОЛЖНА РАБОТАТЬ БЫСТРЕЕ НО НУЖНО ПРОСТО СДЕЛАТЬ БАТЧИ РЕКУРСИВНЫМИ ПО 32/16/8
+            // В ТЕКУЩЕМ ИСПОЛНЕНИИ НЕ МОЖЕТ ПОСЧИТАТЬ ДАЖЕ 100 узлов за время жизни вселенной.
+            // Но теперь мы хотя бы знаем достоверно в чём была проблема...
+            // 
+            //case LazyOp::SUM: {
+            //    // Собираем индексы детей и используем batch-суммирование
+            //    std::vector<int> child_indices(node.children->begin(), node.children->end());
+            //    result = process_batch_list(child_indices, MAX_BATCH_SIZE, cache);
+            //    break;
+            //}
+            // Тупая последовательная версия которую предлагают нейронки потому что это гарантированное решение. 
+            // Что в целом так и есть, но я всё ещё считаю что правильный батчинг должен быть быстрее. 
+            case LazyOp::SUM: {
+                // Последовательное сложение с нормализацией после каждого шага
+                // Это предотвращает экспоненциальный рост знаменателя, в отличие от глобального LCM.
+                const auto& children = *node.children;
+                if (children.empty()) {
+                    result = Value(SmallStorage(0));
                 }
                 else {
-                    Value trans_sum = process_batch_list(trans_idxs, MAX_TRANS_BATCH, cache);
-                    if (rational_idxs.empty()) {
-                        final_sum = trans_sum;
-                    }
-                    else {
-                        Value rational_sum = process_batch_list(rational_idxs, MAX_BATCH_SIZE, cache);
-                        final_sum = eager_add(trans_sum, rational_sum);
+                    result = cache[children[0]].value();
+                    for (size_t i = 1; i < children.size(); ++i) {
+                        result = eager_add(result, cache[children[i]].value());
                     }
                 }
-
-                cache[idx] = final_sum;
-                st.pop();
-                continue;
+                break;
+            }
+            case LazyOp::PRODUCT: {
+                // Последовательное умножение (можно добавить batch-оптимизацию позже)
+                Value prod = cache[(*node.children)[0]].value();
+                for (size_t i = 1; i < node.children->size(); ++i) {
+                    prod = eager_mul(prod, cache[(*node.children)[i]].value());
+                }
+                result = prod;
+                break;
+            }
+            default: {
+                // Унарные, бинарные, PI, E, POW
+                Value left = (node.child0 != -1) ? cache[node.child0].value() : Value{};
+                Value right = (node.child1 != -1) ? cache[node.child1].value() : Value{};
+                Value eps = (node.eps_idx != -1) ? values[node.eps_idx] : Value{};
+                result = compute_node(node.op, left, right, eps);
+                break;
+            }
             }
 
-            // --- Все остальные операции ---
-            Value left = node.child0 != -1 ? cache[node.child0].value() : Value{};
-            Value right = node.child1 != -1 ? cache[node.child1].value() : Value{};
-            Value eps = node.value_idx != -1 ? values[node.value_idx] : Value{};
-            Value result = compute_node(node.op, left, right, eps);
             cache[idx] = result;
             st.pop();
         }

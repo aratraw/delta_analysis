@@ -1,16 +1,15 @@
+// rational_fwd.h
 #pragma once
 
 #include <cstddef>
-#include <memory>
-#include <variant>
 
 namespace delta {
     class Rational;
+    class LazyRational;
 }
 
 namespace delta::internal {
     struct SmallStorage;
     struct BigStorage;
-    class ExpressionRoot;
     class Interval;
 }

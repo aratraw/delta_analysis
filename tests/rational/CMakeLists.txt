@@ -1,19 +1,18 @@
 # tests/rational/CMakeLists.txt
-# CMake configuration for rational unit tests.
-
 add_executable(delta_tests_rational
     main_tests_rational.cpp
-    "rational_test.cpp"
-    "rational_test_2.cpp"
-    "lazy_test.cpp"
-     "gc_test.cpp"
-    "interval_test.cpp"
-    "transcendentals_test.cpp"
-    "pow_test.cpp"
-    "eager_test.cpp"
-    "batch_test.cpp"
-#    "performance_test.cpp"
- "performance_compare_test.cpp")
+    rational_test.cpp
+    rational_test_2.cpp
+    interval_test.cpp
+    batch_test.cpp
+    lazy_rational_contract_tests.cpp
+    lazy_test.cpp
+    gc_test.cpp
+    transcendentals_test.cpp
+    pow_test.cpp
+    performance_compare_test.cpp
+    performance_test.cpp
+)
 
 target_include_directories(delta_tests_rational PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/..)
 
@@ -26,6 +25,8 @@ target_link_libraries(delta_tests_rational
 if(MSVC)
     target_compile_options(delta_tests_rational PRIVATE /EHsc)
 endif()
+
+target_compile_definitions(delta_tests_rational PRIVATE DELTA_TESTING)
 
 include(GoogleTest)
 gtest_discover_tests(delta_tests_rational

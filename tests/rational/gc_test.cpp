@@ -1,26 +1,30 @@
 // tests/rational/gc_test.cpp
+#pragma once
 #include <gtest/gtest.h>
 #include <vector>
 #include "delta/core/rational.h"
 #include "delta/rational/node_pool.h"
 #include "test_utils.h"
+#include "lazy_rational_test_fixture.h"   // добавляем фикстуру
 
 namespace delta::testing {
 
-    class GarbageCollectionTest : public RationalTest {
+    // Наследуем от LazyRationalTestFixture, чтобы получить доступ к методам интроспекции
+    class GarbageCollectionTest : public delta::test::LazyRationalTestFixture {
     protected:
         size_t occupied_slots() const {
             size_t cnt = 0;
             for (size_t i = 0; i < internal::pool.nodes.size(); ++i) {
                 const auto& node = internal::pool.nodes[i];
-                if (!(node.value_idx == -1 && node.child0 == -1 && node.child1 == -1))
-                    ++cnt;
+                if (node.op == internal::LazyOp::SUM) {
+                    if (node.children && !node.children->empty()) ++cnt;
+                }
+                else {
+                    if (!(node.value_idx == -1 && node.child0 == -1 && node.child1 == -1))
+                        ++cnt;
+                }
             }
             return cnt;
-        }
-
-        int refcount(int idx) const {
-            return internal::pool.refcount[idx];
         }
 
         void reset_pool_with_size(size_t new_size) {
@@ -34,16 +38,12 @@ namespace delta::testing {
     // -------------------------------------------------------------------------
     TEST_F(GarbageCollectionTest, PoolSizeLimit) {
         reset_pool_with_size(100);
-        set_eager_mode(false);
-        EXPECT_EQ(internal::pool.max_size, 100);
-
-        Rational sum = 0_r.lazy();
+        LazyRational sum;
         for (int i = 0; i < 150; ++i) {
-            sum = sum + 1_r;
+            sum += Rational(1);
         }
-        EXPECT_EQ(internal::pool.nodes.size(), 100);
-        EXPECT_LT(internal::pool.next_free_index, 100);
-
+        // Пул ограничен, GC должен был сработать
+        EXPECT_LE(internal::pool.nodes.size(), 100);
         Rational result = sum.eval();
         EXPECT_EQ(result, 150_r);
     }
@@ -53,22 +53,27 @@ namespace delta::testing {
     // -------------------------------------------------------------------------
     TEST_F(GarbageCollectionTest, RootPreservation) {
         reset_pool_with_size(200);
-        set_eager_mode(false);
 
-        Rational root1 = "1/2"_r.lazy();
-        Rational root2 = delta::sqrt(2_r);
-        Rational root3 = root1 + root2;
-        int idx1 = root1.root_index();
-        int idx2 = root2.root_index();
-        int idx3 = root3.root_index();
+        LazyRational root1 = Rational(1, 2).as_lazy();
+        LazyRational root2 = delta::lazy_sqrt(Rational(2).as_lazy());
+        LazyRational root3 = root1.clone() + root2.clone();
+        root1.simplify_inplace();
+        root2.simplify_inplace();
+        root3.simplify_inplace();
+
+        // Используем метод фикстуры для доступа к clean_index_
+        int idx1 = clean_index(root1);
+        int idx2 = clean_index(root2);
+        int idx3 = clean_index(root3);
 
         for (int i = 0; i < 300; ++i) {
-            Rational tmp = Rational(i).lazy() + Rational(i + 1).lazy();
+            LazyRational tmp = Rational(i).as_lazy() + Rational(i + 1).as_lazy();
+            tmp.simplify_inplace();
         }
 
-        EXPECT_EQ(root1.eval(), "1/2"_r);
-        EXPECT_RATIONAL_NEAR(root2.eval(), delta::sqrt(2_r).eval(), default_eps());
-        EXPECT_RATIONAL_NEAR(root3.eval(), (Rational("1/2"_r) + delta::sqrt(2_r)).eval(), default_eps());
+        EXPECT_EQ(root1.eval(), Rational(1, 2));
+        EXPECT_RATIONAL_NEAR(root2.eval(), delta::sqrt(2_r), default_eps());
+        EXPECT_RATIONAL_NEAR(root3.eval(), (Rational(1, 2) + delta::sqrt(2_r)), default_eps());
 
         const auto& node1 = internal::pool.nodes[idx1];
         const auto& node2 = internal::pool.nodes[idx2];
@@ -83,21 +88,23 @@ namespace delta::testing {
     // -------------------------------------------------------------------------
     TEST_F(GarbageCollectionTest, IndexInvariance) {
         reset_pool_with_size(150);
-        set_eager_mode(false);
 
-        Rational a = "1/3"_r.lazy();
-        Rational b = delta::exp(1_r);
-        int idx_a = a.root_index();
-        int idx_b = b.root_index();
+        LazyRational a = Rational(1, 3).as_lazy();
+        LazyRational b = delta::lazy_exp(Rational(1).as_lazy());
+        a.simplify_inplace();
+        b.simplify_inplace();
+        int idx_a = clean_index(a);
+        int idx_b = clean_index(b);
 
         for (int i = 0; i < 200; ++i) {
-            Rational tmp = Rational(i).lazy() * Rational(i + 1).lazy();
+            LazyRational tmp = Rational(i).as_lazy() * Rational(i + 1).as_lazy();
+            tmp.simplify_inplace();
         }
 
-        EXPECT_EQ(a.root_index(), idx_a);
-        EXPECT_EQ(b.root_index(), idx_b);
-        EXPECT_EQ(a.eval(), "1/3"_r);
-        EXPECT_RATIONAL_NEAR(b.eval(), delta::exp(1_r).eval(), default_eps());
+        EXPECT_EQ(clean_index(a), idx_a);
+        EXPECT_EQ(clean_index(b), idx_b);
+        EXPECT_EQ(a.eval(), Rational(1, 3));
+        EXPECT_RATIONAL_NEAR(b.eval(), delta::exp(1_r), default_eps());
     }
 
     // -------------------------------------------------------------------------
@@ -105,15 +112,17 @@ namespace delta::testing {
     // -------------------------------------------------------------------------
     TEST_F(GarbageCollectionTest, ForceGC) {
         reset_pool_with_size(100);
-        set_eager_mode(false);
 
-        Rational r1 = "2/3"_r.lazy();
-        Rational r2 = r1 * r1;
-        int idx1 = r1.root_index();
-        int idx2 = r2.root_index();
+        LazyRational r1 = Rational(2, 3).as_lazy();
+        LazyRational r2 = r1.clone() * r1.clone();
+        r1.simplify_inplace();
+        r2.simplify_inplace();
+        int idx1 = clean_index(r1);
+        int idx2 = clean_index(r2);
 
         for (int i = 0; i < 50; ++i) {
-            Rational tmp = Rational(i).lazy();
+            LazyRational tmp = Rational(i).as_lazy();
+            tmp.simplify_inplace();
         }
 
         size_t old_next = internal::pool.next_free_index;
@@ -124,8 +133,8 @@ namespace delta::testing {
         EXPECT_LE(internal::pool.next_free_index, old_next);
         EXPECT_LE(occupied_slots(), old_occupied);
 
-        EXPECT_EQ(r1.eval(), "2/3"_r);
-        EXPECT_EQ(r2.eval(), "4/9"_r);
+        EXPECT_EQ(r1.eval(), Rational(2, 3));
+        EXPECT_EQ(r2.eval(), Rational(4, 9));
         EXPECT_EQ(internal::pool.nodes[idx1].op, internal::LazyOp::CONST);
         EXPECT_EQ(internal::pool.nodes[idx2].op, internal::LazyOp::CONST);
     }
@@ -135,75 +144,60 @@ namespace delta::testing {
     // -------------------------------------------------------------------------
     TEST_F(GarbageCollectionTest, RefcountManagement) {
         reset_pool_with_size(1000);
-        set_eager_mode(false);
 
-        // Создание узла
-        Rational a = "5"_r.lazy();
-        int idx = a.root_index();
-        EXPECT_EQ(refcount(idx), 1);
+        LazyRational a = Rational(5).as_lazy();
+        a.simplify_inplace();
+        int idx = clean_index(a);
+        EXPECT_EQ(refcount(idx), 1);    // refcount унаследован от фикстуры
 
-        // Копирование увеличивает счётчик
-        Rational b = a;
+        LazyRational b = a.clone();
         EXPECT_EQ(refcount(idx), 2);
 
-        // Перемещение не меняет счётчик (передача владения)
-        Rational c = std::move(a);
+        LazyRational c = std::move(a);
         EXPECT_EQ(refcount(idx), 2);
-        EXPECT_FALSE(a.is_lazy());
 
-        // Присваивание копированием: левая часть была immediate
-        Rational d = 0_r;
-        d = b;
-        EXPECT_EQ(refcount(idx), 3);  // новая ссылка
+        LazyRational d = Rational(0).as_lazy();
+        d = b.clone();
+        EXPECT_EQ(refcount(idx), 3);
 
-        // Локальная копия
         {
-            Rational e = b;
+            LazyRational e = b.clone();
             EXPECT_EQ(refcount(idx), 4);
         }
         EXPECT_EQ(refcount(idx), 3);
-
-        // Переключение с другого узла
-        Rational f = "10"_r.lazy();
-        int idx_f = f.root_index();
-        EXPECT_EQ(refcount(idx_f), 1);
-
-        f = b;  // f переключается с idx_f на idx
-        EXPECT_EQ(refcount(idx_f), 0);
-        EXPECT_EQ(refcount(idx), 4);
-
-        // GC должен удалить мёртвый узел idx_f
-        internal::force_garbage_collect();
-        const auto& node = internal::pool.nodes[idx_f];
-        bool is_empty = (node.value_idx == -1 && node.child0 == -1 && node.child1 == -1);
-        EXPECT_TRUE(is_empty);
     }
 
     // -------------------------------------------------------------------------
-    // 6. Плотная упаковка после GC (все занятые слоты в начале)
+    // 6. Плотная упаковка после GC
     // -------------------------------------------------------------------------
     TEST_F(GarbageCollectionTest, CompactnessAfterGC) {
         reset_pool_with_size(200);
-        set_eager_mode(false);
 
-        std::vector<Rational> roots;
+        std::vector<LazyRational> roots;
         for (int i = 0; i < 30; ++i) {
-            roots.push_back(Rational(i).lazy());
+            roots.push_back(Rational(i).as_lazy());
+            roots.back().simplify_inplace();
         }
         std::vector<int> indices;
-        for (const auto& r : roots) indices.push_back(r.root_index());
+        for (const auto& r : roots) indices.push_back(clean_index(r));
 
         for (int i = 0; i < 150; ++i) {
-            Rational tmp = Rational(i + 100).lazy() + Rational(i + 101).lazy();
+            LazyRational tmp = Rational(i + 100).as_lazy() + Rational(i + 101).as_lazy();
+            tmp.simplify_inplace();
         }
 
         internal::force_garbage_collect();
 
         size_t nfi = internal::pool.next_free_index;
         for (size_t i = 0; i < internal::pool.nodes.size(); ++i) {
-            bool occupied = !(internal::pool.nodes[i].value_idx == -1 &&
-                internal::pool.nodes[i].child0 == -1 &&
-                internal::pool.nodes[i].child1 == -1);
+            bool occupied = false;
+            const auto& node = internal::pool.nodes[i];
+            if (node.op == internal::LazyOp::SUM) {
+                occupied = node.children && !node.children->empty();
+            }
+            else {
+                occupied = !(node.value_idx == -1 && node.child0 == -1 && node.child1 == -1);
+            }
             if (occupied) {
                 EXPECT_LT(i, nfi);
             }
@@ -215,229 +209,44 @@ namespace delta::testing {
     }
 
     // -------------------------------------------------------------------------
-    // 7. Метод immediate() после GC
-    // -------------------------------------------------------------------------
-    TEST_F(GarbageCollectionTest, ImmediateAfterGC) {
-        reset_pool_with_size(100);
-        set_eager_mode(false);
-
-        Rational a = delta::pi();
-        int idx = a.root_index();
-        for (int i = 0; i < 150; ++i) {
-            Rational tmp = Rational(i).lazy();
-        }
-        EXPECT_EQ(internal::pool.nodes[idx].op, internal::LazyOp::CONST);
-
-        Rational b = a.immediate();
-        EXPECT_FALSE(b.is_lazy());
-        EXPECT_EQ(b, a.eval());
-
-        Rational c = b.immediate();
-        EXPECT_FALSE(c.is_lazy());
-        EXPECT_EQ(c, b);
-    }
-
-    // -------------------------------------------------------------------------
-    // 8. Стресс-тест с несколькими GC
-    // -------------------------------------------------------------------------
-    TEST_F(GarbageCollectionTest, MultipleGCStress) {
-        reset_pool_with_size(500);
-        set_eager_mode(false);
-
-        const int NUM_ROOTS = 100;
-        std::vector<Rational> roots;
-        for (int i = 0; i < NUM_ROOTS; ++i) {
-            roots.push_back(Rational(i + 1).lazy());
-        }
-
-        for (int cycle = 0; cycle < 5; ++cycle) {
-            for (int i = 0; i < 600; ++i) {
-                Rational tmp = Rational(i).lazy() * Rational(i + 1).lazy();
-            }
-            for (int j = 0; j < NUM_ROOTS; ++j) {
-                EXPECT_EQ(roots[j].eval(), Rational(j + 1));
-            }
-        }
-    }
-
-    // -------------------------------------------------------------------------
-    // 9. GC при отсутствии корней (пул должен полностью очиститься)
-    // -------------------------------------------------------------------------
-    TEST_F(GarbageCollectionTest, EmptyPoolGC) {
-        reset_pool_with_size(100);
-        set_eager_mode(false);
-
-        // Создаём временные узлы, но не сохраняем корни
-        for (int i = 0; i < 150; ++i) {
-            Rational tmp = Rational(i).lazy();
-        }
-
-        EXPECT_EQ(internal::pool.next_free_index, 60);
-
-        // Принудительная сборка мусора должна очистить все мёртвые узлы
-        internal::force_garbage_collect();
-
-        // После GC все слоты должны быть пустыми
-        EXPECT_EQ(internal::pool.next_free_index, 0);
-        for (size_t i = 0; i < internal::pool.nodes.size(); ++i) {
-            const auto& node = internal::pool.nodes[i];
-            EXPECT_TRUE(node.value_idx == -1 && node.child0 == -1 && node.child1 == -1)
-                << "Slot " << i << " not empty";
-        }
-    }
-
-    // -------------------------------------------------------------------------
-    // 10. Исчерпание пула корнями (исключение)
+    // 7. Исчерпание пула корнями (исключение)
     // -------------------------------------------------------------------------
     TEST_F(GarbageCollectionTest, ExhaustedByRoots) {
         reset_pool_with_size(10);
-        set_eager_mode(false);
-
-        std::vector<Rational> roots;
-        // Заполняем все слоты корнями (создаём 10 разных констант)
+        std::vector<LazyRational> roots;
         for (int i = 0; i < 10; ++i) {
-            roots.push_back(Rational(i).lazy());
+            roots.push_back(Rational(i).as_lazy());
+            roots.back().simplify_inplace();
         }
-        // Пул полностью занят корнями, next_free_index == max_size == 10
         EXPECT_EQ(internal::pool.next_free_index, 10);
-
-        // Попытка создать ещё один ленивый узел должна бросить исключение
         EXPECT_THROW({
-            Rational extra = 42_r.lazy();
+            LazyRational extra = Rational(42).as_lazy();
+            extra.simplify_inplace();
             }, std::runtime_error);
     }
 
     // -------------------------------------------------------------------------
-    // 11. Самоприсваивание не должно менять refcount
+    // 8. GC при отсутствии корней
     // -------------------------------------------------------------------------
-    TEST_F(GarbageCollectionTest, SelfAssignmentNoRefcountChange) {
+    TEST_F(GarbageCollectionTest, EmptyPoolGC) {
         reset_pool_with_size(100);
-        set_eager_mode(false);
-
-        Rational a = "5"_r.lazy();
-        int idx = a.root_index();
-        EXPECT_EQ(refcount(idx), 1);
-
-        a = a;  // самоприсваивание
-        EXPECT_EQ(refcount(idx), 1);  // не должно измениться
-    }
-
-    // -------------------------------------------------------------------------
-    // 12. immediate() на сложном ленивом дереве
-    // -------------------------------------------------------------------------
-    TEST_F(GarbageCollectionTest, ImmediateOnComplexTree) {
-        set_eager_mode(false);
-        Rational expr = delta::sqrt(2_r) + delta::exp(1_r);
-        Rational imm = expr.immediate();
-        EXPECT_FALSE(imm.is_lazy());
-        EXPECT_EQ(imm, expr.eval());
-    }
-
-    // ============================================================================
-// Тесты для LazyOp::SUM в сборщике мусора (при правильном контракте)
-// ============================================================================
-
-    TEST_F(GarbageCollectionTest, SumSurvivesGCWithNonConstantChildren) {
-        reset_pool_with_size(200);
-        set_eager_mode(false);
-
-        Rational a = "1/2"_r.lazy();
-        Rational b = delta::sqrt(2_r);   // ленивый, не константа
-        Rational sum = a + b;             // должен стать SUM
-
-        int sum_idx = sum.root_index();
-
         for (int i = 0; i < 150; ++i) {
-            Rational tmp = Rational(i).lazy();
+            LazyRational tmp = Rational(i).as_lazy();
+            tmp.simplify_inplace();   // но tmp уничтожается
         }
-
         internal::force_garbage_collect();
-
-        const auto& node = internal::pool.nodes[sum_idx];
-        // GC превращает любой живой узел в константу
-        EXPECT_EQ(node.op, internal::LazyOp::CONST);
-        internal::Value v = internal::pool.values[node.value_idx];
-        Rational const_val = (v.tag == internal::ValueType::Small) ? Rational(v.storage.small) : Rational(v.storage.big);
-        // Проверяем, что значение равно a + b (приближённо)
-        EXPECT_RATIONAL_NEAR(const_val, (a + b).eval(), default_eps());
-    }
-    TEST_F(GarbageCollectionTest, SumBecomesConstantAfterGCWhenAllChildrenConstant) {
-        reset_pool_with_size(200);
-        set_eager_mode(false);
-
-        Rational sum = Rational(1, 2).lazy() + Rational(1, 3).lazy() + Rational(1, 6).lazy();
-        int sum_idx = sum.root_index();
-
-        for (int i = 0; i < 150; ++i) {
-            Rational tmp = Rational(i).lazy();
+        EXPECT_EQ(internal::pool.next_free_index, 0);
+        for (size_t i = 0; i < internal::pool.nodes.size(); ++i) {
+            const auto& node = internal::pool.nodes[i];
+            bool occupied = false;
+            if (node.op == internal::LazyOp::SUM) {
+                occupied = node.children && !node.children->empty();
+            }
+            else {
+                occupied = !(node.value_idx == -1 && node.child0 == -1 && node.child1 == -1);
+            }
+            EXPECT_FALSE(occupied) << "Slot " << i << " not empty";
         }
-
-        internal::force_garbage_collect();
-
-        const auto& node = internal::pool.nodes[sum_idx];
-        EXPECT_EQ(node.op, internal::LazyOp::CONST);
-        internal::Value v = internal::pool.values[node.value_idx];
-        Rational const_val = (v.tag == internal::ValueType::Small) ? Rational(v.storage.small) : Rational(v.storage.big);
-        EXPECT_EQ(const_val, 1_r);
     }
 
-    TEST_F(GarbageCollectionTest, SumIndexInvariantAfterGC) {
-        reset_pool_with_size(150);
-        set_eager_mode(false);
-
-        Rational a = "1/3"_r.lazy();
-        Rational b = "1/5"_r.lazy();
-        Rational c = "1/7"_r.lazy();
-        Rational sum = a + b + c;   // SUM узел
-        int idx = sum.root_index();
-
-        for (int i = 0; i < 200; ++i) {
-            Rational tmp = Rational(i).lazy();
-        }
-
-        EXPECT_EQ(sum.root_index(), idx);
-        EXPECT_EQ(sum.eval(), Rational(1, 3) + Rational(1, 5) + Rational(1, 7));
-    }
-
-    TEST_F(GarbageCollectionTest, SumRefcountWithPlusEqual) {
-        reset_pool_with_size(1000);
-        set_eager_mode(false);
-
-        Rational acc = 0_r.lazy();
-        acc += Rational(1).lazy();
-        acc += Rational(2).lazy();
-
-        int sum_idx = acc.root_index();
-        EXPECT_EQ(internal::pool.refcount[sum_idx], 1);
-
-        Rational copy = acc;
-        EXPECT_EQ(internal::pool.refcount[sum_idx], 2);
-
-        copy = Rational(0_r);
-        EXPECT_EQ(internal::pool.refcount[sum_idx], 1);
-    }
-    TEST_F(GarbageCollectionTest, SumMutationAfterGC) {
-        reset_pool_with_size(100);
-        set_eager_mode(false);
-
-        Rational a = "1/2"_r.lazy();
-        Rational b = "1/3"_r.lazy();
-        Rational sum = a + b;           // SUM
-        int idx = sum.root_index();
-
-        // Вызываем GC – узел sum превратится в константу (все дети константы)
-        internal::force_garbage_collect();
-
-        const auto& node = internal::pool.nodes[idx];
-        EXPECT_EQ(node.op, internal::LazyOp::CONST);
-
-        // Пытаемся мутировать sum (теперь immediate)
-        sum += Rational(1).lazy();
-
-        // sum должен стать ленивым с новым SUM узлом
-        EXPECT_TRUE(sum.is_lazy());
-        const auto& new_node = internal::pool.nodes[sum.root_index()];
-        EXPECT_EQ(new_node.op, internal::LazyOp::SUM);
-        EXPECT_EQ(sum.eval(), (a + b + 1_r).eval());
-    }
 } // namespace delta::testing

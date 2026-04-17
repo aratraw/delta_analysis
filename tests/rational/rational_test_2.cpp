@@ -1,6 +1,7 @@
 // tests/rational/rational_test_2.cpp
 // Additional tests for Rational class covering reduction, canonical form invariants,
 // chained operations, cross-cancellation, epsilon interplay, and large powers.
+#pragma once
 #include <gtest/gtest.h>
 #include <chrono>
 #include <sstream>
@@ -13,7 +14,7 @@ namespace delta::testing {
     protected:
         // Helper to get string representation for inspection
         static std::string to_string_impl(const Rational& r) {
-            return delta::to_string(r);
+            return r.to_string();  // changed from delta::to_string(r)
         }
 
         static std::string numerator_str(const Rational& r) {

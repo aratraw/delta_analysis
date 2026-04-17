@@ -5,7 +5,6 @@
 
 #pragma once
 
-#include "expression_root.h"
 #include "storage.h"
 #include "utils.h"
 
@@ -187,6 +186,10 @@ namespace delta::internal {
             absl::uint128 new_den;
 
             if (denoms_small) {
+                //checking overflow for cases of large integer arithmetic
+                if (would_overflow_mul(sa.num, sb.num)) {
+                    goto mul_fallback;
+                }
                 new_num = sa.num * sb.num;
                 new_den = sa.den * sb.den;
                 return Value(SmallStorage(new_num, new_den), false);

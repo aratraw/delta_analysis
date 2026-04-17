@@ -1,4 +1,5 @@
 // tests/rational/interval_test.cpp
+#pragma once
 #include <gtest/gtest.h>
 #include <limits>
 #include "delta/rational/interval.h"

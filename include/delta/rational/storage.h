@@ -8,7 +8,7 @@
 #include <boost/multiprecision/cpp_int.hpp>
 #include <boost/multiprecision/number.hpp>
 #include <boost/multiprecision/rational_adaptor.hpp>
-
+#include <absl/hash/hash.h>
 #include <cassert>
 #include <memory>
 #include <optional>
@@ -396,5 +396,38 @@ namespace delta::internal {
         else
             return "lazy(" + std::to_string(v.storage.lazy) + ")";
     }
+    // ----------------------------------------------------------------------------
+// Хэширование для SmallStorage (нормализует перед хэшированием)
+// ----------------------------------------------------------------------------
+    template <typename H>
+    H AbslHashValue(H h, const SmallStorage& s) {
+        SmallStorage norm = s;
+        bool red = false;
+        norm.normalize(red);
+        return H::combine(std::move(h), norm.num, norm.den);
+    }
 
+    // ----------------------------------------------------------------------------
+    // Хэширование для BigStorage
+    // ----------------------------------------------------------------------------
+    template <typename H>
+    H AbslHashValue(H h, const BigStorage& b) {
+        return H::combine(std::move(h), b.numerator(), b.denominator());
+    }
+
+    // ----------------------------------------------------------------------------
+    // Хэширование для Value
+    // ----------------------------------------------------------------------------
+    template <typename H>
+    H AbslHashValue(H h, const Value& v) {
+        switch (v.tag) {
+        case ValueType::Small:
+            return AbslHashValue(std::move(h), v.storage.small);
+        case ValueType::Big:
+            return AbslHashValue(std::move(h), v.storage.big);
+        case ValueType::Lazy:
+            return H::combine(std::move(h), v.storage.lazy);
+        }
+        return H::combine(std::move(h), 0);
+    }
 } // namespace delta::internal

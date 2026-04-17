@@ -8,18 +8,16 @@
 
 namespace delta::internal {
 
-    // Функция is_occupied теперь определена как метод NodePool в node_pool.h,
-    // поэтому локальное определение удалено.
-
-    // Сборка мусора: создаём новый пул, копируем в него живые узлы (refcount > 0),
-    // превращая их в константы. Новый пул имеет размер ровно столько, сколько живых узлов,
-    // но не более max_size. Индексы живых узлов сохраняются (копируются на те же места),
-    // поэтому все ссылки на них остаются валидными.
+    // ----------------------------------------------------------------------------
+    // collect_garbage – сборка мусора в глобальном пуле
+    // Живые узлы (refcount > 0) вычисляются и превращаются в CONST.
+    // Мёртвые узлы удаляются (затираются).
+    // ----------------------------------------------------------------------------
     inline void collect_garbage() {
         const size_t n = pool.nodes.size();
         if (n == 0) return;
 
-        // Определяем, какие узлы живы
+        // Определяем живые узлы
         std::vector<bool> alive(n, false);
         size_t alive_count = 0;
         for (size_t i = 0; i < n; ++i) {
@@ -29,30 +27,51 @@ namespace delta::internal {
             }
         }
 
-        // Создаём новый пул с размером max_size (как в исходной версии)
+        // Если нет живых узлов, просто сбрасываем пул
+        if (alive_count == 0) {
+            pool.nodes.clear();
+            pool.refcount.clear();
+            pool.next_free_index = 0;
+            pool.value_cache.clear();
+            pool.constant_cache.clear();
+            pool.sum_product_cache.clear();
+            pool.unary_cache.clear();
+            pool.ternary_cache.clear();
+            return;
+        }
+
+        // Создаём новый пул такого же размера max_size
         NodePool new_pool;
         new_pool.max_size = pool.max_size;
         new_pool.update_gc_threshold();
-        // Используем resize вместо assign, чтобы избежать копирования Node
         new_pool.nodes.resize(pool.max_size);
         new_pool.refcount.assign(pool.max_size, 0);
 
-        // Копируем живые узлы в новый пул (на те же индексы)
+        // Копируем values (все значения остаются, так как на них могут ссылаться)
+        new_pool.values = pool.values;
+        new_pool.value_cache = pool.value_cache;
+
+        // Для каждого живого узла:
+        // 1. Вычисляем его значение
+        // 2. Создаём новый CONST узел с этим значением
+        // 3. Сохраняем его в новом пуле на том же индексе
+        // 4. Копируем refcount
         for (size_t i = 0; i < n; ++i) {
             if (alive[i]) {
                 // Вычисляем значение узла
                 Value v = evaluate(static_cast<int>(i));
+                // Нормализуем перед добавлением как константу
+                if (v.tag == ValueType::Small && !v.small_reduced) {
+                    v.normalize();
+                }
                 int val_idx = new_pool.add_value(v);
-                Node const_node(LazyOp::CONST, -1, -1, val_idx, 0,
-                    Interval(to_double(v)), compute_hash_const(v));
-                // Используем перемещение, так как Node некопируемый (из-за unique_ptr)
+                Node const_node(LazyOp::CONST, val_idx, 0, Interval(to_double(v)), compute_hash_const(v));
                 new_pool.nodes[i] = std::move(const_node);
                 new_pool.refcount[i] = pool.refcount[i];
             }
         }
 
-        // Находим первый свободный слот для next_free_index,
-        // используя метод is_occupied объекта new_pool
+        // Находим первый свободный слот
         new_pool.next_free_index = 0;
         while (new_pool.next_free_index < new_pool.max_size &&
             new_pool.is_occupied(new_pool.nodes[new_pool.next_free_index])) {
@@ -63,6 +82,9 @@ namespace delta::internal {
         pool = std::move(new_pool);
     }
 
+    // ----------------------------------------------------------------------------
+    // set_pool_max_size – установка максимального размера пула
+    // ----------------------------------------------------------------------------
     inline void set_pool_max_size(size_t new_size) {
         if (pool.nodes.empty()) {
             pool.max_size = new_size;
@@ -74,10 +96,16 @@ namespace delta::internal {
         }
     }
 
+    // ----------------------------------------------------------------------------
+    // force_garbage_collect – принудительный запуск GC
+    // ----------------------------------------------------------------------------
     inline void force_garbage_collect() {
         collect_garbage();
     }
 
+    // ----------------------------------------------------------------------------
+    // reset_pool – полный сброс пула (для тестов)
+    // ----------------------------------------------------------------------------
     inline void reset_pool() {
         pool.~NodePool();
         new (&pool) NodePool();

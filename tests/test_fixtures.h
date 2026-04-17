@@ -301,9 +301,3 @@ namespace delta::testing {
     };
 
 } // namespace delta::testing
-
-namespace delta {
-    inline std::ostream& operator<<(std::ostream& os, const Rational& r) {
-        return os << to_string(r);
-    }
-}
