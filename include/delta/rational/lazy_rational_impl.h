@@ -749,7 +749,11 @@ namespace delta {
     // eval, eval_inplace, simplify, simplify_inplace, approx_interval
     // ============================================================================
 
-    // Minor ToDo: перенести в evaluate_impl.h и тоже имплементировать оптимальный батчинг (неоптимальный - не имплементировать).
+    // Minor ToDo: по возможности перенести всю логику вычисления в evaluation_impl. 
+    // В этом таске могут вылезти подводные камни в виде циклических зависимостей, тогда придётся немного переставлять архитектуру.
+    // к тому же объединять оценку грязного и чистого дерева не так просто потому что это разные структуры данных.
+    // А почему вообще они разные? А разные ли они? Есть ли в node_pool эти дурацкие child0 и child1 тогда как в грязном дереве у нас всё красиво через вектор?
+    // Я не знаю. Никто не знает. Работает - не трожь. Работает быстрее чем Boost - тем более не трожь.
     inline Rational LazyRational::eval_dirty() const {
         assert(state_ == State::Dirty);
         const auto& nodes = nodes_;
@@ -785,10 +789,8 @@ namespace delta {
                     result = internal::Value(internal::SmallStorage(0));
                 }
                 else {
-                    result = cache[dn.children[0]].value();
-                    for (size_t i = 1; i < dn.children.size(); ++i) {
-                        result = internal::eager_add(result, cache[dn.children[i]].value());
-                    }
+                    // Используем версию без копирования Value, работающую напрямую с индексами и кэшем
+                    result = internal::leapfrog_reduce_from_cache(dn.children.data(), dn.children.size(), cache);
                 }
                 break;
             }
@@ -816,14 +818,14 @@ namespace delta {
             case internal::LazyOp::SIN:
             case internal::LazyOp::COS:
             case internal::LazyOp::ACOS: {
-                internal::Value eps = constants[dn.const_index]; // eps хранится в const_index для этих операций
+                internal::Value eps = constants[dn.const_index];
                 internal::Value arg = cache[dn.children[0]].value();
                 switch (dn.op) {
                 case internal::LazyOp::SQRT: result = internal::eager_sqrt(arg, eps); break;
-                case internal::LazyOp::EXP:  result = internal::eager_exp(arg, eps); break;
-                case internal::LazyOp::LOG:  result = internal::eager_log(arg, eps); break;
-                case internal::LazyOp::SIN:  result = internal::eager_sin(arg, eps); break;
-                case internal::LazyOp::COS:  result = internal::eager_cos(arg, eps); break;
+                case internal::LazyOp::EXP:  result = internal::eager_exp(arg, eps);  break;
+                case internal::LazyOp::LOG:  result = internal::eager_log(arg, eps);  break;
+                case internal::LazyOp::SIN:  result = internal::eager_sin(arg, eps);  break;
+                case internal::LazyOp::COS:  result = internal::eager_cos(arg, eps);  break;
                 case internal::LazyOp::ACOS: result = internal::eager_acos(arg, eps); break;
                 default: break;
                 }
@@ -852,23 +854,147 @@ namespace delta {
         return Rational(cache[root_].value());
     }
 
+
     // Minor-major ToDo: ввести eval_cache внутрь LazyRational чтоб кэшировать результат вычисления для выдачи при повторных требованиях.
     // - Кэш тухнет при изменении дерева. Имплементировать так чтобы все эти дурацкие кэши не жрали лишнего байтового веса объекта когда не используются. 
     inline Rational LazyRational::eval(bool skip_simplify) const {
-        if (state_ == State::Dirty) {
-            if (skip_simplify) {
-                return eval_dirty();//выход: считаем от гряхного дерева потому что попросили. Иначе идём в станлартный путь.
+        // Быстрая проверка: если дерево уже является единственной константой
+        if (state_ == State::Clean) {
+            const auto& node = internal::pool.nodes[clean_index_];
+            if (node.op == internal::LazyOp::CONST) {
+                return Rational(internal::pool.values[node.value_idx]);
             }
-            // Исходное поведение: канонизируем (если Dirty) и вычисляем от индекса в пуле.
+        }
+        //теперь мы достоверно знаем что state_==state::Dirty потому что он не Clean.
+        else{
+            //быстрый выход если всё дерево уже является константой.
+            if (nodes_.size() == 1 && nodes_[0].op == internal::LazyOp::CONST) {
+                return Rational(constants_[nodes_[0].const_index]);
+            }
+            if (skip_simplify) {
+                return eval_dirty();
+            }
+            //далее фоллбэк на честную канонизацию грязного дерева и вычисление от чистого индекса
             canonicalize();
         }
         return Rational(internal::evaluate(clean_index_));
     }
 
+
+    inline Rational LazyRational::eval_dirty_inplace() {
+        assert(state_ == State::Dirty);
+        const size_t n = nodes_.size();
+        std::vector<std::optional<internal::Value>> cache(n);
+        std::stack<int> st;
+        st.push(root_);
+
+        while (!st.empty()) {
+            int idx = st.top();
+            if (cache[idx].has_value()) {
+                st.pop();
+                continue;
+            }
+            const auto& dn = nodes_[idx];
+            bool children_ready = true;
+            for (int child : dn.children) {
+                if (!cache[child].has_value()) {
+                    st.push(child);
+                    children_ready = false;
+                }
+            }
+            if (!children_ready) continue;
+
+            internal::Value result;
+            switch (dn.op) {
+            case internal::LazyOp::CONST:
+                result = constants_[dn.const_index];
+                break;
+            case internal::LazyOp::SUM: {
+                if (dn.children.empty()) {
+                    result = internal::Value(internal::SmallStorage(0));
+                }
+                else {
+                    std::vector<internal::Value> child_values;
+                    child_values.reserve(dn.children.size());
+                    for (int child : dn.children) {
+                        child_values.push_back(cache[child].value());
+                    }
+                    internal::leapfrog_reduce_inplace(child_values);
+                    result = std::move(child_values[0]);
+                }
+                break;
+            }
+            case internal::LazyOp::PRODUCT: {
+                if (dn.children.empty()) {
+                    result = internal::Value(internal::SmallStorage(1));
+                }
+                else {
+                    result = cache[dn.children[0]].value();
+                    for (size_t i = 1; i < dn.children.size(); ++i) {
+                        result = internal::eager_mul(result, cache[dn.children[i]].value());
+                    }
+                }
+                break;
+            }
+            case internal::LazyOp::NEG:
+                result = internal::eager_neg(cache[dn.children[0]].value());
+                break;
+            case internal::LazyOp::RECIP:
+                result = internal::eager_div(internal::Value(internal::SmallStorage(1)), cache[dn.children[0]].value());
+                break;
+            case internal::LazyOp::SQRT:
+            case internal::LazyOp::EXP:
+            case internal::LazyOp::LOG:
+            case internal::LazyOp::SIN:
+            case internal::LazyOp::COS:
+            case internal::LazyOp::ACOS: {
+                internal::Value eps = constants_[dn.const_index];
+                internal::Value arg = cache[dn.children[0]].value();
+                switch (dn.op) {
+                case internal::LazyOp::SQRT: result = internal::eager_sqrt(arg, eps); break;
+                case internal::LazyOp::EXP:  result = internal::eager_exp(arg, eps);  break;
+                case internal::LazyOp::LOG:  result = internal::eager_log(arg, eps);  break;
+                case internal::LazyOp::SIN:  result = internal::eager_sin(arg, eps);  break;
+                case internal::LazyOp::COS:  result = internal::eager_cos(arg, eps);  break;
+                case internal::LazyOp::ACOS: result = internal::eager_acos(arg, eps); break;
+                default: break;
+                }
+                break;
+            }
+            case internal::LazyOp::PI:
+            case internal::LazyOp::E: {
+                internal::Value eps = constants_[dn.const_index];
+                if (dn.op == internal::LazyOp::PI) result = internal::eager_pi(eps);
+                else result = internal::eager_e(eps);
+                break;
+            }
+            case internal::LazyOp::POW: {
+                internal::Value base = cache[dn.children[0]].value();
+                internal::Value exp = cache[dn.children[1]].value();
+                internal::Value eps = constants_[dn.const_index];
+                result = internal::eager_pow(base, exp, eps);
+                break;
+            }
+            default:
+                throw std::logic_error("eval_dirty_inplace: unknown op");
+            }
+            cache[idx] = result;
+            st.pop();
+        }
+        return Rational(cache[root_].value());
+    }
+
+    // в теории для получения самого грязного, тупого и одновременно быстрого вычисления дерева,
+    // которое должно максимально срезать любые копирования и аллокации,
+    // если вам не жалко потерять структуру дерева и нет смысла интернировать его в глобальный пул
+    // тогда вычисляйте дерево следующим образом: 
+    // my_cool_lazy_tree.eval_inplace(true);
+    // Rational a = eval();
+    // Очевидно? Абсолютно нет. Производительно? Вполне возможно.
     inline void LazyRational::eval_inplace(bool skip_simplify) {
         if (state_ == State::Dirty) {
             if (skip_simplify) {
-                Rational result = eval_dirty();
+                Rational result = eval_dirty_inplace();
                 // Заменяем текущее дерево на константу
                 int new_clean = internal::add_const(result.value());
                 internal::increment_ref(new_clean);
@@ -878,13 +1004,13 @@ namespace delta {
                 nodes_.clear();
                 constants_.clear();
                 root_ = -1;
-                cached_interval_.reset();// а зачем ресетить интервал если численный результат дерева не изменился? Не знаю. Подумаем над этим.
+                cached_interval_.reset();
                 return;
             }
-            //исходное поведение
+            // Исходное поведение: канонизируем (если Dirty) и вычисляем от индекса в пуле
             canonicalize();
         }
-        // Исходное поведение
+        // Исходное поведение для уже чистого дерева
         Rational result = Rational(internal::evaluate(clean_index_));
         int new_clean = internal::add_const(result.value());
         internal::increment_ref(new_clean);

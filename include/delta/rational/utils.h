@@ -18,7 +18,7 @@
 static inline int ctz64(uint64_t x) {
     unsigned long index;
     if (_BitScanForward64(&index, x)) return static_cast<int>(index);
-    return 64; // x != 0, so this line is never reached
+    return 64;
 }
 #else
 static inline int ctz64(uint64_t x) {
@@ -177,7 +177,6 @@ namespace delta::internal {
 #endif
     }
 
-    // Перегрузка для беззнаковых (знаменатели)
     inline bool would_overflow_mul(absl::uint128 a, absl::uint128 b) noexcept {
 #if defined(__GNUC__) || defined(__clang__)
         unsigned __int128 result;

@@ -171,6 +171,7 @@ namespace delta {
         // ------------------------------------------------------------------------
         void canonicalize() const;          // Dirty -> Clean, меняет state_ и clean_index_
         Rational eval_dirty() const;
+        Rational eval_dirty_inplace();
         int import_tree(const LazyRational& other);
         int add_constant(const internal::Value& v);
         int new_dirty_node(internal::LazyOp op, absl::InlinedVector<int, 2> children, int const_index = -1);

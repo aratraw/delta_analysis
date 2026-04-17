@@ -3,24 +3,36 @@
 
 #include "node_pool.h"
 #include "evaluation_core.h"
+#include "utils.h"
 
 #include <stack>
 #include <vector>
 #include <optional>
 #include <algorithm>
 #include <stdexcept>
+#include <cstdint>
 
 namespace delta::internal {
 
-    // ----------------------------------------------------------------------------
-    // compute_node – вычисление значения узла по его операции и аргументам
-    // ----------------------------------------------------------------------------
+    // ============================================================================
+    // Batching configuration
+    // ============================================================================
+    inline constexpr size_t BATCH_SIZE = 32;   // размер батча для leapfrog
+
+    // ============================================================================
+    // Forward declarations
+    // ============================================================================
+    inline Value leapfrog_reduce(std::vector<Value>& values);
+
+    // ============================================================================
+    // compute_node – dispatcher for non‑SUM operations
+    // ============================================================================
     inline Value compute_node(LazyOp op, const Value& left, const Value& right, const Value& eps) {
         switch (op) {
-        case LazyOp::SUM:      // не должен вызываться для SUM (он обрабатывается отдельно в evaluate)
-            throw std::logic_error("compute_node: SUM not supported (use batch_add)");
-        case LazyOp::PRODUCT:  // аналогично, PRODUCT обрабатывается отдельно
-            throw std::logic_error("compute_node: PRODUCT not supported (use eager_mul loop)");
+        case LazyOp::SUM:
+            throw std::logic_error("compute_node: SUM must be handled by leapfrog_reduce");
+        case LazyOp::PRODUCT:
+            throw std::logic_error("compute_node: PRODUCT not yet batched (use sequential eager_mul)");
         case LazyOp::NEG:      return eager_neg(left);
         case LazyOp::RECIP:    return eager_div(Value(SmallStorage(1)), left);
         case LazyOp::SQRT:     return eager_sqrt(left, eps);
@@ -37,148 +49,171 @@ namespace delta::internal {
         }
     }
 
-    // ----------------------------------------------------------------------------
-    // batch_add_values – эффективное суммирование группы Value с общим знаменателем
-    // ----------------------------------------------------------------------------
-    inline Value batch_add_values(const std::vector<int>& indices,
-        const std::vector<std::optional<Value>>& cache) {
-        if (indices.empty()) {
-            return Value(SmallStorage(0));
+    // ============================================================================
+    // Simple sequential summation for a batch (stride > 0)
+    // ============================================================================
+    inline Value sum_batch_sequential(const Value* batch, size_t stride, size_t count) {
+        if (count == 0) return Value(SmallStorage(0));
+        Value result = batch[0];
+        for (size_t i = 1; i < count; ++i) {
+            add_inplace(result, batch[i * stride]);
         }
-        if (indices.size() == 1) {
-            return cache[indices[0]].value();
-        }
-
-        // Быстрый путь: все SmallStorage и количество ≤ 64
-        bool all_small = true;
-        for (int idx : indices) {
-            const Value& v = cache[idx].value();
-            if (v.tag != ValueType::Small) {
-                all_small = false;
-                break;
-            }
-        }
-
-        if (all_small && indices.size() <= 64) {
-            absl::uint128 common_denom = 1;
-            std::vector<absl::int128> nums;
-            std::vector<absl::uint128> dens;
-            nums.reserve(indices.size());
-            dens.reserve(indices.size());
-
-            for (int idx : indices) {
-                const SmallStorage& s = cache[idx].value().storage.small;
-                nums.push_back(s.num);
-                dens.push_back(s.den);
-
-                absl::uint128 g = binary_gcd(common_denom, s.den);
-                absl::uint128 lcm_candidate = common_denom / g;
-                if (lcm_candidate > (std::numeric_limits<absl::uint128>::max)() / s.den) {
-                    all_small = false;
-                    break;
-                }
-                common_denom = lcm_candidate * s.den;
-            }
-
-            if (all_small) {
-                absl::int128 sum_num = 0;
-                bool overflow = false;
-                for (size_t i = 0; i < indices.size(); ++i) {
-                    absl::uint128 factor = common_denom / dens[i];
-                    if (nums[i] != 0 && factor > 0) {
-                        absl::uint128 abs_num = nums[i] < 0 ? static_cast<absl::uint128>(-nums[i]) : static_cast<absl::uint128>(nums[i]);
-                        if (abs_num > (std::numeric_limits<absl::uint128>::max)() / factor) {
-                            overflow = true;
-                            break;
-                        }
-                    }
-                    absl::int128 term = nums[i] * static_cast<absl::int128>(factor);
-                    if (would_overflow_add(sum_num, term)) {
-                        overflow = true;
-                        break;
-                    }
-                    sum_num += term;
-                }
-                if (!overflow) {
-                    bool negative = (sum_num < 0);
-                    absl::uint128 abs_sum = negative ? static_cast<absl::uint128>(-sum_num) : static_cast<absl::uint128>(sum_num);
-                    absl::uint128 g = binary_gcd(abs_sum, common_denom);
-                    if (g > 1) {
-                        abs_sum /= g;
-                        common_denom /= g;
-                    }
-                    if (abs_sum <= static_cast<absl::uint128>((std::numeric_limits<absl::int128>::max)()) &&
-                        common_denom <= (std::numeric_limits<absl::uint128>::max)()) {
-                        absl::int128 final_num = negative ? -static_cast<absl::int128>(abs_sum) : static_cast<absl::int128>(abs_sum);
-                        SmallStorage result_small(final_num, common_denom);
-                        Value result_val(result_small, false);
-                        result_val.normalize();
-                        return result_val;
-                    }
-                }
-            }
-        }
-
-        // Общий путь через dumb_int
-        using delta::internal::dumb_int;
-        std::vector<std::pair<dumb_int, dumb_int>> norms;
-        norms.reserve(indices.size());
-        dumb_int common_denom(1);
-
-        for (int idx : indices) {
-            auto nd = normalize_to_dumb_int(cache[idx].value());
-            norms.emplace_back(nd.first, nd.second);
-            common_denom = boost::multiprecision::lcm(common_denom, nd.second);
-        }
-
-        dumb_int sum_num(0);
-        for (size_t i = 0; i < norms.size(); ++i) {
-            dumb_int factor = common_denom / norms[i].second;
-            sum_num += norms[i].first * factor;
-        }
-
-        dumb_int g = boost::multiprecision::gcd(sum_num, common_denom);
-        if (g != 0) {
-            sum_num /= g;
-            common_denom /= g;
-        }
-
-        if (fits_in_int128(sum_num) && fits_in_uint128(common_denom)) {
-            SmallStorage result_small(dumb_int_to_int128(sum_num), dumb_int_to_uint128(common_denom));
-            Value result_val(result_small, false);
-            result_val.normalize();
-            return result_val;
-        }
-        return Value(BigStorage(sum_num, common_denom));
+        return result;
     }
 
-    // ----------------------------------------------------------------------------
-    // process_batch_list – разбивает большой список на батчи и суммирует
-    // ----------------------------------------------------------------------------
-    inline Value process_batch_list(const std::vector<int>& indices,
-        size_t batch_size,
-        const std::vector<std::optional<Value>>& cache) {
-        if (indices.empty()) return Value(SmallStorage(0));
-        if (indices.size() <= batch_size) {
-            return batch_add_values(indices, cache);
+    // ============================================================================
+    // Main Leapfrog Reduction – in‑place, minimal allocations
+    // ============================================================================
+    inline Value leapfrog_reduce(std::vector<Value>& values) {
+        const size_t N = values.size();
+        if (N == 0) return Value(SmallStorage(0));
+        if (N == 1) return values[0];
+        if (N <= BATCH_SIZE) {
+            return sum_batch_sequential(values.data(), 1, N);
         }
-        std::vector<Value> partial_sums;
-        partial_sums.reserve((indices.size() + batch_size - 1) / batch_size);
-        for (size_t start = 0; start < indices.size(); start += batch_size) {
-            size_t end = std::min(start + batch_size, indices.size());
-            std::vector<int> chunk(indices.begin() + start, indices.begin() + end);
-            partial_sums.push_back(batch_add_values(chunk, cache));
+
+        // ---------- First pass: compress into v2 ----------
+        const size_t M = (N + BATCH_SIZE - 1) / BATCH_SIZE;
+        const size_t M_padded = ((M + BATCH_SIZE - 1) / BATCH_SIZE) * BATCH_SIZE;
+
+        std::vector<Value> v2(M_padded, Value(SmallStorage(0)));
+
+        for (size_t i = 0; i < M; ++i) {
+            size_t start = i * BATCH_SIZE;
+            size_t cnt = std::min(BATCH_SIZE, N - start);
+            v2[i] = sum_batch_sequential(&values[start], 1, cnt);
         }
-        Value sum = partial_sums[0];
-        for (size_t i = 1; i < partial_sums.size(); ++i) {
-            sum = eager_add(sum, partial_sums[i]);
+
+        // ---------- Iterative leapfrog reduction ----------
+        size_t stride = 1;
+        size_t current_len = M_padded;
+
+        while (stride * BATCH_SIZE <= current_len) {
+            for (size_t i = 0; i + (BATCH_SIZE - 1) * stride < current_len; i += BATCH_SIZE * stride) {
+                v2[i] = sum_batch_sequential(&v2[i], stride, BATCH_SIZE);
+            }
+            stride *= BATCH_SIZE;
         }
-        return sum;
+
+        // ---------- Final tail collection ----------
+        std::vector<Value> tail;
+        tail.reserve((current_len + stride - 1) / stride);
+        for (size_t i = 0; i < current_len; i += stride) {
+            tail.push_back(std::move(v2[i]));
+        }
+
+        return sum_batch_sequential(tail.data(), 1, tail.size());
     }
 
-    // ----------------------------------------------------------------------------
-    // evaluate – итеративное вычисление чистого дерева
-    // ----------------------------------------------------------------------------
+
+    // Перегрузка для работы с индексами и кэшем (без копирования Value, для грязного дерева.)
+// Версия для работы с массивом индексов и кэшем (без копирования Value)
+    inline Value leapfrog_reduce_from_cache(const int* indices, size_t N,
+        const std::vector<std::optional<Value>>& cache) {
+        if (N == 0) return Value(SmallStorage(0));
+        if (N == 1) return cache[indices[0]].value();
+        if (N <= BATCH_SIZE) {
+            // Последовательное суммирование по индексам
+            Value result = cache[indices[0]].value();
+            for (size_t i = 1; i < N; ++i) {
+                add_inplace(result, cache[indices[i]].value());
+            }
+            return result;
+        }
+
+        // Первый проход: сжатие в v2
+        const size_t M = (N + BATCH_SIZE - 1) / BATCH_SIZE;
+        const size_t M_padded = ((M + BATCH_SIZE - 1) / BATCH_SIZE) * BATCH_SIZE;
+
+        std::vector<Value> v2(M_padded, Value(SmallStorage(0)));
+
+        for (size_t i = 0; i < M; ++i) {
+            size_t start = i * BATCH_SIZE;
+            size_t cnt = std::min(BATCH_SIZE, N - start);
+            Value batch_sum = cache[indices[start]].value();
+            for (size_t j = 1; j < cnt; ++j) {
+                add_inplace(batch_sum, cache[indices[start + j]].value());
+            }
+            v2[i] = std::move(batch_sum);
+        }
+
+        // Leapfrog редукция по v2
+        size_t stride = 1;
+        size_t current_len = M_padded;
+
+        while (stride * BATCH_SIZE <= current_len) {
+            for (size_t i = 0; i + (BATCH_SIZE - 1) * stride < current_len; i += BATCH_SIZE * stride) {
+                v2[i] = sum_batch_sequential(&v2[i], stride, BATCH_SIZE);
+            }
+            stride *= BATCH_SIZE;
+        }
+
+        // Финальный хвост
+        std::vector<Value> tail;
+        tail.reserve((current_len + stride - 1) / stride);
+        for (size_t i = 0; i < current_len; i += stride) {
+            tail.push_back(std::move(v2[i]));
+        }
+
+        return sum_batch_sequential(tail.data(), 1, tail.size());
+    }
+
+
+    // ============================================================================
+    // In‑place Leapfrog Reduction – мутирует переданный вектор values, нужен для eval_inplace(skip_simplify=true) 
+    // где нам плевать на сохранение структуры дерева, а главное быстрый результат.
+    // ============================================================================
+    inline void leapfrog_reduce_inplace(std::vector<Value>& values) {
+        const size_t N = values.size();
+        if (N <= 1) return;
+        if (N <= BATCH_SIZE) {
+            values[0] = sum_batch_sequential(values.data(), 1, N);
+            values.resize(1);
+            return;
+        }
+
+        // Первый проход: сжатие в начало вектора (работаем как с v2, но без отдельного вектора)
+        const size_t M = (N + BATCH_SIZE - 1) / BATCH_SIZE;
+        const size_t M_padded = ((M + BATCH_SIZE - 1) / BATCH_SIZE) * BATCH_SIZE;
+
+        // Расширяем вектор до M_padded, заполняя нулями
+        values.resize(M_padded, Value(SmallStorage(0)));
+
+        // Сворачиваем батчи из исходных N элементов и записываем в начало (индексы 0..M-1)
+        for (size_t i = 0; i < M; ++i) {
+            size_t start = i * BATCH_SIZE;
+            size_t cnt = std::min(BATCH_SIZE, N - start);
+            values[i] = sum_batch_sequential(&values[start], 1, cnt);
+        }
+        // Остальные элементы (M..M_padded-1) уже нули
+
+        // Leapfrog итерация
+        size_t stride = 1;
+        size_t current_len = M_padded;
+
+        while (stride * BATCH_SIZE <= current_len) {
+            for (size_t i = 0; i + (BATCH_SIZE - 1) * stride < current_len; i += BATCH_SIZE * stride) {
+                values[i] = sum_batch_sequential(&values[i], stride, BATCH_SIZE);
+            }
+            stride *= BATCH_SIZE;
+        }
+
+        // Сбор хвоста в начало
+        size_t tail_idx = 0;
+        for (size_t i = 0; i < current_len; i += stride) {
+            if (i != tail_idx) {
+                values[tail_idx] = std::move(values[i]);
+            }
+            ++tail_idx;
+        }
+        values.resize(tail_idx);
+        // Финальное суммирование хвоста
+        values[0] = sum_batch_sequential(values.data(), 1, tail_idx);
+        values.resize(1);
+    }
+    // ============================================================================
+    // evaluate – computes a clean tree (NodePool)
+    // ============================================================================
     inline Value evaluate(int root_idx) {
         const auto& nodes = pool.nodes;
         const auto& values = pool.values;
@@ -187,8 +222,6 @@ namespace delta::internal {
         std::vector<std::optional<Value>> cache(n);
         std::stack<int> st;
         st.push(root_idx);
-
-        constexpr size_t MAX_BATCH_SIZE = 64;
 
         while (!st.empty()) {
             int idx = st.top();
@@ -199,14 +232,12 @@ namespace delta::internal {
 
             const Node& node = nodes[idx];
 
-            // CONST – сразу вычисляем
             if (node.op == LazyOp::CONST) {
                 cache[idx] = values[node.value_idx];
                 st.pop();
                 continue;
             }
 
-            // Проверяем готовность детей
             bool children_ready = true;
             if (node.children) {
                 for (int32_t child : *node.children) {
@@ -228,53 +259,38 @@ namespace delta::internal {
             }
             if (!children_ready) continue;
 
-            // Все дети готовы – вычисляем текущий узел
             Value result;
-            switch (node.op) {
-            // БАТЧ-ВЕРСИЯ КОТОРАЯ В ТЕОРИИ ДОЛЖНА РАБОТАТЬ БЫСТРЕЕ НО НУЖНО ПРОСТО СДЕЛАТЬ БАТЧИ РЕКУРСИВНЫМИ ПО 32/16/8
-            // В ТЕКУЩЕМ ИСПОЛНЕНИИ НЕ МОЖЕТ ПОСЧИТАТЬ ДАЖЕ 100 узлов за время жизни вселенной.
-            // Но теперь мы хотя бы знаем достоверно в чём была проблема...
-            // 
-            //case LazyOp::SUM: {
-            //    // Собираем индексы детей и используем batch-суммирование
-            //    std::vector<int> child_indices(node.children->begin(), node.children->end());
-            //    result = process_batch_list(child_indices, MAX_BATCH_SIZE, cache);
-            //    break;
-            //}
-            // Тупая последовательная версия которую предлагают нейронки потому что это гарантированное решение. 
-            // Что в целом так и есть, но я всё ещё считаю что правильный батчинг должен быть быстрее. 
-            case LazyOp::SUM: {
-                // Последовательное сложение с нормализацией после каждого шага
-                // Это предотвращает экспоненциальный рост знаменателя, в отличие от глобального LCM.
+            if (node.op == LazyOp::SUM) {
                 const auto& children = *node.children;
                 if (children.empty()) {
                     result = Value(SmallStorage(0));
                 }
                 else {
+                    std::vector<Value> child_values;
+                    child_values.reserve(children.size());
+                    for (int32_t child_idx : children) {
+                        child_values.push_back(cache[child_idx].value());
+                    }
+                    result = leapfrog_reduce(child_values);
+                }
+            }
+            else if (node.op == LazyOp::PRODUCT) {
+                const auto& children = *node.children;
+                if (children.empty()) {
+                    result = Value(SmallStorage(1));
+                }
+                else {
                     result = cache[children[0]].value();
                     for (size_t i = 1; i < children.size(); ++i) {
-                        result = eager_add(result, cache[children[i]].value());
+                        result = eager_mul(result, cache[children[i]].value());
                     }
                 }
-                break;
             }
-            case LazyOp::PRODUCT: {
-                // Последовательное умножение (можно добавить batch-оптимизацию позже)
-                Value prod = cache[(*node.children)[0]].value();
-                for (size_t i = 1; i < node.children->size(); ++i) {
-                    prod = eager_mul(prod, cache[(*node.children)[i]].value());
-                }
-                result = prod;
-                break;
-            }
-            default: {
-                // Унарные, бинарные, PI, E, POW
+            else {
                 Value left = (node.child0 != -1) ? cache[node.child0].value() : Value{};
                 Value right = (node.child1 != -1) ? cache[node.child1].value() : Value{};
                 Value eps = (node.eps_idx != -1) ? values[node.eps_idx] : Value{};
                 result = compute_node(node.op, left, right, eps);
-                break;
-            }
             }
 
             cache[idx] = result;

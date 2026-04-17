@@ -84,6 +84,89 @@ namespace delta::internal {
     // без нормализации и GCD (кроме fallback при переполнении)
     // ============================================================================
 
+    //ToDo: убрать реализацию inplace_add из rational_impl.h так, чтобы он использовал эту функцию из evaluation_core. 
+    // при коллизии функцию в текущем файле evaluation_core необходимо оставить.
+    inline void add_inplace(Value& a, const Value& b) {
+        // Small + Small
+        if (a.tag == ValueType::Small && b.tag == ValueType::Small) {
+            auto& sa = a.storage.small;
+            const auto& sb = b.storage.small;
+            if (sb.is_zero()) return;
+            if (sa.is_zero()) {
+                sa = sb;
+                a.small_reduced = false;
+                return;
+            }
+            if (sa.den == sb.den) {
+                if (would_overflow_add(sa.num, sb.num)) {
+                    a = eager_add(a, b);
+                    return;
+                }
+                sa.num += sb.num;
+                a.small_reduced = false;
+                return;
+            }
+            bool denoms_small = (sa.den < (absl::uint128(1) << 62)) && (sb.den < (absl::uint128(1) << 62));
+            if (denoms_small) {
+                absl::int128 left = sa.num * static_cast<absl::int128>(sb.den);
+                absl::int128 right = sb.num * static_cast<absl::int128>(sa.den);
+                if (would_overflow_add(left, right)) {
+                    a = eager_add(a, b);
+                    return;
+                }
+                sa.num = left + right;
+                sa.den = sa.den * sb.den;
+                a.small_reduced = false;
+                return;
+            }
+            if (would_overflow_mul(sa.num, static_cast<absl::int128>(sb.den)) ||
+                would_overflow_mul(sb.num, static_cast<absl::int128>(sa.den))) {
+                a = eager_add(a, b);
+                return;
+            }
+            absl::int128 left = sa.num * static_cast<absl::int128>(sb.den);
+            absl::int128 right = sb.num * static_cast<absl::int128>(sa.den);
+            if (would_overflow_add(left, right)) {
+                a = eager_add(a, b);
+                return;
+            }
+            absl::int128 new_num = left + right;
+            if (would_overflow_mul(sa.den, sb.den)) {
+                a = eager_add(a, b);
+                return;
+            }
+            sa.num = new_num;
+            sa.den = sa.den * sb.den;
+            a.small_reduced = false;
+            return;
+        }
+        // Big + Big
+        else if (a.tag == ValueType::Big && b.tag == ValueType::Big) {
+            *a.storage.big.ptr += *b.storage.big.ptr;
+            return;
+        }
+        // Mixed Big + Small (order independent)
+        else if ((a.tag == ValueType::Big && b.tag == ValueType::Small) ||
+            (a.tag == ValueType::Small && b.tag == ValueType::Big)) {
+            if (a.tag == ValueType::Small) {
+                const auto& small = a.storage.small;
+                const auto& big = b.storage.big;
+                BigRationalType res = *big.ptr +
+                    (BigRationalType(to_dumb_int(small.num)) / to_dumb_int(small.den));
+                a = Value(BigStorage(std::move(res)));
+            }
+            else {
+                const auto& small = b.storage.small;
+                *a.storage.big.ptr +=
+                    BigRationalType(to_dumb_int(small.num)) / to_dumb_int(small.den);
+            }
+            return;
+        }
+        // Fallback
+        a = eager_add(a, b);
+    }
+
+
     inline Value eager_add(const Value& a, const Value& b) {
         // Small + Small
         if (a.tag == ValueType::Small && b.tag == ValueType::Small) {

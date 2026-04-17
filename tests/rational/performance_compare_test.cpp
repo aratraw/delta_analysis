@@ -115,7 +115,8 @@ namespace delta::testing {
         auto end_build = std::chrono::high_resolution_clock::now();
 
         auto start_eval = std::chrono::high_resolution_clock::now();
-        Rational result = sum.eval(true);//eval(skip_simplify=true).
+        sum.eval_inplace(true);
+        Rational result = sum.eval();//eval(skip_simplify=true).
         auto end_eval = std::chrono::high_resolution_clock::now();
         volatile Rational dummy = result;
         (void)dummy;
@@ -225,7 +226,7 @@ namespace delta::testing {
     }
 
     TEST_F(RationalPerformanceCompareTest, RandomRationalsCompare) {
-        std::vector<int> sizes = { 100, 500, 1000, 5000, 10000, 20000 };
+        std::vector<int> sizes = { 100, 500, 1000, 5000, 10000, 20000,50000,250000,500000};
         run_benchmark_extended("Random rationals (uniform)", sizes, generate_random_pools);
     }
 
