@@ -14,9 +14,7 @@ namespace delta::testing {
     // 1. Harmonic series (eager mode) – immediate Rational
     // -------------------------------------------------------------------------
     TEST_F(RationalPerformanceTest, HarmonicSeries10000EagerMode) {
-        std::cout << "--- IT'S GONNA TAKE A WHILE (around 40s in debug) - TIME TO THINK ABOUT ETERNITY. ---" << std::endl;
         const int N = 10000;
-        ScopedEagerEval eager;
         Rational sum = 0_r;
         for (int i = 1; i <= N; ++i) {
             sum = sum + Rational(1, i);

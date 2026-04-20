@@ -1,3 +1,4 @@
+// literals.h
 #pragma once
 
 #include "rational_class.h"
@@ -6,7 +7,7 @@
 namespace delta {
 
     inline Rational operator""_r(unsigned long long num) {
-        return Rational(static_cast<absl::int128>(num));
+        return Rational(num);
     }
 
     inline Rational operator""_r(const char* str, std::size_t len) {

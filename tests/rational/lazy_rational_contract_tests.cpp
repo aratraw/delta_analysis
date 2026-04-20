@@ -1,107 +1,104 @@
+#pragma once
 #include "lazy_rational_test_fixture.h"
-
 #include "delta/core/rational.h"
 #include "test_utils.h"
 #include <vector>
 #include <chrono>
 
 using namespace delta;
-using namespace delta::test;
+using namespace delta::testing;
 
+
+class LazyRationalContractTest : public LazyRationalTestFixture {};
 // ---------------------------------------------------------------------
 // 1. Конструкторы и базовое состояние
 // ---------------------------------------------------------------------
 
-TEST_F(LazyRationalTestFixture, default_constructor_creates_dirty_const_zero) {
+TEST_F(LazyRationalContractTest, default_constructor_creates_dirty_const_zero) {
     LazyRational a;
     ASSERT_TRUE(is_dirty(a));
     EXPECT_EQ(dirty_node_count(a), 1);
     EXPECT_EQ(dirty_root_op(a), internal::LazyOp::CONST);
-    EXPECT_EQ(dirty_constant(a, dirty_root_const_index(a)), Rational(0).value());
+    EXPECT_EQ(dirty_constant(a, dirty_root_value_idx(a)), Rational(0).value());
 }
 
-TEST_F(LazyRationalTestFixture, constructor_from_rational_creates_dirty_const) {
+TEST_F(LazyRationalContractTest, constructor_from_rational_creates_dirty_const) {
     Rational r(3, 2);
     LazyRational a(r);
     ASSERT_TRUE(is_dirty(a));
     EXPECT_EQ(dirty_root_op(a), internal::LazyOp::CONST);
-    EXPECT_EQ(dirty_constant(a, dirty_root_const_index(a)), r.value());
+    EXPECT_EQ(dirty_constant(a, dirty_root_value_idx(a)), r.value());
 }
 
 // ---------------------------------------------------------------------
 // 2. Мутирующие операторы (накопление)
 // ---------------------------------------------------------------------
 
-TEST_F(LazyRationalTestFixture, plus_operator_mutates_left_lvalue) {
+TEST_F(LazyRationalContractTest, plus_operator_mutates_left_lvalue) {
     LazyRational a = LazyRational(Rational(1));
     LazyRational b = LazyRational(Rational(2));
     LazyRational& ref = a + b;
-    EXPECT_EQ(&ref, &a);                     // возвращает ссылку на a
+    EXPECT_EQ(&ref, &a);
     ASSERT_TRUE(is_dirty(a));
     EXPECT_EQ(dirty_root_op(a), internal::LazyOp::SUM);
-    auto children = dirty_root_children(a);
-    ASSERT_EQ(children.size(), 2);
-    // Дети: первый – исходный CONST(1), второй – CONST(2) (скопированный)
-    EXPECT_EQ(dirty_node_op(a, children[0]), internal::LazyOp::CONST);
-    EXPECT_EQ(dirty_node_op(a, children[1]), internal::LazyOp::CONST);
+    EXPECT_EQ(total_operands(a), 2);
+    int root = dirty_root_index(a);
+    EXPECT_EQ(dirty_node_leaf_count(a, root), 2);
+    EXPECT_EQ(Rational(dirty_node_leaf_value(a, root, 0)), 1_r);
+    EXPECT_EQ(Rational(dirty_node_leaf_value(a, root, 1)), 2_r);
 }
 
-TEST_F(LazyRationalTestFixture, plus_operator_on_rvalue_mutates_temporary) {
+TEST_F(LazyRationalContractTest, plus_operator_on_rvalue_mutates_temporary) {
     LazyRational a = LazyRational(Rational(1));
     LazyRational b = LazyRational(Rational(2));
     LazyRational&& result = std::move(a) + b;
-    // a теперь в перемещённом состоянии, но result ссылается на временный
     EXPECT_TRUE(is_dirty(result));
     EXPECT_EQ(dirty_root_op(result), internal::LazyOp::SUM);
-    // Проверка, что результат содержит два слагаемых
-    EXPECT_EQ(dirty_root_children(result).size(), 2);
+    EXPECT_EQ(total_operands(result), 2);
 }
 
-TEST_F(LazyRationalTestFixture, chained_plus_accumulates_in_place) {
+TEST_F(LazyRationalContractTest, chained_plus_accumulates_in_place) {
     LazyRational a = LazyRational(Rational(1));
     a + Rational(2) + Rational(3) + Rational(4);
-    // После цепочки a должен быть SUM с 4 детьми (1,2,3,4) в порядке добавления
     ASSERT_TRUE(is_dirty(a));
     EXPECT_EQ(dirty_root_op(a), internal::LazyOp::SUM);
-    auto children = dirty_root_children(a);
-    EXPECT_EQ(children.size(), 4);
+    EXPECT_EQ(total_operands(a), 4);
 }
 
-TEST_F(LazyRationalTestFixture, compound_assign_plus_accumulates) {
+TEST_F(LazyRationalContractTest, compound_assign_plus_accumulates) {
     LazyRational a = LazyRational(Rational(1));
     a += Rational(2);
     a += Rational(3);
     EXPECT_EQ(dirty_root_op(a), internal::LazyOp::SUM);
-    EXPECT_EQ(dirty_root_children(a).size(), 3);
+    EXPECT_EQ(total_operands(a), 3);
 }
 
 // ---------------------------------------------------------------------
 // 3. Вычитание через NEG
 // ---------------------------------------------------------------------
 
-TEST_F(LazyRationalTestFixture, subtraction_converts_to_neg_and_sum) {
+TEST_F(LazyRationalContractTest, subtraction_converts_to_neg_and_sum) {
     LazyRational a = LazyRational(Rational(10));
     a - Rational(3);
-    // Должен стать SUM(CONST(10), NEG(CONST(3)))
     ASSERT_TRUE(is_dirty(a));
     EXPECT_EQ(dirty_root_op(a), internal::LazyOp::SUM);
-    auto children = dirty_root_children(a);
-    ASSERT_EQ(children.size(), 2);
-    // Первый ребёнок – CONST(10)
-    // Второй ребёнок – NEG
-    int neg_node = children[1];
+    EXPECT_EQ(total_operands(a), 2);
+    int root = dirty_root_index(a);
+    EXPECT_EQ(dirty_node_leaf_count(a, root), 1);
+    EXPECT_EQ(dirty_node_complex_count(a, root), 1);
+    EXPECT_EQ(Rational(dirty_node_leaf_value(a, root, 0)), 10_r);
+    int neg_node = dirty_node_complex_child(a, root, 0);
     EXPECT_EQ(dirty_node_op(a, neg_node), internal::LazyOp::NEG);
-    auto neg_children = dirty_node_children(a, neg_node);
-    ASSERT_EQ(neg_children.size(), 1);
-    int const_node = neg_children[0];
+    EXPECT_EQ(dirty_node_children(a, neg_node).size(), 1);
+    int const_node = dirty_node_children(a, neg_node)[0];
     EXPECT_EQ(dirty_node_op(a, const_node), internal::LazyOp::CONST);
-    EXPECT_EQ(dirty_constant(a, dirty_node_const_index(a, const_node)), Rational(3).value());
+    EXPECT_EQ(dirty_constant(a, dirty_node_value_idx(a, const_node)), Rational(3).value());
 }
 
-TEST_F(LazyRationalTestFixture, double_negation_optimization_on_creation) {
+TEST_F(LazyRationalContractTest, double_negation_optimization_on_creation) {
     LazyRational a = LazyRational(Rational(5));
-    LazyRational b = -a;           // NEG(a)
-    LazyRational c = -b;           // NEG(NEG(a)) -> должно упроститься до a
+    LazyRational b = -a;
+    LazyRational c = -b;
     EXPECT_EQ(c.eval(), a.eval());
 }
 
@@ -109,78 +106,79 @@ TEST_F(LazyRationalTestFixture, double_negation_optimization_on_creation) {
 // 4. Умножение и деление
 // ---------------------------------------------------------------------
 
-TEST_F(LazyRationalTestFixture, multiplication_creates_product) {
+TEST_F(LazyRationalContractTest, multiplication_creates_product) {
     LazyRational a = LazyRational(Rational(2));
     a* Rational(3);
     EXPECT_EQ(dirty_root_op(a), internal::LazyOp::PRODUCT);
-    auto children = dirty_root_children(a);
-    EXPECT_EQ(children.size(), 2);
+    EXPECT_EQ(total_operands(a), 2);
 }
 
-TEST_F(LazyRationalTestFixture, division_converts_to_recip_and_product) {
+TEST_F(LazyRationalContractTest, division_converts_to_recip_and_product) {
     LazyRational a = LazyRational(Rational(6));
     a / Rational(2);
-    // Должен стать PRODUCT(CONST(6), RECIP(CONST(2)))
     EXPECT_EQ(dirty_root_op(a), internal::LazyOp::PRODUCT);
-    auto children = dirty_root_children(a);
-    ASSERT_EQ(children.size(), 2);
-    int recip_node = children[1];
+    EXPECT_EQ(total_operands(a), 2);
+    int root = dirty_root_index(a);
+    EXPECT_EQ(dirty_node_leaf_count(a, root), 1);
+    EXPECT_EQ(dirty_node_complex_count(a, root), 1);
+    EXPECT_EQ(Rational(dirty_node_leaf_value(a, root, 0)), 6_r);
+    int recip_node = dirty_node_complex_child(a, root, 0);
     EXPECT_EQ(dirty_node_op(a, recip_node), internal::LazyOp::RECIP);
-    auto recip_children = dirty_node_children(a, recip_node);
-    EXPECT_EQ(dirty_node_op(a, recip_children[0]), internal::LazyOp::CONST);
-    EXPECT_EQ(dirty_constant(a, dirty_node_const_index(a, recip_children[0])), Rational(2).value());
+    EXPECT_EQ(dirty_node_children(a, recip_node).size(), 1);
+    int const_node = dirty_node_children(a, recip_node)[0];
+    EXPECT_EQ(dirty_node_op(a, const_node), internal::LazyOp::CONST);
+    EXPECT_EQ(dirty_constant(a, dirty_node_value_idx(a, const_node)), Rational(2).value());
 }
 
 // ---------------------------------------------------------------------
 // 5. Канонизация (Dirty -> Clean)
 // ---------------------------------------------------------------------
 
-TEST_F(LazyRationalTestFixture, canonicalize_converts_dirty_to_clean) {
+TEST_F(LazyRationalContractTest, canonicalize_converts_dirty_to_clean) {
     LazyRational a = LazyRational(Rational(1));
     a + Rational(2);
     ASSERT_TRUE(is_dirty(a));
-    a.simplify_inplace();   // канонизация
+    a.simplify_inplace();
     EXPECT_TRUE(is_clean(a));
     EXPECT_GE(clean_root_index(a), 0);
 }
 
-TEST_F(LazyRationalTestFixture, canonicalize_removes_zero_from_sum) {
+TEST_F(LazyRationalContractTest, canonicalize_removes_zero_from_sum) {
     LazyRational a = LazyRational(Rational(0));
     a + Rational(5);
     a.simplify_inplace();
-    // После канонизации ноль должен быть удалён, останется CONST(5)
     EXPECT_TRUE(is_clean(a));
     const auto& node = internal::pool.nodes[clean_root_index(a)];
     EXPECT_EQ(node.op, internal::LazyOp::CONST);
     EXPECT_EQ(internal::pool.values[node.value_idx], Rational(5).value());
 }
 
-TEST_F(LazyRationalTestFixture, canonicalize_removes_one_from_product) {
+TEST_F(LazyRationalContractTest, canonicalize_removes_one_from_product) {
     LazyRational a = LazyRational(Rational(1));
     a* Rational(7);
     a.simplify_inplace();
-    // Должен стать CONST(7)
     EXPECT_TRUE(is_clean(a));
     const auto& node = internal::pool.nodes[clean_root_index(a)];
     EXPECT_EQ(node.op, internal::LazyOp::CONST);
     EXPECT_EQ(internal::pool.values[node.value_idx], Rational(7).value());
 }
 
-TEST_F(LazyRationalTestFixture, canonicalize_flattens_nested_sums) {
+TEST_F(LazyRationalContractTest, canonicalize_flattens_nested_sums) {
     LazyRational a = LazyRational(Rational(1));
     LazyRational b = LazyRational(Rational(2));
     LazyRational c = LazyRational(Rational(3));
-    (a + b) + c;   // оператор + уже строит плоский SUM(1,2,3)
+    (a + b) + c;
     a.simplify_inplace();
     EXPECT_TRUE(is_clean(a));
     const auto& node = internal::pool.nodes[clean_root_index(a)];
     EXPECT_EQ(node.op, internal::LazyOp::SUM);
-    ASSERT_TRUE(node.children);
-    EXPECT_EQ(node.children->size(), 3);
-
-    // Проверяем, что дети – константы 1,2,3 (порядок не важен)
+    size_t total = node.leaf_values.size() + node.complex_children.size();
+    EXPECT_EQ(total, 3);
     std::vector<Rational> values;
-    for (int32_t child : *node.children) {
+    for (const auto& v : node.leaf_values) {
+        values.push_back(Rational(v));
+    }
+    for (int32_t child : node.complex_children) {
         const auto& child_node = internal::pool.nodes[child];
         EXPECT_EQ(child_node.op, internal::LazyOp::CONST);
         values.push_back(Rational(internal::pool.values[child_node.value_idx]));
@@ -195,15 +193,13 @@ TEST_F(LazyRationalTestFixture, canonicalize_flattens_nested_sums) {
 // 6. Интернирование (кэширование чистых узлов)
 // ---------------------------------------------------------------------
 
-TEST_F(LazyRationalTestFixture, identical_expressions_share_clean_nodes) {
+TEST_F(LazyRationalContractTest, identical_expressions_share_clean_nodes) {
     reset_global_pool();
     LazyRational a = LazyRational(Rational(1)) + Rational(2);
     LazyRational b = LazyRational(Rational(1)) + Rational(2);
     a.simplify_inplace();
     b.simplify_inplace();
-    // Оба должны ссылаться на один и тот же чистый узел в пуле
     EXPECT_EQ(clean_root_index(a), clean_root_index(b));
-    // И refcount узла должен быть 2
     EXPECT_EQ(clean_node_refcount(a, clean_root_index(a)), 2);
 }
 
@@ -211,31 +207,26 @@ TEST_F(LazyRationalTestFixture, identical_expressions_share_clean_nodes) {
 // 7. Сравнения (требуют канонизации)
 // ---------------------------------------------------------------------
 
-TEST_F(LazyRationalTestFixture, comparison_canonicalizes_implicitly) {
+TEST_F(LazyRationalContractTest, comparison_canonicalizes_implicitly) {
     LazyRational a = LazyRational(Rational(1)) + Rational(2);
     LazyRational b = LazyRational(Rational(3));
-    // a ещё грязный
     ASSERT_TRUE(is_dirty(a));
     bool eq = (a == b);
     EXPECT_TRUE(eq);
-    // После сравнения a и b должны стать чистыми
     EXPECT_TRUE(is_clean(a));
     EXPECT_TRUE(is_clean(b));
 }
 
 // ---------------------------------------------------------------------
-// 8. Приблизительный интервал (обновлённый тест)
+// 8. Приблизительный интервал
 // ---------------------------------------------------------------------
 
-TEST_F(LazyRationalTestFixture, approx_interval_returns_estimate) {
+TEST_F(LazyRationalContractTest, approx_interval_returns_estimate) {
     LazyRational a = LazyRational(Rational(1)) + Rational(2);
     auto interval = a.approx_interval();
-    // Интервал вычисляется от грязного дерева, объект остаётся грязным
-    EXPECT_TRUE(is_dirty(a));   // не канонизируется
-    // Приблизительный интервал должен содержать точное значение 3
+    EXPECT_TRUE(is_dirty(a));
     EXPECT_LE(interval.lower(), 3.0);
     EXPECT_GE(interval.upper(), 3.0);
-    // Дополнительно: интервал не должен быть слишком широким
     EXPECT_LT(interval.upper() - interval.lower(), 1e-6);
 }
 
@@ -243,37 +234,31 @@ TEST_F(LazyRationalTestFixture, approx_interval_returns_estimate) {
 // 9. Move-only семантика
 // ---------------------------------------------------------------------
 
-TEST_F(LazyRationalTestFixture, lazy_rational_is_move_only) {
+TEST_F(LazyRationalContractTest, lazy_rational_is_move_only) {
     LazyRational a = LazyRational(Rational(1));
     LazyRational b = std::move(a);
-    // a теперь в перемещённом состоянии
-    // Проверка, что копирование запрещено (компиляция не пройдёт)
-    // LazyRational c = a;  // ошибка компиляции
     (void)b;
 }
 
-TEST_F(LazyRationalTestFixture, clone_creates_deep_copy) {
+TEST_F(LazyRationalContractTest, clone_creates_deep_copy) {
     LazyRational a = LazyRational(Rational(1)) + Rational(2);
     LazyRational b = a.clone();
-    // b должно быть глубокой копией, независимой от a
     a += Rational(3);
-    // a теперь SUM(1,2,3), b остаётся SUM(1,2)
-    EXPECT_EQ(dirty_root_children(a).size(), 3);
-    EXPECT_EQ(dirty_root_children(b).size(), 2);
+    EXPECT_EQ(total_operands(a), 3);
+    EXPECT_EQ(total_operands(b), 2);
 }
 
 // ---------------------------------------------------------------------
-// 10. Отсутствие рекурсии (косвенная проверка через глубину)
+// 10. Отсутствие рекурсии
 // ---------------------------------------------------------------------
-
-TEST_F(LazyRationalTestFixture, deep_tree_does_not_cause_stack_overflow) {
+//IT'S SLOWER IN DEBUG BY HUNDREDS OF TIMES, SO DISASBLE THE TEST IN DEBUG MODE.
+TEST_F(LazyRationalContractTest, deep_tree_does_not_cause_stack_overflow) {
     LazyRational acc;
     const int N = 100000;
     for (int i = 0; i < N; ++i) {
         acc += Rational(i);
     }
-    // Просто проверяем, что не упали из-за рекурсии
-    acc.simplify_inplace();   // канонизация должна быть итеративной
+    acc.simplify_inplace();
     Rational sum = acc.eval();
     (void)sum;
 }
@@ -282,68 +267,64 @@ TEST_F(LazyRationalTestFixture, deep_tree_does_not_cause_stack_overflow) {
 // 11. Вычисление (eval)
 // ---------------------------------------------------------------------
 
-TEST_F(LazyRationalTestFixture, eval_returns_correct_immediate) {
+TEST_F(LazyRationalContractTest, eval_returns_correct_immediate) {
     LazyRational a = LazyRational(Rational(1, 2)) + Rational(1, 3);
     Rational r = a.eval();
     EXPECT_EQ(r, Rational(5, 6));
 }
 
-TEST_F(LazyRationalTestFixture, eval_on_clean_does_not_modify) {
+TEST_F(LazyRationalContractTest, eval_on_clean_does_not_modify) {
     LazyRational a = LazyRational(Rational(1)) + Rational(2);
     a.simplify_inplace();
     int old_index = clean_root_index(a);
     Rational r = a.eval();
     EXPECT_EQ(r, Rational(3));
-    EXPECT_EQ(clean_root_index(a), old_index); // индекс не изменился
+    EXPECT_EQ(clean_root_index(a), old_index);
 }
 
 // ---------------------------------------------------------------------
 // 12. Преобразование Rational -> LazyRational и обратно
 // ---------------------------------------------------------------------
 
-TEST_F(LazyRationalTestFixture, as_lazy_creates_dirty_const) {
+TEST_F(LazyRationalContractTest, as_lazy_creates_dirty_const) {
     Rational r(5, 2);
     LazyRational lr = r.as_lazy();
     EXPECT_TRUE(is_dirty(lr));
     EXPECT_EQ(dirty_root_op(lr), internal::LazyOp::CONST);
-    EXPECT_EQ(dirty_constant(lr, dirty_root_const_index(lr)), r.value());
+    EXPECT_EQ(dirty_constant(lr, dirty_root_value_idx(lr)), r.value());
 }
 
 // ---------------------------------------------------------------------
-// 13. Отсутствие узлов SUB и DIV (проверка через операции)
+// 13. Отсутствие узлов SUB и DIV
 // ---------------------------------------------------------------------
 
-TEST_F(LazyRationalTestFixture, no_sub_or_div_nodes_created) {
+TEST_F(LazyRationalContractTest, no_sub_or_div_nodes_created) {
     LazyRational a = LazyRational(Rational(10));
     a - Rational(3);
-    // В грязном дереве не должно быть узлов SUB (их нет в LazyOp)
-    // Проверяем, что вместо SUB используется NEG
     EXPECT_TRUE(has_node_with_op(a, internal::LazyOp::NEG));
 
     LazyRational b = LazyRational(Rational(6));
     b / Rational(2);
-    // Вместо DIV используется RECIP
     EXPECT_TRUE(has_node_with_op(b, internal::LazyOp::RECIP));
 }
 
 // ---------------------------------------------------------------------
-// 14. Каноничность чистых узлов (сортировка детей, удаление нейтральных)
+// 14. Каноничность чистых узлов
 // ---------------------------------------------------------------------
 
-TEST_F(LazyRationalTestFixture, clean_sum_is_canonical) {
+TEST_F(LazyRationalContractTest, clean_sum_is_canonical) {
     LazyRational a = LazyRational(Rational(0)) + Rational(2) + Rational(1) + Rational(0);
     a.simplify_inplace();
     EXPECT_TRUE(is_clean(a));
-    // После упрощения должно быть SUM(1,2) (нули удалены, порядок отсортирован)
     EXPECT_TRUE(is_canonical_sum(a));
     EXPECT_EQ(a.eval(), 3_r);
 }
 
 // ---------------------------------------------------------------------
-// 15. Производительность (набросок)
+// 15. Производительность
 // ---------------------------------------------------------------------
 
-TEST_F(LazyRationalTestFixture, linear_time_accumulation) {
+TEST_F(LazyRationalContractTest, linear_time_accumulation) {
     const int N = 10000;
     LazyRational acc;
     auto start = std::chrono::steady_clock::now();
@@ -352,7 +333,20 @@ TEST_F(LazyRationalTestFixture, linear_time_accumulation) {
     }
     auto end = std::chrono::steady_clock::now();
     auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(end - start);
-    // Ожидаем, что время ~ O(N), не O(N^2)
-    // Просто проверяем, что не слишком большое (например, < 100 мс для N=10000)
     EXPECT_LT(elapsed.count(), 100);
+}
+
+//Если будет падать этот тест - ПРИСМОТРИСЬ К import_tree и ensure_dirty.
+TEST_F(LazyRationalContractTest, SumWithSqrtNoGC) {
+    Rational eps = "1/1000000000000000000000000000000"_r;
+    set_precision(eps);
+    LazyRational half = Rational(1, 2).as_lazy();
+    LazyRational sqrt2 = delta::lazy_sqrt(Rational(2).as_lazy());
+    sqrt2.simplify_inplace();//changes nothing but the status: dirty to clean tree
+    Rational val2 = sqrt2.eval();          // значение sqrt(2) до всяких GC
+    LazyRational sum = half.clone() + sqrt2.clone();
+    sum.simplify_inplace();
+    Rational val3 = sum.eval();            // сумма 1/2 + sqrt(2)
+    Rational expected = Rational(1, 2) + val2;
+    EXPECT_EQ(val3, expected);             // должно совпадать
 }

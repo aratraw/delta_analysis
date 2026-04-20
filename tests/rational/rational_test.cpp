@@ -135,7 +135,7 @@ namespace delta::testing {
     // 9. Canonical form (denominator positive, gcd == 1)
     // -------------------------------------------------------------------------
     TEST_F(RationalBasicTest, CanonicalForm) {
-        ScopedEagerEval eager;
+
         Rational sum = "2/6"_r + "1/6"_r;
         EXPECT_TRUE(is_reduced(sum));
         EXPECT_EQ(sum.to_string(), "1/2");
@@ -145,7 +145,7 @@ namespace delta::testing {
     // 10. Denominator does not explode on chain of additions
     // -------------------------------------------------------------------------
     TEST_F(RationalBasicTest, DenominatorDoesNotExplode) {
-        ScopedEagerEval eager;
+
         Rational sum = 0_r;
         for (int i = 1; i <= 10; ++i) {
             sum += Rational(1, i);

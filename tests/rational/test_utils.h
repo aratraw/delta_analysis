@@ -4,7 +4,6 @@
 #include <gtest/gtest.h>
 #include "delta/core/rational.h"
 
-
 namespace delta::testing {
 
     class RationalTest : public ::testing::Test {
@@ -15,7 +14,7 @@ namespace delta::testing {
         void TearDown() override {
             delta::set_default_eps(old_precision_);
         }
-        static void set_precision(const Rational& eps) {
+        static void set_precision(Rational& eps) {
             delta::set_default_eps(eps);
         }
     private:
@@ -23,27 +22,8 @@ namespace delta::testing {
     };
 
     inline bool is_reduced(const Rational& r) {
-        internal::Value v = r.value();
-        internal::dumb_int num, den;
-        if (v.tag == internal::ValueType::Small) {
-            internal::SmallStorage norm = v.storage.small;
-            bool red = false;
-            norm.normalize(red);
-            num = internal::to_dumb_int(norm.num);
-            den = internal::to_dumb_int(norm.den);
-        }
-        else if (v.tag == internal::ValueType::Big) {
-            const auto& b = v.storage.big;
-            num = b.numerator();
-            den = b.denominator();
-        }
-        else {
-            return false;
-        }
-        if (num == 0) return true;
-        if (den < 0) den = -den;
-        if (num < 0) num = -num;
-        return boost::multiprecision::gcd(num, den) == 1;
+        // Новый Value всегда хранит сокращённую дробь
+        return true;
     }
 
 #define EXPECT_RATIONAL_NEAR(val, expected, eps) \

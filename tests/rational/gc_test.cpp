@@ -1,27 +1,27 @@
-// tests/rational/gc_test.cpp
 #pragma once
 #include <gtest/gtest.h>
 #include <vector>
 #include "delta/core/rational.h"
 #include "delta/rational/node_pool.h"
 #include "test_utils.h"
-#include "lazy_rational_test_fixture.h"   // добавляем фикстуру
+#include "lazy_rational_test_fixture.h"
 
 namespace delta::testing {
 
-    // Наследуем от LazyRationalTestFixture, чтобы получить доступ к методам интроспекции
-    class GarbageCollectionTest : public delta::test::LazyRationalTestFixture {
+    class GarbageCollectionTest : public delta::testing::LazyRationalTestFixture {
     protected:
         size_t occupied_slots() const {
             size_t cnt = 0;
             for (size_t i = 0; i < internal::pool.nodes.size(); ++i) {
                 const auto& node = internal::pool.nodes[i];
-                if (node.op == internal::LazyOp::SUM) {
-                    if (node.children && !node.children->empty()) ++cnt;
+                if (node.op == internal::LazyOp::SUM || node.op == internal::LazyOp::PRODUCT) {
+                    if (!node.leaf_values.empty() || !node.complex_children.empty()) ++cnt;
+                }
+                else if (node.op == internal::LazyOp::CONST) {
+                    if (node.value_idx != -1) ++cnt;
                 }
                 else {
-                    if (!(node.value_idx == -1 && node.child0 == -1 && node.child1 == -1))
-                        ++cnt;
+                    if (!node.children.empty() || node.eps_idx != -1) ++cnt;
                 }
             }
             return cnt;
@@ -42,7 +42,6 @@ namespace delta::testing {
         for (int i = 0; i < 150; ++i) {
             sum += Rational(1);
         }
-        // Пул ограничен, GC должен был сработать
         EXPECT_LE(internal::pool.nodes.size(), 100);
         Rational result = sum.eval();
         EXPECT_EQ(result, 150_r);
@@ -52,6 +51,8 @@ namespace delta::testing {
     // 2. Сохранение корней (корневые узлы превращаются в константы)
     // -------------------------------------------------------------------------
     TEST_F(GarbageCollectionTest, RootPreservation) {
+        Rational eps = "1/1000000000000000000000000000000"_r;
+        set_precision(eps);
         reset_pool_with_size(200);
 
         LazyRational root1 = Rational(1, 2).as_lazy();
@@ -61,7 +62,6 @@ namespace delta::testing {
         root2.simplify_inplace();
         root3.simplify_inplace();
 
-        // Используем метод фикстуры для доступа к clean_index_
         int idx1 = clean_index(root1);
         int idx2 = clean_index(root2);
         int idx3 = clean_index(root3);
@@ -148,7 +148,7 @@ namespace delta::testing {
         LazyRational a = Rational(5).as_lazy();
         a.simplify_inplace();
         int idx = clean_index(a);
-        EXPECT_EQ(refcount(idx), 1);    // refcount унаследован от фикстуры
+        EXPECT_EQ(refcount(idx), 1);
 
         LazyRational b = a.clone();
         EXPECT_EQ(refcount(idx), 2);
@@ -192,11 +192,14 @@ namespace delta::testing {
         for (size_t i = 0; i < internal::pool.nodes.size(); ++i) {
             bool occupied = false;
             const auto& node = internal::pool.nodes[i];
-            if (node.op == internal::LazyOp::SUM) {
-                occupied = node.children && !node.children->empty();
+            if (node.op == internal::LazyOp::SUM || node.op == internal::LazyOp::PRODUCT) {
+                occupied = !node.leaf_values.empty() || !node.complex_children.empty();
+            }
+            else if (node.op == internal::LazyOp::CONST) {
+                occupied = node.value_idx != -1;
             }
             else {
-                occupied = !(node.value_idx == -1 && node.child0 == -1 && node.child1 == -1);
+                occupied = !node.children.empty() || node.eps_idx != -1;
             }
             if (occupied) {
                 EXPECT_LT(i, nfi);
@@ -232,18 +235,21 @@ namespace delta::testing {
         reset_pool_with_size(100);
         for (int i = 0; i < 150; ++i) {
             LazyRational tmp = Rational(i).as_lazy();
-            tmp.simplify_inplace();   // но tmp уничтожается
+            tmp.simplify_inplace();
         }
         internal::force_garbage_collect();
         EXPECT_EQ(internal::pool.next_free_index, 0);
         for (size_t i = 0; i < internal::pool.nodes.size(); ++i) {
             const auto& node = internal::pool.nodes[i];
             bool occupied = false;
-            if (node.op == internal::LazyOp::SUM) {
-                occupied = node.children && !node.children->empty();
+            if (node.op == internal::LazyOp::SUM || node.op == internal::LazyOp::PRODUCT) {
+                occupied = !node.leaf_values.empty() || !node.complex_children.empty();
+            }
+            else if (node.op == internal::LazyOp::CONST) {
+                occupied = node.value_idx != -1;
             }
             else {
-                occupied = !(node.value_idx == -1 && node.child0 == -1 && node.child1 == -1);
+                occupied = !node.children.empty() || node.eps_idx != -1;
             }
             EXPECT_FALSE(occupied) << "Slot " << i << " not empty";
         }

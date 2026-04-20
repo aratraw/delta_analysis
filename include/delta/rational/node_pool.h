@@ -1,128 +1,96 @@
 // node_pool.h
-// Версия 2.0 – "глупые" фабрики: без упрощений, только интернирование и вычисление метаданных.
-// Упрощения вынесены в simplify_impl (локальный упроститель TempNode).
+// Версия 3.0 – унифицированные узлы с гетерогенным хранением, NodePool и GC
+// ----------------------------------------------------------------------------
+// Изменения (рефакторинг Value):
+//   - Явные ValueHash и ValueEqual используют absl::Hash<Value> вместо boost::multiprecision::hash_value
+//   - В SumProductKeyHash также применяется absl::Hash<Value>
+// ----------------------------------------------------------------------------
 
 #pragma once
 
-#include "storage.h"
-#include "interval.h"
-#include "utils.h"
-
-#include <absl/hash/hash.h>
+#include "node_types.h"
 #include <absl/container/flat_hash_map.h>
-
+#include <absl/hash/hash.h>
 #include <memory>
 #include <vector>
 #include <cstdint>
 #include <algorithm>
+#include <functional>
+#include <type_traits>
+#include <stdexcept>
 
 namespace delta::internal {
-    void collect_garbage();   // forward declaration
 
-    // ----------------------------------------------------------------------------
-    // LazyOp для чистых узлов
-    // ----------------------------------------------------------------------------
-    enum class LazyOp : uint8_t {
-        CONST,
-        SUM,
-        PRODUCT,
-        NEG,
-        RECIP,
-        SQRT,
-        EXP,
-        LOG,
-        SIN,
-        COS,
-        ACOS,
-        PI,
-        E,
-        POW
+    // ------------------------------------------------------------------------
+    // Хэшер и компаратор для Value (явные, используют absl::Hash)
+    // ------------------------------------------------------------------------
+    struct ValueHash {
+        size_t operator()(const Value& v) const noexcept {
+            return absl::Hash<Value>()(v);
+        }
     };
 
-    // ----------------------------------------------------------------------------
-    // Node (чистый узел)
-    // ----------------------------------------------------------------------------
-    struct Node {
-        LazyOp op;
-        int32_t depth;
-        Interval approx;
-        uint64_t hash;
-
-        // Для SUM/PRODUCT
-        std::unique_ptr<std::vector<int32_t>> children;
-
-        // Для CONST
-        int32_t value_idx;
-
-        // Для унарных (и PI/E)
-        int32_t child0;   // -1 если нет
-
-        // Для POW
-        int32_t child1;   // -1 если нет
-
-        // Для операций с eps
-        int32_t eps_idx;  // -1 если нет
-
-        // Конструкторы
-        Node();
-        Node(LazyOp op, int32_t val_idx, int32_t depth, Interval approx, uint64_t hash);
-        Node(LazyOp op, std::vector<int32_t>&& children, int32_t depth, Interval approx, uint64_t hash);
-        Node(LazyOp op, int32_t child, int32_t eps_idx, int32_t depth, Interval approx, uint64_t hash);
-        Node(LazyOp op, int32_t base, int32_t exp, int32_t eps_idx, int32_t depth, Interval approx, uint64_t hash);
-
-        Node(const Node&) = delete;
-        Node& operator=(const Node&) = delete;
-        Node(Node&&) noexcept = default;
-        Node& operator=(Node&&) noexcept = default;
+    struct ValueEqual {
+        bool operator()(const Value& a, const Value& b) const noexcept {
+            return a == b;
+        }
     };
 
-    // ----------------------------------------------------------------------------
-    // Ключи кэширования – используют исходные (неупрощённые) детей
-    // ----------------------------------------------------------------------------
+    // ------------------------------------------------------------------------
+    // Forward declarations
+    // ------------------------------------------------------------------------
+    void collect_garbage();
+
+    // ------------------------------------------------------------------------
+    // Ключи кэширования
+    // ------------------------------------------------------------------------
     struct SumProductKey {
         LazyOp op;
-        std::vector<int32_t> children;   // исходный порядок, без изменений
-        bool operator==(const SumProductKey&) const = default;
+        std::vector<Value> leaf_values;
+        absl::InlinedVector<int32_t, 4> complex_children;
+
+        bool operator==(const SumProductKey& other) const {
+            return op == other.op &&
+                leaf_values == other.leaf_values &&
+                complex_children == other.complex_children;
+        }
     };
 
     struct SumProductKeyHash {
         size_t operator()(const SumProductKey& key) const {
-            size_t h = static_cast<size_t>(key.op);
-            for (int32_t c : key.children) h = absl::HashOf(h, c);
+            size_t h = absl::Hash<LazyOp>()(key.op);
+            ValueHash value_hasher;
+            for (const auto& v : key.leaf_values) {
+                h = absl::HashOf(h, value_hasher(v));
+            }
+            for (int32_t c : key.complex_children) {
+                h = absl::HashOf(h, c);
+            }
             return h;
         }
     };
 
     struct UnaryKey {
         LazyOp op;
-        int32_t child;      // -1 для PI/E
-        int32_t eps_idx;    // -1 если нет
-        bool operator==(const UnaryKey&) const = default;
+        absl::InlinedVector<int32_t, 4> children;
+        int32_t eps_idx;
+
+        bool operator==(const UnaryKey& other) const = default;
     };
 
     struct UnaryKeyHash {
         size_t operator()(const UnaryKey& k) const {
-            return absl::HashOf(k.op, k.child, k.eps_idx);
+            size_t h = absl::HashOf(k.op, k.eps_idx);
+            for (int32_t c : k.children) {
+                h = absl::HashOf(h, c);
+            }
+            return h;
         }
     };
 
-    struct TernaryKey {
-        LazyOp op;
-        int32_t base;
-        int32_t exponent;
-        int32_t eps_idx;
-        bool operator==(const TernaryKey&) const = default;
-    };
-
-    struct TernaryKeyHash {
-        size_t operator()(const TernaryKey& k) const {
-            return absl::HashOf(k.op, k.base, k.exponent, k.eps_idx);
-        }
-    };
-
-    // ----------------------------------------------------------------------------
+    // ------------------------------------------------------------------------
     // NodePool
-    // ----------------------------------------------------------------------------
+    // ------------------------------------------------------------------------
     struct NodePool {
         static constexpr size_t DEFAULT_MAX_SIZE = 1'000'000;
         size_t max_size = DEFAULT_MAX_SIZE;
@@ -132,11 +100,11 @@ namespace delta::internal {
         std::vector<int> refcount;
         size_t next_free_index = 0;
 
-        absl::flat_hash_map<Value, int> value_cache;
-        absl::flat_hash_map<Value, int> constant_cache;
+        // Явно указываем ValueHash и ValueEqual
+        absl::flat_hash_map<Value, int, ValueHash, ValueEqual> value_cache;
+        absl::flat_hash_map<Value, int, ValueHash, ValueEqual> constant_cache;
         absl::flat_hash_map<SumProductKey, int, SumProductKeyHash> sum_product_cache;
         absl::flat_hash_map<UnaryKey, int, UnaryKeyHash> unary_cache;
-        absl::flat_hash_map<TernaryKey, int, TernaryKeyHash> ternary_cache;
 
         void update_gc_threshold() {
             gc_threshold = static_cast<size_t>(0.9 * max_size);
@@ -152,15 +120,11 @@ namespace delta::internal {
         }
 
         int add_value(const Value& v) {
-            Value normalized = v;
-            if (normalized.tag == ValueType::Small && !normalized.small_reduced) {
-                normalized.normalize();
-            }
-            auto it = value_cache.find(normalized);
+            auto it = value_cache.find(v);
             if (it != value_cache.end()) return it->second;
             int idx = static_cast<int>(values.size());
-            values.push_back(normalized);
-            value_cache[normalized] = idx;
+            values.push_back(v);
+            value_cache[v] = idx;
             return idx;
         }
 
@@ -202,50 +166,25 @@ namespace delta::internal {
 
         bool is_occupied(const Node& node) const {
             if (node.op == LazyOp::SUM || node.op == LazyOp::PRODUCT) {
-                return node.children && !node.children->empty();
+                return !node.leaf_values.empty() || !node.complex_children.empty();
             }
-            return !(node.value_idx == -1 && node.child0 == -1 && node.child1 == -1);
+            if (node.op == LazyOp::CONST) {
+                return node.value_idx != -1;
+            }
+            return !node.children.empty() || node.eps_idx != -1;
         }
     };
 
     inline thread_local NodePool pool;
 
-    // ----------------------------------------------------------------------------
-    // Реализации Node конструкторов
-    // ----------------------------------------------------------------------------
-    inline Node::Node() : op(LazyOp::CONST), depth(0), approx(Interval()), hash(0),
-        value_idx(-1), child0(-1), child1(-1), eps_idx(-1) {
-    }
-
-    inline Node::Node(LazyOp op, int32_t val_idx, int32_t depth, Interval approx, uint64_t hash)
-        : op(op), depth(depth), approx(approx), hash(hash),
-        value_idx(val_idx), child0(-1), child1(-1), eps_idx(-1) {
-    }
-
-    inline Node::Node(LazyOp op, std::vector<int32_t>&& children, int32_t depth, Interval approx, uint64_t hash)
-        : op(op), depth(depth), approx(approx), hash(hash),
-        children(std::make_unique<std::vector<int32_t>>(std::move(children))),
-        value_idx(-1), child0(-1), child1(-1), eps_idx(-1) {
-    }
-
-    inline Node::Node(LazyOp op, int32_t child, int32_t eps_idx, int32_t depth, Interval approx, uint64_t hash)
-        : op(op), depth(depth), approx(approx), hash(hash),
-        child0(child), child1(-1), value_idx(-1), eps_idx(eps_idx) {
-    }
-
-    inline Node::Node(LazyOp op, int32_t base, int32_t exp, int32_t eps_idx, int32_t depth, Interval approx, uint64_t hash)
-        : op(op), depth(depth), approx(approx), hash(hash),
-        child0(base), child1(exp), value_idx(-1), eps_idx(eps_idx) {
-    }
-
-    // ----------------------------------------------------------------------------
-    // Вспомогательные функции
-    // ----------------------------------------------------------------------------
+    // ------------------------------------------------------------------------
+    // Реализации вспомогательных функций из node_types.h
+    // ------------------------------------------------------------------------
     inline uint64_t compute_hash_const(const Value& v) {
-        return absl::Hash<Value>{}(v);
+        return ValueHash{}(v);
     }
 
-    inline uint64_t combine_hash(LazyOp op, uint64_t h0, uint64_t h1 = 0, int64_t extra = 0) {
+    inline uint64_t combine_hash(LazyOp op, uint64_t h0, uint64_t h1, int64_t extra) {
         uint64_t h = static_cast<uint64_t>(op);
         auto combine = [](uint64_t& seed, uint64_t v) {
             seed ^= v + 0x9e3779b9 + (seed << 6) + (seed >> 2);
@@ -256,7 +195,35 @@ namespace delta::internal {
         return h;
     }
 
-    inline Interval compute_interval(LazyOp op, const Interval& a, const Interval& b = Interval()) {
+    inline Interval interval_from_value(const Value& v) {
+        return Interval(to_double(v));
+    }
+
+    inline Interval compute_sum_interval(const std::vector<Value>& leaf_values,
+        const std::vector<Interval>& child_intervals) {
+        Interval result = Interval::zero();
+        for (const auto& v : leaf_values) {
+            result = result + interval_from_value(v);
+        }
+        for (const auto& ival : child_intervals) {
+            result = result + ival;
+        }
+        return result;
+    }
+
+    inline Interval compute_product_interval(const std::vector<Value>& leaf_values,
+        const std::vector<Interval>& child_intervals) {
+        Interval result = Interval::one();
+        for (const auto& v : leaf_values) {
+            result = result * interval_from_value(v);
+        }
+        for (const auto& ival : child_intervals) {
+            result = result * ival;
+        }
+        return result;
+    }
+
+    inline Interval compute_interval(LazyOp op, const Interval& a, const Interval& b) {
         using std::sqrt, std::exp, std::log, std::sin, std::cos, std::acos;
         switch (op) {
         case LazyOp::SUM:      return a + b;
@@ -316,131 +283,155 @@ namespace delta::internal {
         }
     }
 
-    // ----------------------------------------------------------------------------
-    // Фабричные функции чистых узлов (без упрощений – только интернирование)
-    // ----------------------------------------------------------------------------
+    // ------------------------------------------------------------------------
+    // Конструкторы Node (реализация)
+    // ------------------------------------------------------------------------
+    inline Node::Node(LazyOp op, int32_t val_idx, int32_t depth, Interval approx, uint64_t hash)
+        : op(op), depth(depth), approx(approx), hash(hash), value_idx(val_idx), eps_idx(-1) {
+    }
 
-    // add_const – нормализует значение и интернирует константу
+    inline Node::Node(LazyOp op, absl::InlinedVector<int32_t, 4> children,
+        int32_t eps_idx, int32_t depth, Interval approx, uint64_t hash)
+        : op(op), depth(depth), approx(approx), hash(hash),
+        children(std::move(children)), value_idx(-1), eps_idx(eps_idx) {
+    }
+
+    inline Node::Node(LazyOp op, std::vector<Value> leaf_values,
+        absl::InlinedVector<int32_t, 4> complex_children,
+        int32_t depth, Interval approx, uint64_t hash)
+        : op(op), depth(depth), approx(approx), hash(hash),
+        value_idx(-1), eps_idx(-1),
+        leaf_values(std::move(leaf_values)),
+        complex_children(std::move(complex_children)) {
+    }
+
+    // ------------------------------------------------------------------------
+    // Фабричные функции чистых узлов
+    // ------------------------------------------------------------------------
     inline int add_const(const Value& v) {
         pool.ensure_initialized();
         auto it = pool.constant_cache.find(v);
         if (it != pool.constant_cache.end()) return it->second;
+
         int idx = pool.allocate_node();
         int val_idx = pool.add_value(v);
-        Node node(LazyOp::CONST, val_idx, 0, Interval(to_double(v)), compute_hash_const(v));
+        Node node(LazyOp::CONST, val_idx, 0, interval_from_value(v), compute_hash_const(v));
         pool.nodes[idx] = std::move(node);
         pool.refcount[idx] = 0;
         pool.constant_cache[v] = idx;
         return idx;
     }
 
-    // make_sum_node – создаёт узел SUM с переданными детьми (без фильтрации, сортировки, свёртки)
-    inline int make_sum_node(std::vector<int32_t> children) {
+    inline int make_sum_node(std::vector<Value> leaf_values,
+        absl::InlinedVector<int32_t, 4> complex_children) {
         pool.ensure_initialized();
-        // Ключ использует исходные дети (в том же порядке)
-        SumProductKey key{ LazyOp::SUM, children };
+        SumProductKey key{ LazyOp::SUM, leaf_values, complex_children };
         auto it = pool.sum_product_cache.find(key);
         if (it != pool.sum_product_cache.end()) return it->second;
 
-        // Вычисляем метаданные по переданным детям
         int32_t depth = 0;
-        Interval approx = Interval::zero();
+        std::vector<Interval> child_intervals;
+        child_intervals.reserve(complex_children.size());
         uint64_t hash = static_cast<uint64_t>(LazyOp::SUM);
-        for (int32_t child : children) {
+        ValueHash value_hasher;
+        for (int32_t child : complex_children) {
             depth = std::max(depth, pool.nodes[child].depth + 1);
-            approx = approx + pool.nodes[child].approx;
+            child_intervals.push_back(pool.nodes[child].approx);
             hash = combine_hash(LazyOp::SUM, hash, pool.nodes[child].hash);
         }
+        for (const auto& v : leaf_values) {
+            hash = absl::HashOf(hash, value_hasher(v));
+        }
+        Interval approx = compute_sum_interval(leaf_values, child_intervals);
 
         int idx = pool.allocate_node();
-        Node node(LazyOp::SUM, std::move(children), depth, approx, hash);
+        Node node(LazyOp::SUM, std::move(leaf_values), std::move(complex_children),
+            depth, approx, hash);
         pool.nodes[idx] = std::move(node);
         pool.refcount[idx] = 0;
         pool.sum_product_cache[std::move(key)] = idx;
         return idx;
     }
 
-    // make_product_node – создаёт узел PRODUCT с переданными детьми (без фильтрации, сортировки, свёртки)
-    inline int make_product_node(std::vector<int32_t> children) {
+    inline int make_product_node(std::vector<Value> leaf_values,
+        absl::InlinedVector<int32_t, 4> complex_children) {
         pool.ensure_initialized();
-        SumProductKey key{ LazyOp::PRODUCT, children };
+        SumProductKey key{ LazyOp::PRODUCT, leaf_values, complex_children };
         auto it = pool.sum_product_cache.find(key);
         if (it != pool.sum_product_cache.end()) return it->second;
 
         int32_t depth = 0;
-        Interval approx = Interval::one();
+        std::vector<Interval> child_intervals;
+        child_intervals.reserve(complex_children.size());
         uint64_t hash = static_cast<uint64_t>(LazyOp::PRODUCT);
-        for (int32_t child : children) {
+        ValueHash value_hasher;
+        for (int32_t child : complex_children) {
             depth = std::max(depth, pool.nodes[child].depth + 1);
-            approx = approx * pool.nodes[child].approx;
+            child_intervals.push_back(pool.nodes[child].approx);
             hash = combine_hash(LazyOp::PRODUCT, hash, pool.nodes[child].hash);
         }
+        for (const auto& v : leaf_values) {
+            hash = absl::HashOf(hash, value_hasher(v));
+        }
+        Interval approx = compute_product_interval(leaf_values, child_intervals);
 
         int idx = pool.allocate_node();
-        Node node(LazyOp::PRODUCT, std::move(children), depth, approx, hash);
+        Node node(LazyOp::PRODUCT, std::move(leaf_values), std::move(complex_children),
+            depth, approx, hash);
         pool.nodes[idx] = std::move(node);
         pool.refcount[idx] = 0;
         pool.sum_product_cache[std::move(key)] = idx;
         return idx;
     }
 
-    // get_unary_node – создаёт узел для унарной операции (без алгебраических упрощений)
-    inline int get_unary_node(LazyOp op, int child, int eps_idx) {
+    inline int get_unary_node(LazyOp op, absl::InlinedVector<int32_t, 4> children, int eps_idx) {
         pool.ensure_initialized();
-        UnaryKey key{ op, child, eps_idx };
+        UnaryKey key{ op, children, eps_idx };
         auto it = pool.unary_cache.find(key);
         if (it != pool.unary_cache.end()) return it->second;
 
         int idx = pool.allocate_node();
-        int32_t depth;
+        int32_t depth = 0;
         Interval approx;
-        uint64_t hash;
+        uint64_t hash = static_cast<uint64_t>(op);
 
-        if (child == -1) { // PI, E
-            depth = 0;
+        if (children.empty()) {
+            // PI, E
             approx = compute_interval(op, Interval());
             hash = combine_hash(op, 0, eps_idx);
         }
-        else {
+        else if (children.size() == 1) {
+            int32_t child = children[0];
             depth = 1 + pool.nodes[child].depth;
             approx = compute_interval(op, pool.nodes[child].approx);
             hash = combine_hash(op, pool.nodes[child].hash, 0, eps_idx);
         }
+        else if (children.size() == 2) {
+            int32_t base = children[0];
+            int32_t exp = children[1];
+            depth = 1 + std::max(pool.nodes[base].depth, pool.nodes[exp].depth);
+            approx = compute_interval(LazyOp::POW, pool.nodes[base].approx, pool.nodes[exp].approx);
+            hash = combine_hash(LazyOp::POW, pool.nodes[base].hash, pool.nodes[exp].hash, eps_idx);
+        }
+        else {
+            throw std::logic_error("get_unary_node: invalid children count");
+        }
 
-        Node node(op, child, eps_idx, depth, approx, hash);
+        Node node(op, std::move(children), eps_idx, depth, approx, hash);
         pool.nodes[idx] = std::move(node);
         pool.refcount[idx] = 0;
-        pool.unary_cache[key] = idx;
+        pool.unary_cache[std::move(key)] = idx;
         return idx;
     }
 
-    // get_pow_node – создаёт узел POW (без упрощений)
     inline int get_pow_node(int base, int exponent, int eps_idx) {
-        pool.ensure_initialized();
-        TernaryKey key{ LazyOp::POW, base, exponent, eps_idx };
-        auto it = pool.ternary_cache.find(key);
-        if (it != pool.ternary_cache.end()) return it->second;
-
-        int idx = pool.allocate_node();
-        int32_t depth = 1 + std::max(pool.nodes[base].depth, pool.nodes[exponent].depth);
-        Interval approx = compute_interval(LazyOp::POW,
-            pool.nodes[base].approx,
-            pool.nodes[exponent].approx);
-        uint64_t hash = combine_hash(LazyOp::POW,
-            pool.nodes[base].hash,
-            pool.nodes[exponent].hash,
-            eps_idx);
-
-        Node node(LazyOp::POW, base, exponent, eps_idx, depth, approx, hash);
-        pool.nodes[idx] = std::move(node);
-        pool.refcount[idx] = 0;
-        pool.ternary_cache[key] = idx;
-        return idx;
+        absl::InlinedVector<int32_t, 4> children = { base, exponent };
+        return get_unary_node(LazyOp::POW, std::move(children), eps_idx);
     }
 
-    // ----------------------------------------------------------------------------
+    // ------------------------------------------------------------------------
     // Управление ссылками
-    // ----------------------------------------------------------------------------
+    // ------------------------------------------------------------------------
     inline void increment_ref(int idx) {
         if (idx < 0) return;
         pool.ensure_initialized();
@@ -455,28 +446,114 @@ namespace delta::internal {
             --pool.refcount[idx];
             if (pool.refcount[idx] == 0) {
                 const Node& node = pool.nodes[idx];
-                if ((node.op == LazyOp::SUM || node.op == LazyOp::PRODUCT) && node.children) {
-                    for (int32_t child : *node.children) {
+                if (node.op == LazyOp::SUM || node.op == LazyOp::PRODUCT) {
+                    for (int32_t child : node.complex_children) {
                         decrement_ref(child);
                     }
                 }
                 else {
-                    if (node.child0 != -1) decrement_ref(node.child0);
-                    if (node.child1 != -1) decrement_ref(node.child1);
+                    for (int32_t child : node.children) {
+                        decrement_ref(child);
+                    }
                 }
             }
         }
     }
 
-    //// ----------------------------------------------------------------------------
-    //// Структурное сравнение (реализация в simplify.h, но здесь не используется)
-    //// ----------------------------------------------------------------------------
-    //inline bool structurally_equal(int root_a, int root_b) {
-    //    // Заглушка – в новом пайплайне не используется, оставлена для совместимости.
-    //    return root_a == root_b;
-    //}
-
 } // namespace delta::internal
 
-// Подключаем gc.h в конце для разрешения циклической зависимости
-#include "gc.h"
+// ----------------------------------------------------------------------------
+// Подключаем evaluate_impl.h и реализуем evaluate для чистого дерева и GC
+// ----------------------------------------------------------------------------
+#include "evaluate_impl.h"
+
+namespace delta::internal {
+
+    inline Value evaluate(int root_idx) {
+        struct Accessor {
+            Value const_value(const Node& node) const {
+                return pool.values[node.value_idx];
+            }
+            Value eps_value(const Node& node) const {
+                return (node.eps_idx != -1) ? pool.values[node.eps_idx] : Value{};
+            }
+        };
+        SumStrategy_Standard sum_strategy;
+        ProdStrategy_Sequential prod_strategy;
+        return evaluate_tree<Node>(root_idx, pool.nodes, Accessor{}, sum_strategy, prod_strategy);
+    }
+
+    inline void collect_garbage() {
+        const size_t n = pool.nodes.size();
+        if (n == 0) return;
+
+        std::vector<bool> alive(n, false);
+        size_t alive_count = 0;
+        for (size_t i = 0; i < n; ++i) {
+            if (pool.refcount[i] > 0) {
+                alive[i] = true;
+                ++alive_count;
+            }
+        }
+
+        if (alive_count == 0) {
+            pool.nodes.clear();
+            pool.refcount.clear();
+            pool.next_free_index = 0;
+            pool.value_cache.clear();
+            pool.constant_cache.clear();
+            pool.sum_product_cache.clear();
+            pool.unary_cache.clear();
+            return;
+        }
+
+        NodePool new_pool;
+        new_pool.max_size = pool.max_size;
+        new_pool.update_gc_threshold();
+        new_pool.nodes.resize(pool.max_size);
+        new_pool.refcount.assign(pool.max_size, 0);
+
+        new_pool.values = pool.values;
+        new_pool.value_cache = pool.value_cache;
+
+        for (size_t i = 0; i < n; ++i) {
+            if (alive[i]) {
+                Value v = evaluate(static_cast<int>(i));
+                int val_idx = new_pool.add_value(v);
+                Node const_node(LazyOp::CONST, val_idx, 0, Interval(to_double(v)), compute_hash_const(v));
+                new_pool.nodes[i] = std::move(const_node);
+                new_pool.refcount[i] = pool.refcount[i];
+            }
+        }
+
+        new_pool.next_free_index = 0;
+        while (new_pool.next_free_index < new_pool.max_size &&
+            new_pool.is_occupied(new_pool.nodes[new_pool.next_free_index])) {
+            ++new_pool.next_free_index;
+        }
+
+        pool = std::move(new_pool);
+    }
+
+    inline void set_pool_max_size(size_t new_size) {
+        if (pool.nodes.empty()) {
+            pool.max_size = new_size;
+            pool.update_gc_threshold();
+        }
+        else if (new_size > pool.max_size) {
+            pool.max_size = new_size;
+            pool.update_gc_threshold();
+        }
+    }
+
+    inline void force_garbage_collect() {
+        collect_garbage();
+    }
+
+    inline void reset_pool() {
+        pool.~NodePool();
+        new (&pool) NodePool();
+        pool.update_gc_threshold();
+    }
+
+} // namespace delta::internal

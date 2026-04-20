@@ -9,7 +9,5 @@ namespace delta {
 }
 
 namespace delta::internal {
-    struct SmallStorage;
-    struct BigStorage;
     class Interval;
 }

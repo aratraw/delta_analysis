@@ -4,7 +4,6 @@
 #include "rational_fwd.h"
 #include "storage.h"
 
-#include <absl/numeric/int128.h>
 #include <boost/multiprecision/cpp_int.hpp>
 #include <string>
 #include <vector>
@@ -17,8 +16,6 @@ namespace delta {
         // Конструкторы
         // ------------------------------------------------------------------------
         Rational() noexcept;
-        explicit Rational(absl::int128 num);
-        Rational(absl::int128 num, absl::uint128 den);
         Rational(int num);
         Rational(long long num);
         Rational(unsigned long long num);
@@ -57,6 +54,7 @@ namespace delta {
         std::string to_string() const;
 
         internal::Interval approx_interval() const;
+
         // ------------------------------------------------------------------------
         // Доступ к внутреннему Value (для внутреннего использования)
         // ------------------------------------------------------------------------
@@ -102,8 +100,9 @@ namespace delta {
         // ------------------------------------------------------------------------
         template<typename T>
         T convert_to() const;
+
     private:
-        internal::Value storage_;   // может быть несокращённым (small_reduced == false)
+        internal::Value storage_;
 
         // Дружественные eager-функции (определены в evaluation_core.h)
         friend Rational eager_add(const Rational& a, const Rational& b);
@@ -125,7 +124,9 @@ namespace delta {
         friend void inplace_add(Rational& a, const Rational& b);
         friend void inplace_mul(Rational& a, const Rational& b);
     };
+
     std::ostream& operator<<(std::ostream& os, const Rational& r);
+
 } // namespace delta
 
 #include "rational_impl.h"

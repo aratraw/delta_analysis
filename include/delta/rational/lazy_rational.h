@@ -8,7 +8,7 @@
 #include <optional>          // для std::optional
 
 #ifdef DELTA_TESTING
-namespace delta::test {
+namespace delta::testing {
     class LazyRationalTestFixture;   // forward declaration
 }
 #endif
@@ -83,6 +83,12 @@ namespace delta {
         void invalidate_interval() const { cached_interval_.reset(); }
 
         // ------------------------------------------------------------------------
+        // Методы массовой вставки (bulk append)
+        // ------------------------------------------------------------------------
+        void append_values(std::vector<internal::Value>&& values);
+        void append_nodes(std::vector<int>&& node_indices);
+
+        // ------------------------------------------------------------------------
         // Мутирующие операторы (всегда изменяют левый операнд)
         // ------------------------------------------------------------------------
         // Сложение
@@ -132,23 +138,34 @@ namespace delta {
         friend bool operator>(const LazyRational& a, const LazyRational& b);
         friend bool operator>=(const LazyRational& a, const LazyRational& b);
 
-        // Дружественные функции для ленивых трансцендентных
+        // ------------------------------------------------------------------------
+         // Дружественные функции для ленивых трансцендентных (все перегрузки)
+         // ------------------------------------------------------------------------
         friend LazyRational lazy_sqrt(const LazyRational& x, const Rational& eps);
+        friend LazyRational lazy_sqrt(const Rational& x, const Rational& eps);
         friend LazyRational lazy_exp(const LazyRational& x, const Rational& eps);
+        friend LazyRational lazy_exp(const Rational& x, const Rational& eps);
         friend LazyRational lazy_log(const LazyRational& x, const Rational& eps);
+        friend LazyRational lazy_log(const Rational& x, const Rational& eps);
         friend LazyRational lazy_sin(const LazyRational& x, const Rational& eps);
+        friend LazyRational lazy_sin(const Rational& x, const Rational& eps);
         friend LazyRational lazy_cos(const LazyRational& x, const Rational& eps);
+        friend LazyRational lazy_cos(const Rational& x, const Rational& eps);
         friend LazyRational lazy_acos(const LazyRational& x, const Rational& eps);
+        friend LazyRational lazy_acos(const Rational& x, const Rational& eps);
         friend LazyRational lazy_pi(const Rational& eps);
         friend LazyRational lazy_e(const Rational& eps);
         friend LazyRational lazy_pow(const LazyRational& base, const LazyRational& exponent, const Rational& eps);
+        friend LazyRational lazy_pow(const Rational& base, const LazyRational& exponent, const Rational& eps);
+        friend LazyRational lazy_pow(const Rational& base, const Rational& exponent, const Rational& eps);
+        friend LazyRational lazy_pow(const LazyRational& base, const Rational& exponent, const Rational& eps);
         friend LazyRational lazy_pow(const LazyRational& base, int exponent);
 
         // Друг для доступа к грязному дереву при вычислении интервала
         friend internal::Interval compute_interval_dirty(const LazyRational& lr);
 
 #ifdef DELTA_TESTING
-        friend class delta::test::LazyRationalTestFixture;
+        friend class delta::testing::LazyRationalTestFixture;
 #endif
 
     private:
@@ -170,11 +187,10 @@ namespace delta {
         // Приватные методы
         // ------------------------------------------------------------------------
         void canonicalize() const;          // Dirty -> Clean, меняет state_ и clean_index_
-        Rational eval_dirty() const;
-        Rational eval_dirty_inplace();
         int import_tree(const LazyRational& other);
         int add_constant(const internal::Value& v);
-        int new_dirty_node(internal::LazyOp op, absl::InlinedVector<int, 2> children, int const_index = -1);
+        int new_dirty_node(internal::LazyOp op, absl::InlinedVector<int32_t, 4> children,
+            int value_idx = -1, int eps_idx = -1);
         void append_sum_children(int sum_node, const LazyRational& other);
         void append_product_children(int prod_node, const LazyRational& other);
     };
