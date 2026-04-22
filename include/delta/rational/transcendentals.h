@@ -41,15 +41,15 @@ namespace delta {
         if (exponent == 0) return Rational(1);
         if (exponent < 0) {
             Rational pos = pow(base, -exponent);
-            return eager_div(Rational(1), pos);
+            return 1 / pos;
         }
         Rational result = Rational(1);
         Rational b = base;
         int e = exponent;
         while (e > 0) {
-            if (e & 1) result = eager_mul(result, b);
+            if (e & 1) result *= b;
             e >>= 1;
-            if (e != 0) b = eager_mul(b, b);
+            if (e != 0) b = b * b;
         }
         return result;
     }
@@ -253,6 +253,75 @@ namespace delta {
         int node = result.new_dirty_node(internal::LazyOp::E, {}, -1, eps_idx);
         result.root_ = node;
         return result;
+    }
+
+    // ----------------------------------------------------------------------------
+    // Удобные короткие имена для lazy-вычислений (заглавные буквы)
+    // ----------------------------------------------------------------------------
+    inline LazyRational Sqrt(const LazyRational& x, const Rational& eps = default_eps()) {
+        return lazy_sqrt(x, eps);
+    }
+    inline LazyRational Sqrt(const Rational& x, const Rational& eps = default_eps()) {
+        return lazy_sqrt(x, eps);
+    }
+
+    inline LazyRational Exp(const LazyRational& x, const Rational& eps = default_eps()) {
+        return lazy_exp(x, eps);
+    }
+    inline LazyRational Exp(const Rational& x, const Rational& eps = default_eps()) {
+        return lazy_exp(x, eps);
+    }
+
+    inline LazyRational Log(const LazyRational& x, const Rational& eps = default_eps()) {
+        return lazy_log(x, eps);
+    }
+    inline LazyRational Log(const Rational& x, const Rational& eps = default_eps()) {
+        return lazy_log(x, eps);
+    }
+
+    inline LazyRational Sin(const LazyRational& x, const Rational& eps = default_eps()) {
+        return lazy_sin(x, eps);
+    }
+    inline LazyRational Sin(const Rational& x, const Rational& eps = default_eps()) {
+        return lazy_sin(x, eps);
+    }
+
+    inline LazyRational Cos(const LazyRational& x, const Rational& eps = default_eps()) {
+        return lazy_cos(x, eps);
+    }
+    inline LazyRational Cos(const Rational& x, const Rational& eps = default_eps()) {
+        return lazy_cos(x, eps);
+    }
+
+    inline LazyRational Acos(const LazyRational& x, const Rational& eps = default_eps()) {
+        return lazy_acos(x, eps);
+    }
+    inline LazyRational Acos(const Rational& x, const Rational& eps = default_eps()) {
+        return lazy_acos(x, eps);
+    }
+
+    inline LazyRational Pi(const Rational& eps = default_eps()) {
+        return lazy_pi(eps);
+    }
+
+    inline LazyRational E(const Rational& eps = default_eps()) {
+        return lazy_e(eps);
+    }
+
+    inline LazyRational Pow(const LazyRational& base, const LazyRational& exponent, const Rational& eps = default_eps()) {
+        return lazy_pow(base, exponent, eps);
+    }
+    inline LazyRational Pow(const Rational& base, const LazyRational& exponent, const Rational& eps = default_eps()) {
+        return lazy_pow(base, exponent, eps);
+    }
+    inline LazyRational Pow(const LazyRational& base, const Rational& exponent, const Rational& eps = default_eps()) {
+        return lazy_pow(base, exponent, eps);
+    }
+    inline LazyRational Pow(const Rational& base, const Rational& exponent, const Rational& eps = default_eps()) {
+        return lazy_pow(base, exponent, eps);
+    }
+    inline LazyRational Pow(const LazyRational& base, int exponent) {
+        return lazy_pow(base, exponent);
     }
 
 } // namespace delta

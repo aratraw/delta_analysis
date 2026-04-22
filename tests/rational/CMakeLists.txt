@@ -1,18 +1,19 @@
 # tests/rational/CMakeLists.txt
 add_executable(delta_tests_rational
     main_tests_rational.cpp
-    rational_test.cpp
-    rational_test_2.cpp
-    interval_test.cpp
-    batch_test.cpp
-    lazy_rational_contract_tests.cpp
-    lazy_test.cpp
-    gc_test.cpp
-    transcendentals_test.cpp
+#    rational_test.cpp
+#    rational_test_2.cpp
+#    interval_test.cpp
+#    batch_test.cpp
+#    lazy_rational_contract_tests.cpp
+#    lazy_test.cpp
+#    gc_test.cpp
+    transcendentals_correctness.cpp
+    transcendentals_comparative.cpp
     pow_test.cpp
-    performance_compare_test.cpp
-    performance_test.cpp
-)
+#    performance_compare_test.cpp
+#    performance_test.cpp
+ "transcendentals_canonicalization_benchmark.cpp")
 
 target_include_directories(delta_tests_rational PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/..)
 

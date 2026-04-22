@@ -25,7 +25,7 @@ namespace delta::testing {
     // -------------------------------------------------------------------------
     TEST_F(RationalPowTest, EagerPowRationalExponent) {
         Rational eps = default_eps();
-
+        internal::reset_pool();
         Rational p = delta::pow(4_r, "1/2"_r, eps);
         EXPECT_EQ(p, 2_r);
 

@@ -1,0 +1,718 @@
+// transcendentals_correctness.cpp
+// Тесты корректности трансцендентных функций Delta:
+// - базовые eager/lazy, граничные случаи, вложенные выражения,
+// - варьирование точности, редукция аргументов, консистентность путей,
+// - стресс-тест Lazy дерева,
+// - проверка на очень малых eps с использованием наивных реализаций как эталона.
+
+#include <gtest/gtest.h>
+#include <chrono>
+#include <cmath>
+#include <functional>
+#include <iomanip>
+#include <iostream>
+#include <random>
+#include <sstream>
+#include <vector>
+
+#include "delta/core/rational.h"
+#include "test_utils.h"
+#include "lazy_rational_test_fixture.h"
+
+namespace delta::testing {
+
+    // -------------------------------------------------------------------------
+    // Наивные (эталонные) реализации через последовательные ряды / итерации.
+    // Используются для проверки корректности Delta при любых точностях.
+    // -------------------------------------------------------------------------
+    namespace {
+
+        Rational naive_series_ln2(const Rational& eps) {
+            Rational one(1);
+            Rational three(3);
+            Rational z = one / three;
+            Rational z2 = z * z;
+            Rational term = z, sum = term, n = one, two(2);
+            while (true) {
+                term = term * z2;
+                n = n + two;
+                sum = sum + term / n;
+                if (abs(term) < eps) break;
+            }
+            return two * sum;
+        }
+
+        Rational naive_series_pi(const Rational& eps) {
+            Rational one(1), five(5), two39(239);
+            Rational sixteen(16), four(4), two(2);
+            Rational a = one / five, a2 = a * a;
+            Rational term = a, sum_atan5 = term, n = one;
+            while (true) {
+                term = term * (-a2);
+                n = n + two;
+                sum_atan5 = sum_atan5 + term / n;
+                if (abs(term) < eps) break;
+            }
+            Rational b = one / two39, b2 = b * b;
+            term = b;
+            Rational sum_atan239 = term;
+            n = one;
+            while (true) {
+                term = term * (-b2);
+                n = n + two;
+                sum_atan239 = sum_atan239 + term / n;
+                if (abs(term) < eps) break;
+            }
+            return sixteen * sum_atan5 - four * sum_atan239;
+        }
+
+        Rational naive_series_sin(const Rational& x, const Rational& eps) {
+            Rational one(1), two(2);
+            Rational pi_val = naive_series_pi(eps), twopi = pi_val * two;
+            Rational reduced = x;
+            while (abs(reduced) > pi_val) {
+                if (reduced > 0) reduced = reduced - twopi;
+                else reduced = reduced + twopi;
+            }
+            Rational x2 = reduced * reduced;
+            Rational term = reduced, sum = term, k = one;
+            while (true) {
+                term = term * (-x2);
+                term = term / (two * k * (two * k + one));
+                sum = sum + term;
+                k = k + one;
+                if (abs(term) < eps) break;
+            }
+            return sum;
+        }
+
+        Rational naive_series_cos(const Rational& x, const Rational& eps) {
+            Rational one(1), two(2);
+            Rational pi_val = naive_series_pi(eps), twopi = pi_val * two;
+            Rational reduced = x;
+            while (abs(reduced) > pi_val) {
+                if (reduced > 0) reduced = reduced - twopi;
+                else reduced = reduced + twopi;
+            }
+            Rational x2 = reduced * reduced;
+            Rational term = one, sum = term, k = one;
+            while (true) {
+                term = term * (-x2);
+                term = term / ((two * k - one) * (two * k));
+                sum = sum + term;
+                k = k + one;
+                if (abs(term) < eps) break;
+            }
+            return sum;
+        }
+
+        Rational naive_series_exp(const Rational& x, const Rational& eps) {
+            Rational one(1), two(2);
+            int k = 0;
+            Rational reduced = x;
+            while (abs(reduced) > one) {
+                reduced = reduced / two;
+                ++k;
+            }
+            Rational sum = one, term = one, n = one;
+            while (true) {
+                term = term * reduced / n;
+                sum = sum + term;
+                n = n + one;
+                if (abs(term) < eps) break;
+            }
+            Rational result = sum;
+            for (int i = 0; i < k; ++i) result = result * result;
+            return result;
+        }
+
+        Rational naive_series_log(const Rational& x, const Rational& eps) {
+            Rational one(1), two(2), half = one / two;
+            int k = 0;
+            Rational m = x;
+            while (m > two) { m = m / two; ++k; }
+            while (m < half) { m = m * two; --k; }
+            Rational ln2 = naive_series_ln2(eps);
+            Rational y = (m - one) / (m + one);
+            Rational y2 = y * y;
+            Rational term = y, sum = term, n = one;
+            while (true) {
+                term = term * y2;
+                n = n + two;
+                sum = sum + term / n;
+                if (abs(term) < eps) break;
+            }
+            Rational ln_m = two * sum;
+            return ln_m + Rational(k) * ln2;
+        }
+
+        Rational naive_series_sqrt(const Rational& x, const Rational& eps) {
+            if (x == 0_r) return 0_r;
+            if (x < 0_r) throw std::domain_error("sqrt of negative number");
+            Rational one(1), two(2);
+            Rational guess = x / two, diff;
+            size_t iter = 0;
+            const size_t max_iter = 1000;
+            do {
+                Rational next = (guess + x / guess) / two;
+                diff = abs(next - guess);
+                guess = next;
+                ++iter;
+                if (iter > max_iter) break;
+            } while (diff > eps);
+            return guess;
+        }
+
+        Rational naive_series_e(const Rational& eps) {
+            Rational one(1);
+            Rational sum = one, term = one, n = one;
+            while (true) {
+                term = term / n;
+                sum = sum + term;
+                n = n + one;
+                if (term < eps) break;
+            }
+            return sum;
+        }
+
+        Rational naive_series_acos(const Rational& x, const Rational& eps) {
+            Rational one(1), two(2);
+            Rational pi_val = naive_series_pi(eps);
+            Rational half_pi = pi_val / two;
+            if (x < -one || x > one)
+                throw std::domain_error("acos argument out of [-1,1]");
+            Rational y = (x > 0) ? half_pi * (one - x) : pi_val - half_pi * (one + x);
+            const size_t max_iter = 100;
+            size_t iter = 0;
+            while (iter < max_iter) {
+                Rational cos_y = naive_series_cos(y, eps);
+                Rational sin_y = naive_series_sin(y, eps);
+                if (sin_y == 0_r) break;
+                Rational delta = (cos_y - x) / sin_y;
+                y = y - delta;
+                if (abs(delta) < eps) break;
+                ++iter;
+            }
+            return y;
+        }
+
+        Rational naive_series_pow(const Rational& base, const Rational& exp, const Rational& eps) {
+            if (base == 0_r) {
+                if (exp == 0_r) throw std::domain_error("0^0 is undefined");
+                if (exp < 0_r) throw std::domain_error("0^negative is undefined");
+                return 0_r;
+            }
+            if (base == 1_r) return 1_r;
+            if (exp == 0_r) return 1_r;
+
+            // Проверка целого показателя
+            auto is_integer = [](const Rational& r) {
+                return r.denominator() == 1_r;
+                };
+            if (is_integer(exp)) {
+                auto exp_int = exp.numerator().convert_to<int>();
+                if (exp_int < 0) {
+                    Rational base_recip = 1_r / base;
+                    return pow(base_recip, -exp_int);
+                }
+                Rational result = 1_r, b = base;
+                int e = exp_int;
+                while (e > 0) {
+                    if (e & 1) result = result * b;
+                    e >>= 1;
+                    if (e != 0) b = b * b;
+                }
+                return result;
+            }
+
+            Rational log_base = naive_series_log(base, eps / 1000);
+            Rational p_log = exp * log_base;
+            return naive_series_exp(p_log, eps / 1000);
+        }
+
+    } // namespace
+
+    // -----------------------------------------------------------------------------
+    // Фикстура для тестов корректности
+    // -----------------------------------------------------------------------------
+    class TranscendentalCorrectnessTest : public LazyRationalTestFixture {
+    protected:
+        // Часто используемые точности
+        const Rational EPS_STD = "1/1000000000000"_r;           // 1e-12
+        const Rational EPS_HIGH = "1/1000000000000000000000"_r; // 1e-21
+        const Rational EPS_ULTRA = "1/10000000000000000000000000000000000000000"_r; // 1e-40
+        const Rational EPS_EXTREME = "1/10000000000000000000000000000000000000000000000000000000000000000000000000000000"_r; // 1e-80
+
+        // Проверка, что результат Delta близок к наивному эталону с заданным eps
+        void expect_near_naive(const Rational& delta_val,
+            const Rational& naive_val,
+            const Rational& eps,
+            const std::string& msg = "") {
+            EXPECT_RATIONAL_NEAR(delta_val, naive_val, eps) << msg;
+        }
+
+        template<typename DeltaFunc, typename NaiveFunc>
+        void test_function_against_naive(DeltaFunc delta_func,
+            NaiveFunc naive_func,
+            const Rational& arg,
+            const Rational& eps,
+            const std::string& func_name) {
+            Rational delta_res = delta_func(arg, eps);
+            Rational naive_res = naive_func(arg, eps);
+            Rational tolerance = eps * 10; // небольшой запас из-за разных стратегий
+            EXPECT_RATIONAL_NEAR(delta_res, naive_res, tolerance)
+                << func_name << "(" << arg << ") with eps=" << eps;
+        }
+    };
+
+    // -----------------------------------------------------------------------------
+    // 1. Базовые eager тесты
+    // -----------------------------------------------------------------------------
+    TEST_F(TranscendentalCorrectnessTest, EagerSqrt) {
+        Rational s4 = delta::sqrt(4_r);
+        EXPECT_EQ(s4, 2_r);
+
+        Rational s2 = delta::sqrt(2_r);
+        Rational expected_sqrt2 = Rational("14142135623730950488/10000000000000000000");
+        EXPECT_RATIONAL_NEAR(s2, expected_sqrt2, EPS_STD);
+    }
+
+    TEST_F(TranscendentalCorrectnessTest, EagerExp) {
+        Rational e0 = delta::exp(0_r);
+        EXPECT_EQ(e0, 1_r);
+
+        Rational e1 = delta::exp(1_r);
+        Rational expected_e = Rational("27182818284590452354/10000000000000000000");
+        EXPECT_RATIONAL_NEAR(e1, expected_e, EPS_STD);
+    }
+
+    TEST_F(TranscendentalCorrectnessTest, EagerLog) {
+        Rational l1 = delta::log(1_r);
+        EXPECT_EQ(l1, 0_r);
+
+        Rational l2 = delta::log(2_r);
+        Rational expected_log2 = Rational("69314718055994530942/100000000000000000000");
+        EXPECT_RATIONAL_NEAR(l2, expected_log2, EPS_STD);
+    }
+
+    TEST_F(TranscendentalCorrectnessTest, EagerSinCos) {
+        Rational s0 = delta::sin(0_r);
+        EXPECT_EQ(s0, 0_r);
+
+        Rational c0 = delta::cos(0_r);
+        EXPECT_EQ(c0, 1_r);
+    }
+
+    TEST_F(TranscendentalCorrectnessTest, EagerPiE) {
+        Rational p = delta::pi();
+        Rational expected_pi = Rational("31415926535897932384626433832795028841971693993751/10000000000000000000000000000000000000000000000000");
+        EXPECT_RATIONAL_NEAR(p, expected_pi, EPS_STD);
+
+        Rational e = delta::e();
+        Rational expected_e = Rational("27182818284590452353602874713526624977572470936996/10000000000000000000000000000000000000000000000000");
+        EXPECT_RATIONAL_NEAR(e, expected_e, EPS_STD);
+    }
+
+    // ВЫЧИСЛЕНИЕ КОРНЯ ЧЕРЕЗ МЕТОД НЬЮТОНА СХОДИТСЯ КВАДРАТИЧНО, 
+    // ТАК ЧТО ОДИН И ТОТ ЖЕ КОРЕНЬ ЗАПРОШЕННЫЙ С ВЫСОКОЙ И НИЗКОЙ ТОЧНОСТЬЮ 
+    // - ВСЁ РАВНО МОЖЕТ ПОСЧИТАТЬСЯ С ВЫСОКОЙ ТОЧНОСТЬЮ
+    // Это особенность метода Ньютона, а не баг. Поэтому мы тестируем квадраты корней чтобы увидеть разбег погрешности
+    TEST_F(TranscendentalCorrectnessTest, PrecisionParameter) {
+        Rational x = 2_r;
+        Rational eps_low = "1/10"_r;
+        Rational eps_high = "1/1000000000000000000000000000000"_r;
+
+        Rational low = delta::sqrt(x, eps_low);
+        Rational high = delta::sqrt(x, eps_high);
+
+        // Проверяем, что |sqrt(x)² - x| < eps для каждого случая
+        Rational diff_low = delta::abs(low * low - x);
+        Rational diff_high = delta::abs(high * high - x);
+
+        EXPECT_TRUE(diff_low < eps_low)
+            << "diff_low=" << diff_low.to_double() << " >= eps_low=" << eps_low.to_double();
+        EXPECT_TRUE(diff_high < eps_high)
+            << "diff_high=" << diff_high.to_double() << " >= eps_high=" << eps_high.to_double();
+
+        // Дополнительно: более строгий eps даёт меньшую погрешность
+        EXPECT_TRUE(diff_high < diff_low);
+    }
+    // -----------------------------------------------------------------------------
+    // 2. Lazy тесты
+    // -----------------------------------------------------------------------------
+    TEST_F(TranscendentalCorrectnessTest, LazySqrt) {
+        auto s = delta::lazy_sqrt(2_r);
+        static_assert(std::is_same_v<decltype(s), LazyRational>);
+        Rational expected_sqrt2 = Rational("14142135623730950488/10000000000000000000");
+        EXPECT_RATIONAL_NEAR(s.eval(), expected_sqrt2, EPS_STD);
+    }
+
+    TEST_F(TranscendentalCorrectnessTest, LazyExp) {
+        auto e = delta::lazy_exp(1_r);
+        static_assert(std::is_same_v<decltype(e), LazyRational>);
+        Rational expected_e = Rational("27182818284590452354/10000000000000000000");
+        EXPECT_RATIONAL_NEAR(e.eval(), expected_e, EPS_STD);
+    }
+
+    TEST_F(TranscendentalCorrectnessTest, LazyPi) {
+        auto p = delta::lazy_pi();
+        static_assert(std::is_same_v<decltype(p), LazyRational>);
+        Rational expected_pi = Rational("31415926535897932384626433832795028841971693993751/10000000000000000000000000000000000000000000000000");
+        EXPECT_RATIONAL_NEAR(p.eval(), expected_pi, EPS_STD);
+    }
+
+    // -----------------------------------------------------------------------------
+    // 3. Граничные случаи
+    // -----------------------------------------------------------------------------
+    TEST_F(TranscendentalCorrectnessTest, SqrtEdgeCases) {
+        EXPECT_EQ(delta::sqrt(0_r), 0_r);
+        EXPECT_EQ(delta::sqrt(1_r), 1_r);
+        EXPECT_THROW(delta::sqrt(-1_r), std::domain_error);
+        Rational big = "10000000000000000000000000000000000000000000000000"_r;
+        Rational sqrt_big = delta::sqrt(big);
+        EXPECT_TRUE(sqrt_big > 0_r);
+        EXPECT_RATIONAL_NEAR(sqrt_big * sqrt_big, big, EPS_STD);
+    }
+
+    TEST_F(TranscendentalCorrectnessTest, ExpEdgeCases) {
+        EXPECT_EQ(delta::exp(0_r), 1_r);
+        Rational large = 100_r;
+        Rational exp_large = delta::exp(large);
+        EXPECT_TRUE(exp_large > 1_r);
+        Rational exp_neg = delta::exp(-large);
+        EXPECT_RATIONAL_NEAR(exp_neg * exp_large, 1_r, EPS_STD);
+    }
+
+    TEST_F(TranscendentalCorrectnessTest, LogEdgeCases) {
+        EXPECT_EQ(delta::log(1_r), 0_r);
+        EXPECT_THROW(delta::log(0_r), std::domain_error);
+        EXPECT_THROW(delta::log(-1_r), std::domain_error);
+        Rational x = "3.1415926535"_r;
+        Rational log_exp = delta::log(delta::exp(x));
+        EXPECT_RATIONAL_NEAR(log_exp, x, EPS_STD);
+    }
+
+    TEST_F(TranscendentalCorrectnessTest, SinCosEdgeCases) {
+        EXPECT_EQ(delta::sin(0_r), 0_r);
+        EXPECT_EQ(delta::cos(0_r), 1_r);
+        Rational pi_val = delta::pi();
+        EXPECT_RATIONAL_NEAR(delta::sin(pi_val), 0_r, EPS_STD);
+        EXPECT_RATIONAL_NEAR(delta::cos(pi_val), -1_r, EPS_STD);
+        Rational x = "1.5"_r;
+        EXPECT_EQ(delta::sin(-x), -delta::sin(x));
+        EXPECT_EQ(delta::cos(-x), delta::cos(x));
+    }
+
+    TEST_F(TranscendentalCorrectnessTest, PowEdgeCases) {
+        EXPECT_EQ(delta::pow(2_r, 0_r), 1_r);
+        EXPECT_EQ(delta::pow(0_r, 5_r), 0_r);
+        EXPECT_THROW(delta::pow(0_r, 0_r), std::domain_error);
+        EXPECT_THROW(delta::pow(0_r, -1_r), std::domain_error);
+        Rational base = "2.5"_r;
+        Rational a = "1.2"_r;
+        Rational b = "0.7"_r;
+        Rational p1 = delta::pow(base, a + b);
+        Rational p2 = delta::pow(base, a) * delta::pow(base, b);
+        EXPECT_RATIONAL_NEAR(p1, p2, EPS_STD);
+    }
+
+    // -----------------------------------------------------------------------------
+    // 4. Глубоко вложенные выражения
+    // -----------------------------------------------------------------------------
+    TEST_F(TranscendentalCorrectnessTest, DeeplyNestedEager) {
+        auto f = [](const Rational& x) -> Rational {
+            return delta::sin(delta::cos(delta::exp(delta::log(1_r + x))));
+            };
+        Rational x = "0.5"_r;
+        Rational result = f(x);
+        EXPECT_TRUE(result > -2_r && result < 2_r);
+    }
+
+    TEST_F(TranscendentalCorrectnessTest, DeeplyNestedLazy) {
+        using namespace delta;
+        LazyRational x = LazyRational("0.5"_r);
+        LazyRational expr = Sin(Cos(Exp(Log(1_r + x))));
+        EXPECT_TRUE(has_node_with_op(expr, internal::LazyOp::SIN));
+        EXPECT_TRUE(has_node_with_op(expr, internal::LazyOp::COS));
+        EXPECT_TRUE(has_node_with_op(expr, internal::LazyOp::EXP));
+        EXPECT_TRUE(has_node_with_op(expr, internal::LazyOp::LOG));
+        Rational result = expr.eval();
+        EXPECT_TRUE(result > -2_r && result < 2_r);
+    }
+
+    TEST_F(TranscendentalCorrectnessTest, MixedEagerLazyDeep) {
+        Rational a = 2_r;
+        LazyRational b = LazyRational(3_r);
+        LazyRational c = a.as_lazy() * Sin(b) + Cos(b) * Exp(b);
+        Rational eager_ver = 2_r * sin(3_r) + cos(3_r) * exp(3_r);
+        Rational lazy_ver = c.eval();
+        EXPECT_RATIONAL_NEAR(lazy_ver, eager_ver, EPS_STD);
+    }
+
+    // -----------------------------------------------------------------------------
+    // 5. Точность при варьировании eps
+    // -----------------------------------------------------------------------------
+    TEST_F(TranscendentalCorrectnessTest, VaryingPrecisionSin) {
+        const Rational x = 1_r;
+        std::vector<Rational> epsilons = {
+            "1/100"_r,
+            "1/1000000"_r,
+            "1/1000000000000"_r,
+            "1/1000000000000000000"_r
+        };
+        Rational prev = 0_r;
+        Rational prev_eps = 0_r;
+        for (const auto& eps : epsilons) {
+            Rational s = delta::sin(x, eps);
+            if (prev != 0_r) {
+                Rational diff = delta::abs(s - prev);
+                EXPECT_LT(diff.to_double(), 2 * prev_eps.to_double());
+            }
+            prev = s;
+            prev_eps = eps;
+        }
+    }
+
+    // -----------------------------------------------------------------------------
+    // 6. Корректность коротких имён для Lazy
+    // -----------------------------------------------------------------------------
+    TEST_F(TranscendentalCorrectnessTest, LazyShortNamesCreateCorrectNodes) {
+        using namespace delta;
+        LazyRational a = LazyRational(2_r);
+        LazyRational expr = Sin(a) + Cos(Pi() / 2_r) * Exp(1_r);
+
+        EXPECT_TRUE(has_node_with_op(expr, internal::LazyOp::SIN));
+        EXPECT_TRUE(has_node_with_op(expr, internal::LazyOp::COS));
+        EXPECT_TRUE(has_node_with_op(expr, internal::LazyOp::PI));
+        EXPECT_TRUE(has_node_with_op(expr, internal::LazyOp::EXP));
+        EXPECT_TRUE(has_node_with_op(expr, internal::LazyOp::SUM));
+        EXPECT_TRUE(has_node_with_op(expr, internal::LazyOp::PRODUCT));
+
+        Rational expected = sin(2_r) + cos(pi() / 2_r) * exp(1_r);
+        EXPECT_RATIONAL_NEAR(expr.eval(), expected, EPS_STD);
+    }
+
+    // -----------------------------------------------------------------------------
+    // 7. Редукция аргументов
+    // -----------------------------------------------------------------------------
+    TEST_F(TranscendentalCorrectnessTest, SinCosLargeAngles) {
+        const Rational pi_val = delta::pi();
+        Rational s = delta::sin(100_r * pi_val);
+        EXPECT_RATIONAL_NEAR(s, 0_r, EPS_STD);
+        Rational c = delta::cos(50_r * pi_val);
+        EXPECT_RATIONAL_NEAR(c, 1_r, EPS_STD);
+        c = delta::cos(51_r * pi_val);
+        EXPECT_RATIONAL_NEAR(c, -1_r, EPS_STD);
+    }
+
+    TEST_F(TranscendentalCorrectnessTest, ExpLargeArgumentScaling) {
+        const Rational big = 100_r;
+        const Rational eps = EPS_STD;
+        Rational e_big = delta::exp(big, eps);
+        Rational e_big_squared = delta::exp(2_r * big, eps);
+        EXPECT_RATIONAL_NEAR(e_big * e_big, e_big_squared, eps);
+    }
+
+    TEST_F(TranscendentalCorrectnessTest, LogLargeArgumentScaling) {
+        const Rational big = 100000_r;
+        const Rational eps = EPS_STD;
+        Rational log_big = delta::log(big, eps);
+        Rational log_big2 = delta::log(big * big, eps);
+        EXPECT_RATIONAL_NEAR(2_r * log_big, log_big2, eps);
+    }
+
+    // -----------------------------------------------------------------------------
+    // 8. Консистентность float и series путей
+    // -----------------------------------------------------------------------------
+    TEST_F(TranscendentalCorrectnessTest, FloatVsSeriesConsistencySin) {
+        Rational x = 2_r;
+        Rational float_sin = delta::sin(x, EPS_HIGH);   // eps=1e-21 -> float путь
+        Rational series_sin = delta::sin(x, EPS_ULTRA); // eps=1e-40 -> series путь
+        // Они должны быть близки с точностью не хуже 1e-18
+        Rational diff = delta::abs(float_sin - series_sin);
+        EXPECT_LT(diff.to_double(), 1e-18);
+    }
+
+    TEST_F(TranscendentalCorrectnessTest, FloatVsSeriesConsistencyExp) {
+        Rational x = "1.5"_r;
+        Rational float_exp = delta::exp(x, EPS_HIGH);
+        Rational series_exp = delta::exp(x, EPS_ULTRA);
+        Rational diff = delta::abs(float_exp - series_exp);
+        EXPECT_LT(diff.to_double(), 1e-18);
+    }
+
+    // -----------------------------------------------------------------------------
+    // 9. Стресс-тест Lazy дерева с множеством узлов
+    // -----------------------------------------------------------------------------
+    TEST_F(TranscendentalCorrectnessTest, LazyTreeWithManyNodes) {
+        internal::reset_pool();
+        LazyRational acc = LazyRational();
+        const int N = 1000;
+        for (int i = 0; i < N; ++i) {
+            Rational x = Rational(i) / 1000_r;
+            acc + Sin(x) + Cos(x) + Exp(x);
+        }
+        Rational result = acc.eval();
+        EXPECT_TRUE(result > 0_r);
+        EXPECT_TRUE(acc.is_clean());
+    }
+
+    // =============================================================================
+    // ДОПОЛНИТЕЛЬНЫЕ ТЕСТЫ ДЛЯ ПОЛНОГО ПОКРЫТИЯ
+    // =============================================================================
+
+    // -----------------------------------------------------------------------------
+    // 10. Функция acos
+    // -----------------------------------------------------------------------------
+    TEST_F(TranscendentalCorrectnessTest, AcosBasic) {
+        EXPECT_RATIONAL_NEAR(delta::acos(0_r), delta::pi() / 2_r, EPS_STD);
+        EXPECT_EQ(delta::acos(1_r), 0_r);
+        EXPECT_RATIONAL_NEAR(delta::acos(-1_r), delta::pi(), EPS_STD);
+        EXPECT_THROW(delta::acos(2_r), std::domain_error);
+        EXPECT_THROW(delta::acos(-2_r), std::domain_error);
+    }
+
+    TEST_F(TranscendentalCorrectnessTest, AcosPrecision) {
+        const Rational x = "0.5"_r;
+        Rational delta_acos = delta::acos(x, EPS_ULTRA);
+        Rational naive_acos = naive_series_acos(x, EPS_ULTRA);
+        EXPECT_RATIONAL_NEAR(delta_acos, naive_acos, EPS_ULTRA * 10);
+    }
+
+    // -----------------------------------------------------------------------------
+    // 11. Высокие точности (series-пути) с проверкой тождеств
+    // -----------------------------------------------------------------------------
+    TEST_F(TranscendentalCorrectnessTest, SeriesPathHighPrecision) {
+        std::vector<Rational> epsilons = { EPS_ULTRA, EPS_EXTREME };
+        Rational x = "1.23456789"_r;
+        for (const auto& eps : epsilons) {
+            Rational s = delta::sin(x, eps);
+            Rational c = delta::cos(x, eps);
+            Rational e = delta::exp(x, eps);
+            Rational p = delta::pi(eps);
+
+            // Тождество sin²+cos²=1
+            EXPECT_RATIONAL_NEAR(s * s + c * c, 1_r, eps * 10) << "eps=" << eps;
+
+            // exp и log взаимно обратны
+            Rational log_e = delta::log(e, eps);
+            EXPECT_RATIONAL_NEAR(log_e, x, eps * 1000) << "eps=" << eps;
+
+            // Сравнение с наивными реализациями для полной уверенности
+            test_function_against_naive(
+                [](const Rational& arg, const Rational& e) { return delta::sin(arg, e); },
+                naive_series_sin, x, eps, "sin");
+            test_function_against_naive(
+                [](const Rational& arg, const Rational& e) { return delta::cos(arg, e); },
+                naive_series_cos, x, eps, "cos");
+            test_function_against_naive(
+                [](const Rational& arg, const Rational& e) { return delta::exp(arg, e); },
+                naive_series_exp, x, eps, "exp");
+            test_function_against_naive(
+                [](const Rational& arg, const Rational& e) { return delta::log(arg, e); },
+                naive_series_log, x, eps, "log");
+            test_function_against_naive(
+                [](const Rational&, const Rational& e) { return delta::pi(e); },
+                [](const Rational&, const Rational& e) { return naive_series_pi(e); },
+                0_r, eps, "pi");
+            test_function_against_naive(
+                [](const Rational&, const Rational& e) { return delta::e(e); },
+                [](const Rational&, const Rational& e) { return naive_series_e(e); },
+                0_r, eps, "e");
+        }
+    }
+
+    // -----------------------------------------------------------------------------
+    // 12. pow с дробными показателями
+    // -----------------------------------------------------------------------------
+    TEST_F(TranscendentalCorrectnessTest, PowRationalExponent) {
+        const Rational eps = EPS_STD;
+        // Квадратный корень через pow
+        EXPECT_RATIONAL_NEAR(delta::pow(2_r, Rational(1, 2)), delta::sqrt(2_r), eps);
+        // 16^(3/4) = 8
+        EXPECT_RATIONAL_NEAR(delta::pow(16_r, Rational(3, 4)), 8_r, eps);
+        // Сравнение с наивной реализацией для дробного показателя
+        Rational base = "3.5"_r;
+        Rational exp = Rational(2, 3);
+        Rational delta_pow = delta::pow(base, exp, eps);
+        Rational naive_pow = naive_series_pow(base, exp, eps);
+        EXPECT_RATIONAL_NEAR(delta_pow, naive_pow, eps * 10);
+    }
+
+    // -----------------------------------------------------------------------------
+    // 13. Фундаментальные тождества (параметризованный тест)
+    // -----------------------------------------------------------------------------
+    TEST_F(TranscendentalCorrectnessTest, FundamentalIdentities) {
+        std::vector<Rational> values = { 0_r, "0.5"_r, 1_r, "1.5"_r, 2_r };
+        std::vector<Rational> epsilons = { EPS_STD, EPS_ULTRA };
+
+        for (const auto& x : values) {
+            for (const auto& eps : epsilons) {
+                Rational s = delta::sin(x, eps);
+                Rational c = delta::cos(x, eps);
+                EXPECT_RATIONAL_NEAR(s * s + c * c, 1_r, eps * 10)
+                    << "sin^2+cos^2=1 for x=" << x << ", eps=" << eps;
+
+                if (x > 0_r) {
+                    Rational log_x = delta::log(x, eps);
+                    Rational exp_log = delta::exp(log_x, eps);
+                    EXPECT_RATIONAL_NEAR(exp_log, x, eps * 100)
+                        << "exp(log(x)) for x=" << x << ", eps=" << eps;
+                }
+
+                if (x >= 0_r) {
+                    Rational sqrt_x = delta::sqrt(x, eps);
+                    EXPECT_RATIONAL_NEAR(sqrt_x * sqrt_x, x, eps * 10)
+                        << "sqrt(x)^2 for x=" << x << ", eps=" << eps;
+                }
+
+                // acos(cos(x)) должно быть близко к |x mod pi|, но для простоты проверим cos(acos(x))
+                if (x >= -1_r && x <= 1_r) {
+                    Rational acos_x = delta::acos(x, eps);
+                    Rational cos_acos = delta::cos(acos_x, eps);
+                    EXPECT_RATIONAL_NEAR(cos_acos, x, eps * 10)
+                        << "cos(acos(x)) for x=" << x << ", eps=" << eps;
+                }
+            }
+        }
+    }
+
+    // -----------------------------------------------------------------------------
+    // 14. Экстремальная точность — проверка, что не зависает
+    // -----------------------------------------------------------------------------
+    TEST_F(TranscendentalCorrectnessTest, ExtremePrecisionDoesNotHang) {
+        const Rational eps = EPS_EXTREME;
+        Rational x = 2_r;
+        // Все вызовы должны завершиться за разумное время
+        Rational s = delta::sqrt(x, eps);
+        Rational e = delta::exp(1_r, eps);
+        Rational p = delta::pi(eps);
+        Rational l = delta::log(2_r, eps);
+        Rational sin_val = delta::sin(1_r, eps);
+        EXPECT_TRUE(s > 1_r);
+        EXPECT_TRUE(e > 2_r);
+        EXPECT_TRUE(p > 3_r);
+        EXPECT_TRUE(l > 0_r);
+        EXPECT_TRUE(sin_val > 0_r);
+    }
+
+    // -----------------------------------------------------------------------------
+    // 15. Lazy выражения с высокой точностью (проверка канонизации)
+    // -----------------------------------------------------------------------------
+    TEST_F(TranscendentalCorrectnessTest, LazyWithHighPrecision) {
+        using namespace delta;
+        LazyRational x = LazyRational("1.23456789"_r);
+        LazyRational expr = Sin(x) + Cos(x * 2_r) + Exp(Log(x + 1_r));
+        Rational eager_res = sin("1.23456789"_r) + cos("2.46913578"_r) + exp(log("2.23456789"_r));
+        Rational lazy_res_std = expr.eval(); // с дефолтным eps
+        EXPECT_RATIONAL_NEAR(lazy_res_std, eager_res, EPS_STD);
+
+        // Теперь с ультра-высокой точностью
+        Rational lazy_res_ultra = expr.eval(false); // skip_simplify = false, полная канонизация
+        Rational naive_res_ultra = naive_series_sin("1.23456789"_r, EPS_ULTRA) +
+            naive_series_cos("2.46913578"_r, EPS_ULTRA) +
+            naive_series_exp(naive_series_log("2.23456789"_r, EPS_ULTRA), EPS_ULTRA);
+        EXPECT_RATIONAL_NEAR(lazy_res_ultra, naive_res_ultra, EPS_ULTRA * 10);
+    }
+
+} // namespace delta::testing

@@ -736,6 +736,77 @@ namespace delta {
     inline LazyRational&& operator/(LazyRational&& a, const Rational& b) {
         return std::move(operator/(a, b));
     }
+    // Операторы для случая typeof(LValue)==Rational && typeof(Rvalue)==LazyRational.
+    // ------------------------------------------------------------------------
+// Мутирующий унарный минус для временных объектов (rvalue)
+// ------------------------------------------------------------------------
+    inline LazyRational mutating_unary_minus(LazyRational&& a) {
+        a.ensure_dirty();
+        a.invalidate_interval();
+        int root = a.root_;
+        int neg_root = a.new_dirty_node(internal::LazyOp::NEG, { root }, -1, -1);
+        a.root_ = neg_root;
+        return std::move(a);
+    }
+
+    // ------------------------------------------------------------------------
+    // Операторы с Rational слева (Rational +/*/-/ / LazyRational)
+    // ------------------------------------------------------------------------
+    inline LazyRational& operator+(const Rational& a, LazyRational& b) {
+        return b += a;
+    }
+
+    inline LazyRational&& operator+(const Rational& a, LazyRational&& b) {
+        return std::move(b += a);
+    }
+
+    // Вычитание: Rational - LazyRational
+    inline LazyRational operator-(const Rational& a, const LazyRational& b) {
+        // a - b = (-b) + a, при этом b не мутируется
+        LazyRational result = -b;   // обычный унарный минус создаёт копию
+        result += a;
+        return result;
+    }
+
+    inline LazyRational operator-(const Rational& a, LazyRational&& b) {
+        // Для rvalue мутируем b напрямую
+        LazyRational result = mutating_unary_minus(std::move(b));
+        result += a;
+        return result;
+    }
+
+    // Умножение: Rational * LazyRational
+    inline LazyRational& operator*(const Rational& a, LazyRational& b) {
+        return b *= a;
+    }
+
+    inline LazyRational&& operator*(const Rational& a, LazyRational&& b) {
+        return std::move(b *= a);
+    }
+
+    // Деление: Rational / LazyRational
+    inline LazyRational operator/(const Rational& a, const LazyRational& b) {
+        // a / b = a * (1/b)
+        LazyRational recip = b.clone();
+        recip.ensure_dirty();
+        recip.invalidate_interval();
+        int b_root = recip.root_;
+        int recip_root = recip.new_dirty_node(internal::LazyOp::RECIP, { b_root }, -1, -1);
+        recip.root_ = recip_root;
+        recip *= a;
+        return recip;
+    }
+
+    inline LazyRational operator/(const Rational& a, LazyRational&& b) {
+        // Мутируем b в 1/b и умножаем на a
+        b.ensure_dirty();
+        b.invalidate_interval();
+        int b_root = b.root_;
+        int recip_root = b.new_dirty_node(internal::LazyOp::RECIP, { b_root }, -1, -1);
+        b.root_ = recip_root;
+        b *= a;
+        return std::move(b);
+    }
 
     // Составные операторы
     inline LazyRational& operator+=(LazyRational& a, const LazyRational& b) { return a + b; }

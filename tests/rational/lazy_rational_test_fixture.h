@@ -197,11 +197,29 @@ namespace delta::testing {
         // Вспомогательные обходы грязного дерева
         // ------------------------------------------------------------------------
         bool has_node_with_op(const LazyRational& lr, internal::LazyOp op) const {
-            if (!is_dirty(lr)) return false;
-            for (const auto& node : lr.nodes_) {
-                if (node.op == op) return true;
+            if (is_dirty(lr)) {
+                for (const auto& node : lr.nodes_) {
+                    if (node.op == op) return true;
+                }
+                return false;
             }
-            return false;
+            else {
+                // Рекурсивный обход чистого дерева из пула
+                std::stack<int> st;
+                st.push(lr.clean_index_);
+                while (!st.empty()) {
+                    int idx = st.top(); st.pop();
+                    const auto& node = internal::pool.nodes[idx];
+                    if (node.op == op) return true;
+                    if (node.op == internal::LazyOp::SUM || node.op == internal::LazyOp::PRODUCT) {
+                        for (int child : node.complex_children) st.push(child);
+                    }
+                    else {
+                        for (int child : node.children) st.push(child);
+                    }
+                }
+                return false;
+            }
         }
 
         // ------------------------------------------------------------------------

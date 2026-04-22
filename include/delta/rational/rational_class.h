@@ -105,11 +105,6 @@ namespace delta {
         internal::Value storage_;
 
         // Дружественные eager-функции (определены в evaluation_core.h)
-        friend Rational eager_add(const Rational& a, const Rational& b);
-        friend Rational eager_sub(const Rational& a, const Rational& b);
-        friend Rational eager_mul(const Rational& a, const Rational& b);
-        friend Rational eager_div(const Rational& a, const Rational& b);
-        friend Rational eager_neg(const Rational& a);
         friend Rational eager_sqrt(const Rational& x, const Rational& eps);
         friend Rational eager_exp(const Rational& x, const Rational& eps);
         friend Rational eager_log(const Rational& x, const Rational& eps);

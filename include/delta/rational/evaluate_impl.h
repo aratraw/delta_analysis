@@ -18,6 +18,7 @@
 #include "node_types.h"
 #include "lazy_nodes.h"
 #include "evaluation_core.h"
+#include "reduce.h"        // <-- добавлено: функции PCR вынесены в отдельный заголовок
 #include "utils.h"
 
 #include <stack>
@@ -28,56 +29,6 @@
 #include <cstdint>
 
 namespace delta::internal {
-
-    // ------------------------------------------------------------------------
-    // Конфигурация батчинга
-    // ------------------------------------------------------------------------
-    inline constexpr size_t BATCH_SIZE = 32;
-
-    // ------------------------------------------------------------------------
-    // Базовые операции редукции
-    // ------------------------------------------------------------------------
-
-    // Последовательное суммирование батча (без выделения памяти)
-    inline Value reduce_batch(const Value* batch, size_t count) {
-        if (count == 0) return Value(0);
-        Value result = batch[0];
-        for (size_t i = 1; i < count; ++i) {
-            result += batch[i];
-        }
-        return result;
-    }
-
-    // ------------------------------------------------------------------------
-    // Pyramidal Compact Reduction (PCR) – in-place, минимальные аллокации
-    // ------------------------------------------------------------------------
-    inline void pyramidal_compact_reduce_inplace(std::vector<Value>& v_work) {
-        size_t current_n = v_work.size();
-        if (current_n == 0) {
-            v_work = { Value(0) };
-            return;
-        }
-        if (current_n == 1) return;
-
-        while (current_n > 1) {
-            size_t next_n = (current_n + BATCH_SIZE - 1) / BATCH_SIZE;
-            for (size_t i = 0; i < next_n; ++i) {
-                size_t start = i * BATCH_SIZE;
-                size_t end = std::min(start + BATCH_SIZE, current_n);
-                v_work[i] = reduce_batch(&v_work[start], end - start);
-            }
-            current_n = next_n;
-        }
-        v_work.resize(1);
-    }
-
-    // PCR с копированием входного вектора (для случаев, когда нельзя разрушать исходные данные)
-    inline Value pyramidal_compact_reduce_copy(const std::vector<Value>& values) {
-        if (values.empty()) return Value(0);
-        std::vector<Value> v_work = values;
-        pyramidal_compact_reduce_inplace(v_work);
-        return std::move(v_work[0]);
-    }
 
     // ------------------------------------------------------------------------
     // Стратегии суммирования (политика обработки узла SUM)
@@ -110,10 +61,10 @@ namespace delta::internal {
             size_t start_child = !leaf_values.empty() ? 0 : 1;
 
             for (size_t i = start_leaf; i < leaf_values.size(); ++i) {
-                result = eager_mul(result, leaf_values[i]);
+                result *= leaf_values[i];
             }
             for (size_t i = start_child; i < child_values.size(); ++i) {
-                result = eager_mul(result, child_values[i]);
+                result *= child_values[i];
             }
             return result;
         }
@@ -205,10 +156,10 @@ namespace delta::internal {
             }
 
             case LazyOp::NEG:
-                result = eager_neg(cache[node.children[0]].value());
+                result = -cache[node.children[0]].value();
                 break;
             case LazyOp::RECIP:
-                result = eager_div(Value(1), cache[node.children[0]].value());
+                result = Value(1)/cache[node.children[0]].value();
                 break;
             case LazyOp::SQRT: {
                 Value eps = value_accessor.eps_value(node);

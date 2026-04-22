@@ -19,21 +19,6 @@ namespace delta {
     // ----------------------------------------------------------------------------
     // Eager wrappers (используют internal::eager_* напрямую)
     // ----------------------------------------------------------------------------
-    inline Rational eager_add(const Rational& a, const Rational& b) {
-        return Rational(internal::eager_add(a.value(), b.value()));
-    }
-    inline Rational eager_sub(const Rational& a, const Rational& b) {
-        return Rational(internal::eager_sub(a.value(), b.value()));
-    }
-    inline Rational eager_mul(const Rational& a, const Rational& b) {
-        return Rational(internal::eager_mul(a.value(), b.value()));
-    }
-    inline Rational eager_div(const Rational& a, const Rational& b) {
-        return Rational(internal::eager_div(a.value(), b.value()));
-    }
-    inline Rational eager_neg(const Rational& a) {
-        return Rational(internal::eager_neg(a.value()));
-    }
     inline Rational eager_sqrt(const Rational& x, const Rational& eps) {
         return Rational(internal::eager_sqrt(x.value(), eps.value()));
     }

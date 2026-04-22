@@ -116,7 +116,24 @@ namespace delta {
         friend LazyRational&& operator/(LazyRational&& a, const Rational& b);
 
         // Унарный минус (создаёт новый LazyRational)
+        // Чтобы НЕ мутировать правый операнд для использования в operator-(LazyRational a,LazyRational b);
+        // Таким образом: МУТАЦИЯ НА УНАРНОМ МИНУСЕ В ОБЩЕМ СЛУЧАЕ ВРЕДНА ПРИ ТЕКУЩЕЙ РЕАЛИЗАЦИИ БИНАРНОГО МИНУСА.
+        // А ВООБЩЕ ПОЧЕМУ МЫ ВЫЗЫВАЕМ УНАРНЫЙ МИНУС ПРИ operator-(LazyRational a,LazyRational b)? Лишнее копирование объекта!
+        // ПРОСТО ОБРАБОТАТЬ ВСЁ В ТОМ ЖЕ operator-: элементы правого операнда обернуть в NEG и пихнуть в правый операнд.
         friend LazyRational operator-(const LazyRational& a);
+
+        // ------------------------------------------------------------------------
+        // Дружественные операторы с Rational слева (Rational + LazyRational и т.д.)
+        // ------------------------------------------------------------------------
+        friend LazyRational& operator+(const Rational& a, LazyRational& b);
+        friend LazyRational&& operator+(const Rational& a, LazyRational&& b);
+        friend LazyRational operator-(const Rational& a, const LazyRational& b);
+        friend LazyRational operator-(const Rational& a, LazyRational&& b);
+        friend LazyRational& operator*(const Rational& a, LazyRational& b);
+        friend LazyRational&& operator*(const Rational& a, LazyRational&& b);
+        friend LazyRational operator/(const Rational& a, const LazyRational& b);
+        friend LazyRational operator/(const Rational& a, LazyRational&& b);
+        friend LazyRational mutating_unary_minus(LazyRational&& a);
 
         // Составные операторы
         friend LazyRational& operator+=(LazyRational& a, const LazyRational& b);

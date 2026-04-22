@@ -1,12 +1,16 @@
 // evaluation_core.h
 // Адаптирован под единый тип Value (boost::multiprecision::number<rational_adaptor<...>>)
 // Все операции выполняются напрямую через операторы Value, без ветвлений Small/Big.
+// ----------------------------------------------------------------------------
+// Версия 2.1 – устранены явные локальные переменные для констант (1, 2, 3...),
+// используется непосредственное преобразование целых литералов в Value.
+// ----------------------------------------------------------------------------
 
 #pragma once
 
 #include "storage.h"
 #include "utils.h"
-#include <boost/math/constants/constants.hpp>  // добавьте в начало файла
+#include <boost/math/constants/constants.hpp>
 
 #include <boost/multiprecision/cpp_dec_float.hpp>
 #include <boost/multiprecision/cpp_int.hpp>
@@ -22,11 +26,6 @@
 namespace delta::internal {
 
     // Forward declarations
-    Value eager_add(const Value& a, const Value& b);
-    Value eager_sub(const Value& a, const Value& b);
-    Value eager_mul(const Value& a, const Value& b);
-    Value eager_div(const Value& a, const Value& b);
-    Value eager_neg(const Value& a);
     Value eager_abs(const Value& a);
     Value eager_sqrt(const Value& x, const Value& eps);
     Value eager_exp(const Value& x, const Value& eps);
@@ -37,16 +36,17 @@ namespace delta::internal {
     Value eager_pi(const Value& eps);
     Value eager_e(const Value& eps);
     Value eager_pow(const Value& base, const Value& exp, const Value& eps);
-
-    Value slow_sqrt(const Value& x, const Value& eps);
-    Value slow_exp(const Value& x, const Value& eps);
-    Value slow_log(const Value& x, const Value& eps);
-    Value slow_sin(const Value& x, const Value& eps);
-    Value slow_cos(const Value& x, const Value& eps);
-    Value slow_acos(const Value& x, const Value& eps);
-    Value slow_pi(const Value& eps);
-    Value slow_e(const Value& eps);
-    Value slow_ln2(const Value& eps);
+    Value eager_pow_int(const Value& base, const dumb_int& exponent);
+    // Series (rational) implementations
+    Value series_sqrt(const Value& x, const Value& eps);
+    Value series_exp(const Value& x, const Value& eps);
+    Value series_log(const Value& x, const Value& eps);
+    Value series_sin(const Value& x, const Value& eps);
+    Value series_cos(const Value& x, const Value& eps);
+    Value series_acos(const Value& x, const Value& eps);
+    Value series_pi(const Value& eps);
+    Value series_e(const Value& eps);
+    Value series_ln2(const Value& eps);
 
     // ----------------------------------------------------------------------------
     // Вспомогательные предикаты (используют версии из storage.h)
@@ -54,44 +54,17 @@ namespace delta::internal {
     inline bool is_less(const Value& a, const Value& b) { return a < b; }
     inline bool is_greater(const Value& a, const Value& b) { return a > b; }
 
-
     constexpr double HYBRID_THRESHOLD = 1e-35;
 
     // ============================================================================
-    // Арифметические операции (теперь тривиальны)
+    // Арифметические операции теперь напрямую через операторы Value
     // ============================================================================
-
-    inline void add_inplace(Value& a, const Value& b) {
-        a += b;
-    }
-
-    inline Value eager_add(const Value& a, const Value& b) {
-        return a + b;
-    }
-
-    inline Value eager_sub(const Value& a, const Value& b) {
-        return a - b;
-    }
-
-    inline Value eager_mul(const Value& a, const Value& b) {
-        return a * b;
-    }
-
-    inline Value eager_div(const Value& a, const Value& b) {
-        if (is_zero(b)) throw std::domain_error("Division by zero");
-        return a / b;
-    }
-
-    inline Value eager_neg(const Value& a) {
-        return -a;
-    }
-
     inline Value eager_abs(const Value& a) {
         return is_negative(a) ? -a : a;
     }
 
     // ============================================================================
-    // High‑precision floating‑point helpers (fast path)
+    // High‑precision floating‑point helpers (float path)
     // ============================================================================
 
     using HighPrecFloat = boost::multiprecision::cpp_dec_float_100;
@@ -147,38 +120,26 @@ namespace delta::internal {
         return Value(num, den);
     }
 
-    // Быстрые трансцендентные функции
-    inline Value fast_sqrt(const Value& x, const Value& eps) {
-        HighPrecFloat fx = to_high_prec(x);
-        if (fx < 0) throw std::domain_error("sqrt of negative number");
-        return to_rational_with_eps(sqrt(fx), eps);
-    }
-    inline Value fast_exp(const Value& x, const Value& eps) {
+    // Float-реализации для тех функций, где они дают выигрыш при грубых eps
+    inline Value float_exp(const Value& x, const Value& eps) {
         return to_rational_with_eps(exp(to_high_prec(x)), eps);
     }
-    inline Value fast_log(const Value& x, const Value& eps) {
-        HighPrecFloat fx = to_high_prec(x);
-        if (fx <= 0) throw std::domain_error("log of non-positive number");
-        return to_rational_with_eps(log(fx), eps);
-    }
-    inline Value fast_sin(const Value& x, const Value& eps) {
+    inline Value float_sin(const Value& x, const Value& eps) {
+        if (is_negative(x)) return -float_sin(-x, eps);
         return to_rational_with_eps(sin(to_high_prec(x)), eps);
     }
-    inline Value fast_cos(const Value& x, const Value& eps) {
-        return to_rational_with_eps(cos(to_high_prec(x)), eps);
+    inline Value float_cos(const Value& x, const Value& eps) {
+        Value positive_x = is_negative(x) ? -x : x;
+        return to_rational_with_eps(cos(to_high_prec(positive_x)), eps);
     }
-    inline Value fast_acos(const Value& x, const Value& eps) {
+    inline Value float_acos(const Value& x, const Value& eps) {
         HighPrecFloat fx = to_high_prec(x);
         if (fx < -1 || fx > 1) throw std::domain_error("acos argument out of [-1,1]");
         return to_rational_with_eps(acos(fx), eps);
     }
-    inline Value fast_pi(const Value& eps) {
+    inline Value float_pi(const Value& eps) {
         HighPrecFloat pi_val = boost::math::constants::pi<HighPrecFloat>();
         return to_rational_with_eps(pi_val, eps);
-    }
-    inline Value fast_e(const Value& eps) {
-        HighPrecFloat e_val = boost::math::constants::e<HighPrecFloat>();
-        return to_rational_with_eps(e_val, eps);
     }
 
     // ============================================================================
@@ -233,201 +194,285 @@ namespace delta::internal {
     }
 
     // ============================================================================
-    // Конфигурация медленных методов
+    // Конфигурация series-методов
     // ============================================================================
     constexpr size_t DEFAULT_MAX_ITER = 1000000;
     constexpr size_t NEWTON_MAX_ITER = 1000;
     constexpr size_t ACOS_MAX_ITER = 100;
 
     // ============================================================================
-    // Медленные (точные) реализации трансцендентных функций
+    // Series (рациональные) реализации трансцендентных функций
     // ============================================================================
-    inline Value slow_ln2(const Value& eps) {
-        Value one(1);
-        Value three(3);
-        Value z = eager_div(one, three);
-        Value z2 = eager_mul(z, z);
-        Value term = z, sum = term, n = one, two(2);
+    inline Value series_ln2(const Value& eps) {
+        Value z = Value(1) / 3;
+        Value z2 = z * z;
+        Value term = z, sum = term;
+        Value n = 1;
         size_t iter = 0;
         while (iter < DEFAULT_MAX_ITER) {
-            term = eager_mul(term, z2);
-            n = eager_add(n, two);
-            sum = eager_add(sum, eager_div(term, n));
+            term *= z2;
+            n += 2;
+            sum += term / n;
             ++iter;
-            if (is_less(eager_abs(term), eps)) break;
+            if (term < eps && term > -eps) break;
         }
-        return eager_mul(two, sum);
+        return sum * 2;
     }
 
-    inline Value slow_sqrt(const Value& x, const Value& eps) {
+    inline Value series_sqrt(const Value& x, const Value& eps) {
         if (is_zero(x)) return Value(0);
+        if (is_one(x)) return Value(1);
         if (is_negative(x)) throw std::domain_error("sqrt of negative number");
-        Value one(1), two(2);
-        Value guess = eager_div(x, two), diff;
+
+        // Быстрая оценка через double — нужна ли редукция?
+        double x_approx = to_double(x);
+        const double SCALE_LOW = 1e-8;
+        const double SCALE_HIGH = 1e8;
+        bool need_scaling = (x_approx < SCALE_LOW || x_approx > SCALE_HIGH);
+
+        Value m = x;
+        int k = 0;
+        if (need_scaling) {
+            while (m > 1) {
+                m /= 4;
+                ++k;
+            }
+            while (m < Value(1) / 4) {
+                m *= 4;
+                --k;
+            }
+        }
+
+        Value internal_eps = eps;
+        if (need_scaling) {
+            for (int i = 0; i < std::abs(k); ++i) {
+                internal_eps /= 2;
+            }
+        }
+
+        // Начальное приближение через double для ускорения сходимости
+        double m_approx = to_double(m);
+        Value guess = Value(std::sqrt(m_approx));
+
+        Value diff;
         size_t iter = 0;
         do {
-            Value next = eager_div(eager_add(guess, eager_div(x, guess)), two);
-            diff = eager_abs(eager_sub(next, guess));
+            Value next = (guess + m / guess) / 2;
+            diff = eager_abs(next - guess);
             guess = next;
             ++iter;
             if (iter > NEWTON_MAX_ITER) break;
-        } while (is_greater(diff, eps));
+        } while (diff > internal_eps);
+
+        if (need_scaling) {
+            Value result = guess;
+            if (k > 0) {
+                for (int i = 0; i < k; ++i) result *= 2;
+            }
+            else if (k < 0) {
+                for (int i = 0; i < -k; ++i) result /= 2;
+            }
+            return result;
+        }
         return guess;
     }
+    // ----------------------------------------------------------------------------
+    // Series (рациональная) реализация exp
+    // ----------------------------------------------------------------------------
+    // Порог для редукции в series_exp: если |x| > 2, применяем редукцию
+    constexpr double SERIES_EXP_REDUCE_THRESHOLD = 2.0;
+    inline Value series_exp(const Value& x, const Value& eps) {
+        if (is_zero(x)) return Value(1);
+        // Для отрицательных аргументов: exp(x) = 1 / exp(-x)
+        if (is_negative(x)) return Value(1) / series_exp(-x, eps);
 
-    inline Value slow_exp(const Value& x, const Value& eps) {
-        Value one(1), two(2);
+        double x_d = to_double(x);
+
+        // Если аргумент мал, ряд сходится быстро без редукции
+        if (x_d <= SERIES_EXP_REDUCE_THRESHOLD) {
+            Value sum = 1, term = 1;
+            Value n = 1;
+            size_t iter = 0;
+            const size_t MAX_ITER = 1000;
+            while (iter < MAX_ITER) {
+                term *= x / n;
+                sum += term;
+                n += 1;
+                ++iter;
+                if (term < eps && term > -eps) break;
+            }
+            return sum;
+        }
+
+        // Редукция аргумента: exp(x) = (exp(x / 2^k))^{2^k}
         int k = 0;
         Value reduced = x;
-        while (is_greater(eager_abs(reduced), one)) {
-            reduced = eager_div(reduced, two);
+        while (reduced > SERIES_EXP_REDUCE_THRESHOLD) {
+            reduced /= 2;
             ++k;
         }
-        Value sum = one, term = one, n = one;
-        size_t iter = 0;
-        while (iter < DEFAULT_MAX_ITER) {
-            term = eager_mul(term, eager_div(reduced, n));
-            sum = eager_add(sum, term);
-            n = eager_add(n, one);
-            ++iter;
-            if (is_less(eager_abs(term), eps)) break;
-        }
-        Value result = sum;
-        for (int i = 0; i < k; ++i) result = eager_mul(result, result);
-        return result;
-    }
 
-    inline Value slow_log(const Value& x, const Value& eps) {
+        // Оценка двоичного порядка величины exp(x) через double
+        double exp_est = std::exp(x_d);
+        int exp_bits;
+        std::frexp(exp_est, &exp_bits);   // exp_bits — двоичный порядок (смещённый)
+
+        // Масштабирование eps: нужно разделить на 2^{exp_bits + k + запас}
+        Value internal_eps = eps;
+        int total_shift = exp_bits + k + 2;   // +2 для надёжности
+        for (int i = 0; i < total_shift; ++i) {
+            internal_eps /= 2;
+        }
+
+        // Вычисление ряда для reduced
+        Value sum = 1, term = 1;
+        Value n = 1;
+        size_t iter = 0;
+        const size_t MAX_ITER = 1000;
+        while (iter < MAX_ITER) {
+            term *= reduced / n;
+            sum += term;
+            n += 1;
+            ++iter;
+            if (term < internal_eps && term > -internal_eps) break;
+        }
+
+        // Возведение в степень 2^k (рациональное, целочисленное)
+        dumb_int exponent = dumb_int(1) << k;
+        return eager_pow_int(sum, exponent);
+    }
+    inline Value series_log(const Value& x, const Value& eps) {
         if (is_negative(x) || is_zero(x)) throw std::domain_error("log of non-positive");
-        Value one(1), two(2), half = eager_div(one, two);
         int k = 0;
         Value m = x;
-        while (is_greater(m, two)) {
-            m = eager_div(m, two);
+        while (m > 2) {
+            m /= 2;
             ++k;
         }
-        while (is_less(m, half)) {
-            m = eager_mul(m, two);
+        while (m < Value(1) / 2) {
+            m *= 2;
             --k;
         }
-        Value ln2 = slow_ln2(eps);
-        Value y = eager_div(eager_sub(m, one), eager_add(m, one));
-        Value y2 = eager_mul(y, y);
-        Value term = y, sum = term, n = one;
+        Value ln2 = series_ln2(eps);
+        Value y = (m - 1) / (m + 1);
+        Value y2 = y * y;
+        Value term = y, sum = term;
+        Value n = 1;
         size_t iter = 0;
         while (iter < DEFAULT_MAX_ITER) {
-            term = eager_mul(term, y2);
-            n = eager_add(n, two);
-            sum = eager_add(sum, eager_div(term, n));
+            term *= y2;
+            n += 2;
+            sum += term / n;
             ++iter;
-            if (is_less(eager_abs(term), eps)) break;
+            if (term < eps && term > -eps) break;
         }
-        Value ln_m = eager_mul(two, sum);
-        return eager_add(ln_m, eager_mul(Value(k), ln2));
+        Value ln_m = sum * 2;
+        return ln_m + Value(k) * ln2;
     }
 
-    inline Value slow_pi(const Value& eps) {
-        Value one(1), five(5), two39(239);
-        Value sixteen(16), four(4), two(2);
-        Value a = eager_div(one, five), a2 = eager_mul(a, a);
-        Value term = a, sum_atan5 = term, n = one;
+    inline Value series_pi(const Value& eps) {
+        Value a = Value(1) / 5, a2 = a * a;
+        Value term = a, sum_atan5 = term;
+        Value n = 1;
         size_t iter = 0;
         while (iter < DEFAULT_MAX_ITER) {
-            term = eager_mul(term, eager_neg(a2));
-            n = eager_add(n, two);
-            sum_atan5 = eager_add(sum_atan5, eager_div(term, n));
+            term *= -a2;
+            n += 2;
+            sum_atan5 += term / n;
             ++iter;
-            if (is_less(eager_abs(term), eps)) break;
+            if (term < eps && term > -eps) break;
         }
-        Value b = eager_div(one, two39), b2 = eager_mul(b, b);
+        Value b = Value(1) / 239, b2 = b * b;
         term = b;
         Value sum_atan239 = term;
-        n = one;
+        n = 1;
         iter = 0;
         while (iter < DEFAULT_MAX_ITER) {
-            term = eager_mul(term, eager_neg(b2));
-            n = eager_add(n, two);
-            sum_atan239 = eager_add(sum_atan239, eager_div(term, n));
+            term *= -b2;
+            n += 2;
+            sum_atan239 += term / n;
             ++iter;
-            if (is_less(eager_abs(term), eps)) break;
+            if (term < eps && term > -eps) break;
         }
-        return eager_sub(eager_mul(sixteen, sum_atan5), eager_mul(four, sum_atan239));
+        return 16 * sum_atan5 - 4 * sum_atan239;
     }
 
-    inline Value slow_sin(const Value& x, const Value& eps) {
-        Value one(1), two(2);
-        Value pi_val = slow_pi(eps), twopi = eager_mul(pi_val, two);
+    inline Value series_sin(const Value& x, const Value& eps) {
+        if (is_negative(x)) return -series_sin(-x, eps);
+        Value pi_val = series_pi(eps);
+        Value twopi = pi_val * 2;
         Value reduced = x;
-        while (is_greater(eager_abs(reduced), pi_val)) {
-            if (is_positive(reduced)) reduced = eager_sub(reduced, twopi);
-            else reduced = eager_add(reduced, twopi);
+        while (eager_abs(reduced) > pi_val) {
+            if (reduced > 0) reduced -= twopi;
+            else reduced += twopi;
         }
-        Value x2 = eager_mul(reduced, reduced);
-        Value term = reduced, sum = term, k = one;
+        Value x2 = reduced * reduced;
+        Value term = reduced, sum = term;
+        Value k = 1;
         size_t iter = 0;
         while (iter < DEFAULT_MAX_ITER) {
-            term = eager_mul(term, eager_neg(x2));
-            term = eager_div(term, eager_mul(eager_mul(two, k), eager_add(eager_mul(two, k), one)));
-            sum = eager_add(sum, term);
-            k = eager_add(k, one);
-            if (is_less(eager_abs(term), eps)) break;
+            term *= -x2;
+            term /= (2 * k) * (2 * k + 1);
+            sum += term;
+            k += 1;
+            if (term < eps && term > -eps) break;
             ++iter;
         }
         return sum;
     }
 
-    inline Value slow_cos(const Value& x, const Value& eps) {
-        Value one(1), two(2);
-        Value pi_val = slow_pi(eps), twopi = eager_mul(pi_val, two);
-        Value reduced = x;
-        while (is_greater(eager_abs(reduced), pi_val)) {
-            if (is_positive(reduced)) reduced = eager_sub(reduced, twopi);
-            else reduced = eager_add(reduced, twopi);
+    inline Value series_cos(const Value& x, const Value& eps) {
+        Value pi_val = series_pi(eps);
+        Value twopi = pi_val * 2;
+        Value reduced = is_negative(x) ? -x : x;
+        while (eager_abs(reduced) > pi_val) {
+            if (reduced > 0) reduced -= twopi;
+            else reduced += twopi;
         }
-        Value x2 = eager_mul(reduced, reduced);
-        Value term = one, sum = term, k = one;
+        Value x2 = reduced * reduced;
+        Value term = 1, sum = term;
+        Value k = 1;
         size_t iter = 0;
         while (iter < DEFAULT_MAX_ITER) {
-            term = eager_mul(term, eager_neg(x2));
-            term = eager_div(term, eager_mul(eager_mul(two, k), eager_sub(eager_mul(two, k), one)));
-            sum = eager_add(sum, term);
-            k = eager_add(k, one);
-            if (is_less(eager_abs(term), eps)) break;
+            term *= -x2;
+            term /= (2 * k) * (2 * k - 1);
+            sum += term;
+            k += 1;
+            if (term < eps && term > -eps) break;
             ++iter;
         }
         return sum;
     }
 
-    inline Value slow_acos(const Value& x, const Value& eps) {
-        Value one(1), two(2);
-        Value pi_val = slow_pi(eps), half_pi = eager_div(pi_val, two);
-        if (is_less(x, eager_neg(one)) || is_greater(x, one))
+    inline Value series_acos(const Value& x, const Value& eps) {
+        Value pi_val = series_pi(eps);
+        Value half_pi = pi_val / 2;
+        if (x < -1 || x > 1)
             throw std::domain_error("acos argument out of [-1,1]");
-        Value y = is_positive(x) ? eager_mul(half_pi, eager_sub(one, x))
-            : eager_sub(pi_val, eager_mul(half_pi, eager_add(one, x)));
+        Value y = (x > 0) ? half_pi * (1 - x) : pi_val - half_pi * (1 + x);
         size_t iter = 0;
         while (iter < ACOS_MAX_ITER) {
-            Value cos_y = slow_cos(y, eps);
-            Value sin_y = slow_sin(y, eps);
+            Value cos_y = series_cos(y, eps);
+            Value sin_y = series_sin(y, eps);
             if (is_zero(sin_y)) break;
-            Value delta = eager_div(eager_sub(cos_y, x), sin_y);
-            y = eager_sub(y, delta);
-            if (is_less(eager_abs(delta), eps)) break;
+            Value delta = (cos_y - x) / sin_y;
+            y -= delta;
+            if (eager_abs(delta) < eps) break;
             ++iter;
         }
         return y;
     }
 
-    inline Value slow_e(const Value& eps) {
-        Value one(1);
-        Value sum = one, term = one, n = one;
+    inline Value series_e(const Value& eps) {
+        Value sum = 1, term = 1;
+        Value n = 1;
         size_t iter = 0;
         while (iter < DEFAULT_MAX_ITER) {
-            term = eager_div(term, n);
-            sum = eager_add(sum, term);
-            n = eager_add(n, one);
+            term /= n;
+            sum += term;
+            n += 1;
             ++iter;
-            if (is_less(term, eps)) break;
+            if (term < eps) break;
         }
         return sum;
     }
@@ -442,11 +487,11 @@ namespace delta::internal {
         dumb_int e = negative ? -exponent : exponent;
         Value result(1), b = base;
         while (e > 0) {
-            if (e & 1) result = eager_mul(result, b);
+            if (e & 1) result *= b;
             e >>= 1;
-            if (e > 0) b = eager_mul(b, b);
+            if (e > 0) b *= b;
         }
-        return negative ? eager_div(Value(1), result) : result;
+        return negative ? Value(1) / result : result;
     }
 
     // ============================================================================
@@ -460,7 +505,7 @@ namespace delta::internal {
         return digits_needed + safety;
     }
 
-    inline Value fast_nth_root(const Value& x, const Value& n, const Value& eps) {
+    inline Value float_nth_root(const Value& x, const Value& n, const Value& eps) {
         bool x_neg = is_negative(x);
         if (x_neg) {
             bool n_even = false;
@@ -469,7 +514,7 @@ namespace delta::internal {
                 if (n_int % 2 == 0) n_even = true;
             }
             if (n_even) throw std::domain_error("even root of negative number");
-            return eager_neg(fast_nth_root(eager_neg(x), n, eps));
+            return -float_nth_root(-x, n, eps);
         }
         if (is_zero(x)) return Value(0);
         double complexity = 1.0;
@@ -494,20 +539,20 @@ namespace delta::internal {
             throw std::domain_error("nth_root: even root of negative number");
         if (auto exact = try_exact_nth_root(x, n)) return *exact;
         if (n_int == 2 && to_double(eps) >= HYBRID_THRESHOLD)
-            return fast_nth_root(x, n, eps);
-        Value guess = is_positive(x) ? eager_div(x, Value(2))
-            : eager_neg(eager_div(eager_abs(x), Value(2)));
-        Value n_val = n, n_minus_1 = eager_sub(n_val, Value(1));
+            return float_nth_root(x, n, eps);
+        Value guess = (x > 0) ? x / 2 : -eager_abs(x) / 2;
+        Value n_val = n;
+        Value n_minus_1 = n_val - 1;
         Value diff;
         size_t iter = 0;
         do {
             Value pow_n_minus_1 = eager_pow_int(guess, n_int - 1);
-            Value next = eager_div(eager_add(eager_mul(n_minus_1, guess), eager_div(x, pow_n_minus_1)), n_val);
-            diff = eager_abs(eager_sub(next, guess));
+            Value next = (n_minus_1 * guess + x / pow_n_minus_1) / n_val;
+            diff = eager_abs(next - guess);
             guess = next;
             ++iter;
             if (iter > NEWTON_MAX_ITER) break;
-        } while (is_greater(diff, eps));
+        } while (diff > eps);
         return guess;
     }
 
@@ -529,7 +574,7 @@ namespace delta::internal {
 
         if (exp_is_int) {
             if (exp_num < 0) {
-                Value base_recip = eager_div(Value(1), base);
+                Value base_recip = Value(1) / base;
                 return eager_pow_int(base_recip, -exp_num);
             }
             return eager_pow_int(base, exp_num);
@@ -542,45 +587,70 @@ namespace delta::internal {
         if (p == 1) {
             Value n_val = Value(q);
             if (q == 2) return eager_sqrt(base, eps);
-            Value internal_eps = eager_div(eps, Value(1000));
+            Value internal_eps = eps / 1000;
             return eager_nth_root(base, n_val, internal_eps);
         }
 
-        Value internal_eps = (p == 0) ? eps : eager_div(eps, Value(p * 1000));
+        Value internal_eps = (p == 0) ? eps : eps / Value(p * 1000);
         Value log_base = eager_log(base, internal_eps);
-        Value p_val = Value(negative ? -p : p);
-        Value p_log = eager_mul(p_val, log_base);
+        Value p_val = negative ? Value(-p) : Value(p);
+        Value p_log = p_val * log_base;
         Value q_val = Value(q);
-        Value p_log_div_q = eager_div(p_log, q_val);
+        Value p_log_div_q = p_log / q_val;
         return eager_exp(p_log_div_q, internal_eps);
     }
 
     // ============================================================================
-    // Eager dispatchers (без изменений)
+    // Eager dispatchers
     // ============================================================================
     inline Value eager_sqrt(const Value& x, const Value& eps) {
-        return (to_double(eps) >= HYBRID_THRESHOLD) ? fast_sqrt(x, eps) : slow_sqrt(x, eps);
+        // Сначала пробуем извлечь точный квадратный корень
+        if (auto exact = try_exact_nth_root(x, Value(2))) {
+            return *exact;
+        }
+        // Float-путь для sqrt удалён, т.к. бенчмарки показали,
+        // что конвертация в cpp_dec_float_100 и обратно медленнее
+        // чистого рационального метода Ньютона при любых точностях.
+        return series_sqrt(x, eps);
     }
+
+    // Порог аргумента для exp, после которого float-путь теряет точность
+    constexpr double EXP_FLOAT_ARG_THRESHOLD = 20.0;
     inline Value eager_exp(const Value& x, const Value& eps) {
-        return (to_double(eps) >= HYBRID_THRESHOLD) ? fast_exp(x, eps) : slow_exp(x, eps);
+        double eps_d = to_double(eps);
+        double x_d = std::abs(to_double(x));
+        // float-путь быстр, но при больших аргументах теряет относительную точность.
+        // Поэтому используем его только если и точность не слишком высока, и аргумент не слишком велик.
+        if (eps_d >= HYBRID_THRESHOLD && x_d <= EXP_FLOAT_ARG_THRESHOLD) {
+            return float_exp(x, eps);
+        }
+        return series_exp(x, eps);
     }
+
     inline Value eager_log(const Value& x, const Value& eps) {
-        return (to_double(eps) >= HYBRID_THRESHOLD) ? fast_log(x, eps) : slow_log(x, eps);
+        // Float-путь для log удалён по той же причине, что и для sqrt.
+        return series_log(x, eps);
     }
+
     inline Value eager_sin(const Value& x, const Value& eps) {
-        return (to_double(eps) >= HYBRID_THRESHOLD) ? fast_sin(x, eps) : slow_sin(x, eps);
+        return (to_double(eps) >= HYBRID_THRESHOLD) ? float_sin(x, eps) : series_sin(x, eps);
     }
+
     inline Value eager_cos(const Value& x, const Value& eps) {
-        return (to_double(eps) >= HYBRID_THRESHOLD) ? fast_cos(x, eps) : slow_cos(x, eps);
+        return (to_double(eps) >= HYBRID_THRESHOLD) ? float_cos(x, eps) : series_cos(x, eps);
     }
+
     inline Value eager_acos(const Value& x, const Value& eps) {
-        return (to_double(eps) >= HYBRID_THRESHOLD) ? fast_acos(x, eps) : slow_acos(x, eps);
+        return (to_double(eps) >= HYBRID_THRESHOLD) ? float_acos(x, eps) : series_acos(x, eps);
     }
+
     inline Value eager_pi(const Value& eps) {
-        return (to_double(eps) >= HYBRID_THRESHOLD) ? fast_pi(eps) : slow_pi(eps);
+        return (to_double(eps) >= HYBRID_THRESHOLD) ? float_pi(eps) : series_pi(eps);
     }
+
     inline Value eager_e(const Value& eps) {
-        return (to_double(eps) >= HYBRID_THRESHOLD) ? fast_e(eps) : slow_e(eps);
+        // Float-путь для e также не даёт выигрыша, всегда используем series.
+        return series_e(eps);
     }
 
 } // namespace delta::internal
