@@ -159,7 +159,7 @@ namespace delta::testing {
     }
 
     TEST_F(DiscreteOperators3DTest, GradientSecondOrder) {
-        ScopedEagerEval eval;
+
         set_precision(Rational(1, 1000000));
 
         std::vector<std::size_t> ns = { 5, 9, 17 };
@@ -193,7 +193,7 @@ namespace delta::testing {
     }
 
     TEST_F(DiscreteOperators3DTest, LaplacianSecondOrder) {
-        ScopedEagerEval eval;
+
         set_precision(Rational(1, 1000000000));
         std::vector<std::size_t> ns = { 5, 9, 17 };
         std::vector<double> errors;
@@ -344,7 +344,7 @@ namespace delta::testing {
     }
 
     TEST_F(DiscreteOperators4DTest, GradientSecondOrder) {
-        ScopedEagerEval eval;
+
         set_precision(Rational(1_r / 1000000_r));
         std::vector<std::size_t> ns = { 5, 9, 17 };
         std::vector<double> errors;
@@ -379,7 +379,7 @@ namespace delta::testing {
     }
 
     TEST_F(DiscreteOperators4DTest, LaplacianSecondOrder) {
-        ScopedEagerEval eval;
+
         set_precision(Rational(1_r / 1000000_r));
         std::vector<std::size_t> ns = { 5, 9, 17 };
         std::vector<double> errors;

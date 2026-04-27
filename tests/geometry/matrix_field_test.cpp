@@ -40,7 +40,7 @@ namespace delta::testing {
         EXPECT_EQ(delta::default_eps(), original_eps);
     }
     TEST_F(MatrixFieldTest, DefaultEpsilonAffectsResult) {
-        ScopedEagerEval eval;
+
         Rational original_eps = delta::default_eps();
 
         std::vector<Rational> eps_values = {
@@ -186,7 +186,7 @@ namespace delta::testing {
     // Exponential and logarithm
     // -------------------------------------------------------------------------
     TEST_F(MatrixFieldTest, ExponentialAndLogarithm) {
-        ScopedEagerEval eval;
+
         set_precision(Rational(1, 1000000));
         Grid grid = make_test_grid();
         MatrixField2 A(grid);
@@ -222,7 +222,7 @@ namespace delta::testing {
         // При дефолтной точности (1e-30) тест выполняется недопустимо долго из-за
         // сложных вычислений с рациональными числами.
         set_precision(Rational(1, 1000000)); // 1e-6
-        ScopedEagerEval eval;
+
 
         Grid grid = make_test_grid();
         MatrixField2 A(grid);
@@ -241,7 +241,7 @@ namespace delta::testing {
     // Symmetric positive definite matrix (near identity)
     // -------------------------------------------------------------------------
     TEST_F(MatrixFieldTest, ExponentialLogarithmSymmetric) {
-        ScopedEagerEval eval;
+
         set_precision(Rational(1, 1000000));
         Grid grid = make_test_grid();
         MatrixField2 A(grid);
@@ -258,7 +258,7 @@ namespace delta::testing {
     // Large norm matrix (scaling required)
     // -------------------------------------------------------------------------
     TEST_F(MatrixFieldTest, ExponentialLogarithmLargeNorm) {
-        ScopedEagerEval eval;
+
         set_precision(Rational(1, 1000000));
         Grid grid = make_test_grid();
         MatrixField2 A(grid);
@@ -295,7 +295,7 @@ namespace delta::testing {
     // Matrix far from identity (norm > 0.5) still works with scaling
     // -------------------------------------------------------------------------
     TEST_F(MatrixFieldTest, LogarithmFarFromIdentity) {
-        ScopedEagerEval eval;
+
         set_precision(Rational(1, 1000000));
         Grid grid = make_test_grid();
         MatrixField2 A(grid);
@@ -313,7 +313,7 @@ namespace delta::testing {
     // Square root consistency via exp(0.5*log(M))
     // -------------------------------------------------------------------------
     TEST_F(MatrixFieldTest, SquareRootConsistency) {
-        ScopedEagerEval eval;
+
         set_precision(Rational(1, 1000000));
         auto grid = make_test_grid();
         MatrixField2 A(grid);

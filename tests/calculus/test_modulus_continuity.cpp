@@ -18,7 +18,7 @@ namespace delta::testing {
      *       with exponent 0.5 on a dyadic path.
      */
     TEST_F(ModulusContinuityTest, SqrtFunctionHasHolderExponentHalf) {
-        ScopedEagerEval eager;
+        
         ListGrid<Addr, Compare> grid0({ 0_r, 1_r });
         auto path = make_midpoint_path(grid0);
 

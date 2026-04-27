@@ -79,7 +79,7 @@ namespace delta::testing {
      *       The modulus ω(δ)=√δ should be satisfied (within tolerance).
      */
     TEST_F(ContinuityTest, SqrtFunction) {
-        ScopedEagerEval eval;
+        internal::reset_default_eps();
         ListGrid<Addr, Compare> grid0({ 0_r, 1_r });
         auto path = make_midpoint_path(grid0);
 
