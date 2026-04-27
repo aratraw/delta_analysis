@@ -111,6 +111,9 @@ namespace delta {
         friend Rational eager_sin(const Rational& x, const Rational& eps);
         friend Rational eager_cos(const Rational& x, const Rational& eps);
         friend Rational eager_acos(const Rational& x, const Rational& eps);
+        friend Rational eager_asin(const Rational& x, const Rational& eps);
+        friend Rational eager_atan(const Rational& x, const Rational& eps);
+        friend Rational eager_tan(const Rational& x, const Rational& eps);
         friend Rational eager_pi(const Rational& eps);
         friend Rational eager_e(const Rational& eps);
         friend Rational eager_pow(const Rational& base, const Rational& exp, const Rational& eps);

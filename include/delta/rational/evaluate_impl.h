@@ -1,16 +1,10 @@
 // evaluate_impl.h
-// Версия 3.0 – единая шаблонная функция evaluate_tree с PCR-стратегиями
+// Версия 3.1 – единая шаблонная функция evaluate_tree с унифицированными children
 // ----------------------------------------------------------------------------
 // Изменения:
-//   - Удалены старые evaluate, eval_dirty, eval_dirty_inplace
-//   - Добавлены PCR-функции (pyramidal_compact_reduce_inplace/copy)
-//   - Добавлены стратегии суммирования (SumStrategy_Standard, SumStrategy_Inplace)
-//   - Реализована шаблонная evaluate_tree, работающая с любыми NodeType
-//   - Три публичных API: evaluate(чистое), evaluate_dirty, evaluate_dirty_inplace
-//   - Исправлены сигнатуры функций evaluate_dirty* (используют DirtyNode)
-//   - Устранена циклическая зависимость: теперь включаются только node_types.h и lazy_nodes.h
-//   - Шаблонные параметры стратегий передаются по значению (исправлена ошибка компиляции)
-//   - Адаптировано под новый Value (без SmallStorage)
+//   - Удалены обращения к удалённому полю children; везде используется children.
+//   - Упрощены обходы: для всех типов узлов дети доступны через children.
+//   - Устранено ветвление по op для проверки готовности детей (всегда children).
 // ----------------------------------------------------------------------------
 
 #pragma once
@@ -18,7 +12,7 @@
 #include "node_types.h"
 #include "lazy_nodes.h"
 #include "evaluation_core.h"
-#include "reduce.h"        // <-- добавлено: функции PCR вынесены в отдельный заголовок
+#include "reduce.h"
 #include "utils.h"
 
 #include <stack>
@@ -77,8 +71,8 @@ namespace delta::internal {
     Value evaluate_tree(int root,
         const std::vector<NodeType>& nodes,
         ValueAccessor&& value_accessor,
-        SumStrategy sum_strategy,       // передача по значению
-        ProdStrategy prod_strategy)     // передача по значению
+        SumStrategy sum_strategy,
+        ProdStrategy prod_strategy)
     {
         const size_t n = nodes.size();
         std::vector<std::optional<Value>> cache(n);
@@ -95,21 +89,11 @@ namespace delta::internal {
             const NodeType& node = nodes[idx];
             bool children_ready = true;
 
-            // Проверяем готовность детей
-            if (node.op == LazyOp::SUM || node.op == LazyOp::PRODUCT) {
-                for (int child : node.complex_children) {
-                    if (!cache[child].has_value()) {
-                        st.push(child);
-                        children_ready = false;
-                    }
-                }
-            }
-            else {
-                for (int child : node.children) {
-                    if (child != -1 && !cache[child].has_value()) {
-                        st.push(child);
-                        children_ready = false;
-                    }
+            // Проверяем готовность детей – теперь все дети хранятся в children
+            for (int child : node.children) {
+                if (!cache[child].has_value()) {
+                    st.push(child);
+                    children_ready = false;
                 }
             }
 
@@ -130,8 +114,8 @@ namespace delta::internal {
                 else {
                     to_reduce = node.leaf_values;
                 }
-                to_reduce.reserve(to_reduce.size() + node.complex_children.size());
-                for (int child : node.complex_children) {
+                to_reduce.reserve(to_reduce.size() + node.children.size());
+                for (int child : node.children) {
                     to_reduce.push_back(cache[child].value());
                 }
                 result = sum_strategy(to_reduce);
@@ -147,8 +131,8 @@ namespace delta::internal {
                     leaf_vals = node.leaf_values;
                 }
                 std::vector<Value> child_vals;
-                child_vals.reserve(node.complex_children.size());
-                for (int child : node.complex_children) {
+                child_vals.reserve(node.children.size());
+                for (int child : node.children) {
                     child_vals.push_back(cache[child].value());
                 }
                 result = prod_strategy(std::move(leaf_vals), child_vals);
@@ -159,7 +143,7 @@ namespace delta::internal {
                 result = -cache[node.children[0]].value();
                 break;
             case LazyOp::RECIP:
-                result = Value(1)/cache[node.children[0]].value();
+                result = Value(1) / cache[node.children[0]].value();
                 break;
             case LazyOp::SQRT: {
                 Value eps = value_accessor.eps_value(node);
@@ -220,19 +204,6 @@ namespace delta::internal {
     }
 
     // ------------------------------------------------------------------------
-    // Публичные API для чистого дерева (NodePool)
-    // ------------------------------------------------------------------------
-    // Определение pool находится в node_pool.h, но здесь мы используем только
-    // pool.nodes и pool.values, поэтому достаточно объявления (линковка разрешится).
-    // Чтобы избежать циклической зависимости, мы не включаем node_pool.h.
-    // Вместо этого используем forward-декларацию и предполагаем, что pool доступен.
-    // В реальности код ниже будет скомпилирован после включения node_pool.h,
-    // где pool уже полностью определён.
-
-    // Вспомогательная функция доступа для чистого дерева
-    inline Value evaluate(int root_idx);
-
-    // ------------------------------------------------------------------------
     // Публичные API для грязного дерева (DirtyNode)
     // ------------------------------------------------------------------------
 
@@ -260,10 +231,10 @@ namespace delta::internal {
         int root) {
         struct Accessor {
             std::vector<Value>& constants;
-            Value const_value(const DirtyNode& node) const {   // <-- const&
+            Value const_value(const DirtyNode& node) const {
                 return constants[node.value_idx];
             }
-            Value eps_value(const DirtyNode& node) const {     // <-- const&
+            Value eps_value(const DirtyNode& node) const {
                 return (node.eps_idx != -1) ? constants[node.eps_idx] : Value{};
             }
         };

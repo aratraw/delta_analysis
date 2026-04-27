@@ -172,13 +172,13 @@ TEST_F(LazyRationalContractTest, canonicalize_flattens_nested_sums) {
     EXPECT_TRUE(is_clean(a));
     const auto& node = internal::pool.nodes[clean_root_index(a)];
     EXPECT_EQ(node.op, internal::LazyOp::SUM);
-    size_t total = node.leaf_values.size() + node.complex_children.size();
+    size_t total = node.leaf_values.size() + node.children.size();
     EXPECT_EQ(total, 3);
     std::vector<Rational> values;
     for (const auto& v : node.leaf_values) {
         values.push_back(Rational(v));
     }
-    for (int32_t child : node.complex_children) {
+    for (int32_t child : node.children) {
         const auto& child_node = internal::pool.nodes[child];
         EXPECT_EQ(child_node.op, internal::LazyOp::CONST);
         values.push_back(Rational(internal::pool.values[child_node.value_idx]));
@@ -249,10 +249,9 @@ TEST_F(LazyRationalContractTest, clone_creates_deep_copy) {
 }
 
 // ---------------------------------------------------------------------
-// 10. Отсутствие рекурсии
+// 10. Широкое дерево (много слагаемых) — не вызывает переполнения стека
 // ---------------------------------------------------------------------
-//IT'S SLOWER IN DEBUG BY HUNDREDS OF TIMES, SO DISASBLE THE TEST IN DEBUG MODE.
-TEST_F(LazyRationalContractTest, deep_tree_does_not_cause_stack_overflow) {
+TEST_F(LazyRationalContractTest, wide_tree_does_not_cause_stack_overflow) {
     LazyRational acc;
     const int N = 100000;
     for (int i = 0; i < N; ++i) {
@@ -261,6 +260,57 @@ TEST_F(LazyRationalContractTest, deep_tree_does_not_cause_stack_overflow) {
     acc.simplify_inplace();
     Rational sum = acc.eval();
     (void)sum;
+}
+
+// ---------------------------------------------------------------------
+// 10.1 Глубокое дерево (вложенные трансцендентные функции) — не вызывает
+//     переполнения стека при N=5,10,20,50,100
+// ---------------------------------------------------------------------
+TEST_F(LazyRationalContractTest, deep_transcendental_tree_does_not_cause_stack_overflow) {
+    const std::vector<int> depths = { 5, 10, 20, 50, 100 };
+
+    for (int N : depths) {
+        // Строим цепочку sin(cos(exp(log(...(x)...)))) глубины N
+        // Начинаем с простой константы, чтобы каждый узел имел смысл
+        LazyRational expr = LazyRational(Rational(1, 2));  // x = 0.5
+
+        for (int i = 0; i < N; ++i) {
+            // Циклически применяем sin → cos → exp → log
+            switch (i % 4) {
+            case 0: expr = delta::Sin(expr); break;
+            case 1: expr = delta::Cos(expr); break;
+            case 2: expr = delta::Exp(expr); break;
+            case 3: expr = delta::Log(expr); break;
+            }
+        }
+
+        // Вычисляем — это должно пройти без переполнения стека
+        Rational result = expr.eval();
+        (void)result;
+    }
+}
+
+// ---------------------------------------------------------------------
+// 10.2 Экстремально глубокое дерево (N=1000) — стресс-тест итеративного обхода
+// ---------------------------------------------------------------------
+TEST_F(LazyRationalContractTest, extreme_depth_tree_stress_test) {
+    const int N = 1000;
+
+    // Используем только Sin/Cos, так как Exp/Log на больших глубинах
+    // могут выйти за пределы области определения
+    LazyRational expr = LazyRational(Rational(1, 2));
+
+    for (int i = 0; i < N; ++i) {
+        if (i % 2 == 0)
+            expr = delta::Sin(expr);
+        else
+            expr = delta::Cos(expr);
+    }
+
+    // Упрощаем и вычисляем — самый глубокий тест
+    expr.simplify_inplace();
+    Rational result = expr.eval();
+    (void)result;
 }
 
 // ---------------------------------------------------------------------

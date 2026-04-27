@@ -37,6 +37,15 @@ namespace delta {
     inline Rational eager_acos(const Rational& x, const Rational& eps) {
         return Rational(internal::eager_acos(x.value(), eps.value()));
     }
+    inline Rational eager_asin(const Rational& x, const Rational& eps) {
+        return Rational(internal::eager_asin(x.value(), eps.value()));
+    }
+    inline Rational eager_atan(const Rational& x, const Rational& eps) {
+        return Rational(internal::eager_atan(x.value(), eps.value()));
+    }
+    inline Rational eager_tan(const Rational& x, const Rational& eps) {
+        return Rational(internal::eager_tan(x.value(), eps.value()));
+    }
     inline Rational eager_pi(const Rational& eps) {
         return Rational(internal::eager_pi(eps.value()));
     }

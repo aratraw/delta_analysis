@@ -265,7 +265,7 @@ namespace delta::testing {
                 std::cerr << "\n=== CORRUPTION DETECTED IN LEAF_VALUES ===\n";
                 std::cerr << "N = " << N << "\n";
                 std::cerr << "leaf_values count = " << leaf_cnt
-                    << ", complex_children count = " << complex_cnt << "\n";
+                    << ", children count = " << complex_cnt << "\n";
                 std::cerr << "Eager sum:           " << eager << "\n";
                 std::cerr << "Manual leaf sum:     " << manual_from_leaf << "\n";
                 std::cerr << "Difference:          " << eager - manual_from_leaf << "\n";
@@ -278,7 +278,7 @@ namespace delta::testing {
                 std::cerr << "\n=== MISMATCH DETECTED ===\n";
                 std::cerr << "N = " << N << "\n";
                 std::cerr << "leaf_values count = " << leaf_cnt
-                    << ", complex_children count = " << complex_cnt << "\n";
+                    << ", children count = " << complex_cnt << "\n";
                 std::cerr << "Eager:              " << eager << "\n";
                 std::cerr << "Lazy:               " << lazy << "\n";
                 std::cerr << "Manual leaf sum:    " << manual_from_leaf << "\n";

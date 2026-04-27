@@ -13,7 +13,10 @@ namespace delta::internal {
         dumb_int denom("1000000000000000000000000000000");
         return Value(1) / Value(denom);
         }();
-
+    inline void reset_default_eps() {
+        dumb_int denom("1000000000000000000000000000000");
+        default_eps_value = Value(1) / Value(denom);
+    }
 } // namespace delta::internal
 
 namespace delta {
@@ -25,5 +28,7 @@ namespace delta {
     inline void set_default_eps(const Rational& eps) {
         internal::default_eps_value = eps.value();
     }
-
+    inline void reset_default_eps() {
+        internal::reset_default_eps();
+    }
 } // namespace delta

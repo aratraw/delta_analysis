@@ -3,10 +3,20 @@
 #include <gtest/gtest.h>
 #include "delta/core/rational.h"
 #include "test_utils.h"
+#include "lazy_rational_test_fixture.h"
 
 namespace delta::testing {
 
-    class RationalPowTest : public RationalTest {};
+    class RationalPowTest : public LazyRationalTestFixture {
+    protected:
+        void SetUp() override {
+            internal::reset_pool();
+            reset_default_eps();
+        }
+        void TearDown() override {
+            internal::reset_pool();
+        }
+    };
 
     // -------------------------------------------------------------------------
     // 1. Eager pow с целым показателем (возвращает Rational)
@@ -19,13 +29,51 @@ namespace delta::testing {
         EXPECT_EQ(delta::pow(2_r, -2), "1/4"_r);
         EXPECT_THROW(delta::pow(0_r, -1), std::domain_error);
     }
+    TEST_F(RationalPowTest, DISABLED_EagerPowRationalExponent_Debug) {
+        Rational eps = default_eps();
+        internal::reset_pool();
 
+        auto start = std::chrono::high_resolution_clock::now();
+        auto log = [&](const char* msg) {
+            auto now = std::chrono::high_resolution_clock::now();
+            auto us = std::chrono::duration_cast<std::chrono::microseconds>(now - start).count();
+            std::cerr << "[" << us << " us] " << msg << std::endl;
+            };
+
+        log("Testing pow(4, 1/2)");
+        Rational p1 = delta::pow(4_r, "1/2"_r, eps);
+        log("pow(4, 1/2) done");
+        EXPECT_EQ(p1, 2_r);
+
+        log("Testing pow(8, 1/3)");
+        Rational p2 = delta::pow(8_r, "1/3"_r, eps);
+        log("pow(8, 1/3) done");
+        EXPECT_EQ(p2, 2_r);
+
+        log("Testing pow(2, 1/2)");
+        Rational p3 = delta::pow(2_r, "1/2"_r, eps);
+        log("pow(2, 1/2) done");
+        Rational expected_sqrt2 = Rational("14142135623730950488/10000000000000000000");
+        EXPECT_RATIONAL_NEAR(p3, expected_sqrt2, "1/1000000000000"_r);
+
+        log("Testing pow(0,0) exception");
+        EXPECT_THROW(delta::pow(0_r, 0_r, eps), std::domain_error);
+        log("pow(0,0) ok");
+
+        log("Testing pow(0,-1) exception");
+        EXPECT_THROW(delta::pow(0_r, -1_r, eps), std::domain_error);
+        log("pow(0,-1) ok");
+
+        log("Test finished");
+    }
     // -------------------------------------------------------------------------
     // 2. Eager pow с рациональным показателем (возвращает Rational)
     // -------------------------------------------------------------------------
+    // Если прогонять этот тест в общей тест-сюите из пары сотен тестов - 
+    // то именно этот конкретный тест может зависнуть без видимой причины.
+    // Если прогонять текущий тестовый файл в отдельном экзешнике - тест проходит за милисекунды. Баг известен, приоритет низкий.
     TEST_F(RationalPowTest, EagerPowRationalExponent) {
         Rational eps = default_eps();
-        internal::reset_pool();
         Rational p = delta::pow(4_r, "1/2"_r, eps);
         EXPECT_EQ(p, 2_r);
 

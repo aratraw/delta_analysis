@@ -1,14 +1,12 @@
 // node_pool.h
-// Версия 3.0 – унифицированные узлы с гетерогенным хранением, NodePool и GC
+// Версия 3.2 – удалены поля approx и depth из Node, удалены вспомогательные функции интервалов.
 // ----------------------------------------------------------------------------
-// Изменения (рефакторинг Value):
-//   - Явные ValueHash и ValueEqual используют absl::Hash<Value> вместо boost::multiprecision::hash_value
-//   - В SumProductKeyHash также применяется absl::Hash<Value>
-// ----------------------------------------------------------------------------
+// Модификация для реестра чистых объектов: reset_pool() инвалидирует все чистые LazyRational.
 
 #pragma once
 
 #include "node_types.h"
+#include "global_state.h"
 #include <absl/container/flat_hash_map.h>
 #include <absl/hash/hash.h>
 #include <memory>
@@ -47,12 +45,12 @@ namespace delta::internal {
     struct SumProductKey {
         LazyOp op;
         std::vector<Value> leaf_values;
-        absl::InlinedVector<int32_t, 4> complex_children;
+        absl::InlinedVector<int32_t, 2> children;
 
         bool operator==(const SumProductKey& other) const {
             return op == other.op &&
                 leaf_values == other.leaf_values &&
-                complex_children == other.complex_children;
+                children == other.children;
         }
     };
 
@@ -63,7 +61,7 @@ namespace delta::internal {
             for (const auto& v : key.leaf_values) {
                 h = absl::HashOf(h, value_hasher(v));
             }
-            for (int32_t c : key.complex_children) {
+            for (int32_t c : key.children) {
                 h = absl::HashOf(h, c);
             }
             return h;
@@ -72,7 +70,7 @@ namespace delta::internal {
 
     struct UnaryKey {
         LazyOp op;
-        absl::InlinedVector<int32_t, 4> children;
+        absl::InlinedVector<int32_t, 2> children;
         int32_t eps_idx;
 
         bool operator==(const UnaryKey& other) const = default;
@@ -92,15 +90,13 @@ namespace delta::internal {
     // NodePool
     // ------------------------------------------------------------------------
     struct NodePool {
-        static constexpr size_t DEFAULT_MAX_SIZE = 1'000'000;
-        size_t max_size = DEFAULT_MAX_SIZE;
+        size_t max_size = DEFAULT_POOL_MAX_SIZE;
         size_t gc_threshold = 0;
         std::vector<Node> nodes;
         std::vector<Value> values;
         std::vector<int> refcount;
         size_t next_free_index = 0;
 
-        // Явно указываем ValueHash и ValueEqual
         absl::flat_hash_map<Value, int, ValueHash, ValueEqual> value_cache;
         absl::flat_hash_map<Value, int, ValueHash, ValueEqual> constant_cache;
         absl::flat_hash_map<SumProductKey, int, SumProductKeyHash> sum_product_cache;
@@ -131,25 +127,34 @@ namespace delta::internal {
         int allocate_node() {
             ensure_initialized();
 
-            if (next_free_index >= gc_threshold) {
+            // GC запускается только если не запрещён флагом gc_disabled
+            if (!internal::gc_disabled && next_free_index >= gc_threshold) {
                 collect_garbage();
                 if (next_free_index >= max_size) {
                     throw std::runtime_error("NodePool exhausted: all slots occupied by roots");
                 }
             }
 
+            // Поиск свободного слота, начиная с next_free_index
             size_t idx = next_free_index;
             while (idx < nodes.size() && is_occupied(nodes[idx])) {
                 ++idx;
             }
 
+            // Если свободного слота не нашлось, расширяем вектор
             if (idx >= nodes.size()) {
                 size_t old_size = nodes.size();
                 size_t new_size = old_size + 4096;
-                if (new_size > max_size) new_size = max_size;
+
+                // Если GC не отключён, не превышаем max_size
+                if (!internal::gc_disabled && new_size > max_size) {
+                    new_size = max_size;
+                }
+                // Если new_size всё ещё <= old_size, значит max_size уже достигнут и расширяться некуда
                 if (new_size <= old_size) {
                     throw std::runtime_error("NodePool exhausted: cannot expand beyond max_size");
                 }
+
                 nodes.resize(new_size);
                 refcount.resize(new_size, 0);
                 for (size_t i = old_size; i < new_size; ++i) {
@@ -159,14 +164,14 @@ namespace delta::internal {
                 idx = old_size;
             }
 
+            // Увеличиваем указатель на следующий свободный слот
             next_free_index = idx + 1;
             refcount[idx] = 0;
             return static_cast<int>(idx);
         }
-
         bool is_occupied(const Node& node) const {
             if (node.op == LazyOp::SUM || node.op == LazyOp::PRODUCT) {
-                return !node.leaf_values.empty() || !node.complex_children.empty();
+                return !node.leaf_values.empty() || !node.children.empty();
             }
             if (node.op == LazyOp::CONST) {
                 return node.value_idx != -1;
@@ -195,114 +200,23 @@ namespace delta::internal {
         return h;
     }
 
-    inline Interval interval_from_value(const Value& v) {
-        return Interval(to_double(v));
-    }
-
-    inline Interval compute_sum_interval(const std::vector<Value>& leaf_values,
-        const std::vector<Interval>& child_intervals) {
-        Interval result = Interval::zero();
-        for (const auto& v : leaf_values) {
-            result = result + interval_from_value(v);
-        }
-        for (const auto& ival : child_intervals) {
-            result = result + ival;
-        }
-        return result;
-    }
-
-    inline Interval compute_product_interval(const std::vector<Value>& leaf_values,
-        const std::vector<Interval>& child_intervals) {
-        Interval result = Interval::one();
-        for (const auto& v : leaf_values) {
-            result = result * interval_from_value(v);
-        }
-        for (const auto& ival : child_intervals) {
-            result = result * ival;
-        }
-        return result;
-    }
-
-    inline Interval compute_interval(LazyOp op, const Interval& a, const Interval& b) {
-        using std::sqrt, std::exp, std::log, std::sin, std::cos, std::acos;
-        switch (op) {
-        case LazyOp::SUM:      return a + b;
-        case LazyOp::PRODUCT:  return a * b;
-        case LazyOp::NEG:      return -a;
-        case LazyOp::RECIP: {
-            if (a.lower() <= 0.0 && a.upper() >= 0.0)
-                return Interval(-std::numeric_limits<double>::infinity(),
-                    std::numeric_limits<double>::infinity());
-            double lo = 1.0 / a.upper();
-            double hi = 1.0 / a.lower();
-            if (lo > hi) std::swap(lo, hi);
-            return Interval(lo, hi);
-        }
-        case LazyOp::SQRT: {
-            if (a.upper() < 0) return Interval();
-            double lo = a.lower() < 0 ? 0.0 : sqrt(a.lower());
-            double hi = sqrt(a.upper());
-            return Interval(lo, hi);
-        }
-        case LazyOp::EXP: {
-            double lo = exp(a.lower());
-            double hi = exp(a.upper());
-            return Interval(lo, hi);
-        }
-        case LazyOp::LOG: {
-            if (a.upper() <= 0) return Interval(-std::numeric_limits<double>::infinity(),
-                std::numeric_limits<double>::infinity());
-            double lo = log(a.lower());
-            double hi = log(a.upper());
-            return Interval(lo, hi);
-        }
-        case LazyOp::SIN:   return Interval(-1.0, 1.0);
-        case LazyOp::COS:   return Interval(-1.0, 1.0);
-        case LazyOp::ACOS: {
-            if (a.lower() < -1 || a.upper() > 1)
-                return Interval(-std::numeric_limits<double>::infinity(),
-                    std::numeric_limits<double>::infinity());
-            double lo = acos(a.upper());
-            double hi = acos(a.lower());
-            return Interval(lo, hi);
-        }
-        case LazyOp::PI: {
-            constexpr double pi = 3.14159265358979323846;
-            return Interval(pi);
-        }
-        case LazyOp::E: {
-            constexpr double e = 2.71828182845904523536;
-            return Interval(e);
-        }
-        case LazyOp::POW: {
-            double lo = std::pow(a.lower(), b.lower());
-            double hi = std::pow(a.upper(), b.upper());
-            return Interval(lo, hi);
-        }
-        default: return Interval();
-        }
-    }
-
     // ------------------------------------------------------------------------
-    // Конструкторы Node (реализация)
+    // Конструкторы Node (реализация) – без depth и approx
     // ------------------------------------------------------------------------
-    inline Node::Node(LazyOp op, int32_t val_idx, int32_t depth, Interval approx, uint64_t hash)
-        : op(op), depth(depth), approx(approx), hash(hash), value_idx(val_idx), eps_idx(-1) {
+    inline Node::Node(LazyOp op, int32_t val_idx, uint64_t hash)
+        : op(op), hash(hash), value_idx(val_idx), eps_idx(-1) {
     }
 
-    inline Node::Node(LazyOp op, absl::InlinedVector<int32_t, 4> children,
-        int32_t eps_idx, int32_t depth, Interval approx, uint64_t hash)
-        : op(op), depth(depth), approx(approx), hash(hash),
-        children(std::move(children)), value_idx(-1), eps_idx(eps_idx) {
+    inline Node::Node(LazyOp op, absl::InlinedVector<int32_t, 2> children,
+        int32_t eps_idx, uint64_t hash)
+        : op(op), hash(hash), children(std::move(children)), value_idx(-1), eps_idx(eps_idx) {
     }
 
     inline Node::Node(LazyOp op, std::vector<Value> leaf_values,
-        absl::InlinedVector<int32_t, 4> complex_children,
-        int32_t depth, Interval approx, uint64_t hash)
-        : op(op), depth(depth), approx(approx), hash(hash),
-        value_idx(-1), eps_idx(-1),
-        leaf_values(std::move(leaf_values)),
-        complex_children(std::move(complex_children)) {
+        absl::InlinedVector<int32_t, 2> children,
+        uint64_t hash)
+        : op(op), hash(hash), value_idx(-1), eps_idx(-1),
+        leaf_values(std::move(leaf_values)), children(std::move(children)) {
     }
 
     // ------------------------------------------------------------------------
@@ -315,7 +229,7 @@ namespace delta::internal {
 
         int idx = pool.allocate_node();
         int val_idx = pool.add_value(v);
-        Node node(LazyOp::CONST, val_idx, 0, interval_from_value(v), compute_hash_const(v));
+        Node node(LazyOp::CONST, val_idx, compute_hash_const(v));
         pool.nodes[idx] = std::move(node);
         pool.refcount[idx] = 0;
         pool.constant_cache[v] = idx;
@@ -323,30 +237,23 @@ namespace delta::internal {
     }
 
     inline int make_sum_node(std::vector<Value> leaf_values,
-        absl::InlinedVector<int32_t, 4> complex_children) {
+        absl::InlinedVector<int32_t, 2> children) {
         pool.ensure_initialized();
-        SumProductKey key{ LazyOp::SUM, leaf_values, complex_children };
+        SumProductKey key{ LazyOp::SUM, leaf_values, children };
         auto it = pool.sum_product_cache.find(key);
         if (it != pool.sum_product_cache.end()) return it->second;
 
-        int32_t depth = 0;
-        std::vector<Interval> child_intervals;
-        child_intervals.reserve(complex_children.size());
         uint64_t hash = static_cast<uint64_t>(LazyOp::SUM);
         ValueHash value_hasher;
-        for (int32_t child : complex_children) {
-            depth = std::max(depth, pool.nodes[child].depth + 1);
-            child_intervals.push_back(pool.nodes[child].approx);
+        for (int32_t child : children) {
             hash = combine_hash(LazyOp::SUM, hash, pool.nodes[child].hash);
         }
         for (const auto& v : leaf_values) {
             hash = absl::HashOf(hash, value_hasher(v));
         }
-        Interval approx = compute_sum_interval(leaf_values, child_intervals);
 
         int idx = pool.allocate_node();
-        Node node(LazyOp::SUM, std::move(leaf_values), std::move(complex_children),
-            depth, approx, hash);
+        Node node(LazyOp::SUM, std::move(leaf_values), std::move(children), hash);
         pool.nodes[idx] = std::move(node);
         pool.refcount[idx] = 0;
         pool.sum_product_cache[std::move(key)] = idx;
@@ -354,70 +261,54 @@ namespace delta::internal {
     }
 
     inline int make_product_node(std::vector<Value> leaf_values,
-        absl::InlinedVector<int32_t, 4> complex_children) {
+        absl::InlinedVector<int32_t, 2> children) {
         pool.ensure_initialized();
-        SumProductKey key{ LazyOp::PRODUCT, leaf_values, complex_children };
+        SumProductKey key{ LazyOp::PRODUCT, leaf_values, children };
         auto it = pool.sum_product_cache.find(key);
         if (it != pool.sum_product_cache.end()) return it->second;
 
-        int32_t depth = 0;
-        std::vector<Interval> child_intervals;
-        child_intervals.reserve(complex_children.size());
         uint64_t hash = static_cast<uint64_t>(LazyOp::PRODUCT);
         ValueHash value_hasher;
-        for (int32_t child : complex_children) {
-            depth = std::max(depth, pool.nodes[child].depth + 1);
-            child_intervals.push_back(pool.nodes[child].approx);
+        for (int32_t child : children) {
             hash = combine_hash(LazyOp::PRODUCT, hash, pool.nodes[child].hash);
         }
         for (const auto& v : leaf_values) {
             hash = absl::HashOf(hash, value_hasher(v));
         }
-        Interval approx = compute_product_interval(leaf_values, child_intervals);
 
         int idx = pool.allocate_node();
-        Node node(LazyOp::PRODUCT, std::move(leaf_values), std::move(complex_children),
-            depth, approx, hash);
+        Node node(LazyOp::PRODUCT, std::move(leaf_values), std::move(children), hash);
         pool.nodes[idx] = std::move(node);
         pool.refcount[idx] = 0;
         pool.sum_product_cache[std::move(key)] = idx;
         return idx;
     }
 
-    inline int get_unary_node(LazyOp op, absl::InlinedVector<int32_t, 4> children, int eps_idx) {
+    inline int get_unary_node(LazyOp op, absl::InlinedVector<int32_t, 2> children, int eps_idx) {
         pool.ensure_initialized();
         UnaryKey key{ op, children, eps_idx };
         auto it = pool.unary_cache.find(key);
         if (it != pool.unary_cache.end()) return it->second;
 
-        int idx = pool.allocate_node();
-        int32_t depth = 0;
-        Interval approx;
         uint64_t hash = static_cast<uint64_t>(op);
-
         if (children.empty()) {
-            // PI, E
-            approx = compute_interval(op, Interval());
             hash = combine_hash(op, 0, eps_idx);
         }
         else if (children.size() == 1) {
             int32_t child = children[0];
-            depth = 1 + pool.nodes[child].depth;
-            approx = compute_interval(op, pool.nodes[child].approx);
             hash = combine_hash(op, pool.nodes[child].hash, 0, eps_idx);
         }
         else if (children.size() == 2) {
             int32_t base = children[0];
             int32_t exp = children[1];
-            depth = 1 + std::max(pool.nodes[base].depth, pool.nodes[exp].depth);
-            approx = compute_interval(LazyOp::POW, pool.nodes[base].approx, pool.nodes[exp].approx);
             hash = combine_hash(LazyOp::POW, pool.nodes[base].hash, pool.nodes[exp].hash, eps_idx);
         }
         else {
             throw std::logic_error("get_unary_node: invalid children count");
         }
 
-        Node node(op, std::move(children), eps_idx, depth, approx, hash);
+        int idx = pool.allocate_node();
+        Node node(op, std::move(children), eps_idx, hash);
         pool.nodes[idx] = std::move(node);
         pool.refcount[idx] = 0;
         pool.unary_cache[std::move(key)] = idx;
@@ -425,7 +316,7 @@ namespace delta::internal {
     }
 
     inline int get_pow_node(int base, int exponent, int eps_idx) {
-        absl::InlinedVector<int32_t, 4> children = { base, exponent };
+        absl::InlinedVector<int32_t, 2> children = { base, exponent };
         return get_unary_node(LazyOp::POW, std::move(children), eps_idx);
     }
 
@@ -446,15 +337,8 @@ namespace delta::internal {
             --pool.refcount[idx];
             if (pool.refcount[idx] == 0) {
                 const Node& node = pool.nodes[idx];
-                if (node.op == LazyOp::SUM || node.op == LazyOp::PRODUCT) {
-                    for (int32_t child : node.complex_children) {
-                        decrement_ref(child);
-                    }
-                }
-                else {
-                    for (int32_t child : node.children) {
-                        decrement_ref(child);
-                    }
+                for (int32_t child : node.children) {
+                    decrement_ref(child);
                 }
             }
         }
@@ -484,57 +368,60 @@ namespace delta::internal {
     }
 
     inline void collect_garbage() {
-        const size_t n = pool.nodes.size();
-        if (n == 0) return;
-
-        std::vector<bool> alive(n, false);
-        size_t alive_count = 0;
-        for (size_t i = 0; i < n; ++i) {
-            if (pool.refcount[i] > 0) {
-                alive[i] = true;
-                ++alive_count;
-            }
-        }
-
-        if (alive_count == 0) {
-            pool.nodes.clear();
-            pool.refcount.clear();
-            pool.next_free_index = 0;
-            pool.value_cache.clear();
-            pool.constant_cache.clear();
-            pool.sum_product_cache.clear();
-            pool.unary_cache.clear();
+        // 1. Получаем список всех чистых объектов (корней)
+        auto clean_objects = get_clean_objects_snapshot();
+        if (clean_objects.empty()) {
+            pool = NodePool();
+            pool.update_gc_threshold();
             return;
         }
 
-        NodePool new_pool;
-        new_pool.max_size = pool.max_size;
-        new_pool.update_gc_threshold();
-        new_pool.nodes.resize(pool.max_size);
-        new_pool.refcount.assign(pool.max_size, 0);
-
-        new_pool.values = pool.values;
-        new_pool.value_cache = pool.value_cache;
-
-        for (size_t i = 0; i < n; ++i) {
-            if (alive[i]) {
-                Value v = evaluate(static_cast<int>(i));
-                int val_idx = new_pool.add_value(v);
-                Node const_node(LazyOp::CONST, val_idx, 0, Interval(to_double(v)), compute_hash_const(v));
-                new_pool.nodes[i] = std::move(const_node);
-                new_pool.refcount[i] = pool.refcount[i];
+        // 2. Собираем корневые индексы и максимальный из них
+        std::unordered_set<int> root_indices;
+        size_t max_root_index = 0;
+        for (delta::LazyRational* obj : clean_objects) {
+            int idx = obj->clean_index_;
+            if (idx >= 0 && static_cast<size_t>(idx) < pool.nodes.size() && pool.refcount[idx] > 0) {
+                root_indices.insert(idx);
+                if (static_cast<size_t>(idx) > max_root_index) max_root_index = idx;
             }
         }
 
+        if (root_indices.empty()) {
+            pool = NodePool();
+            pool.update_gc_threshold();
+            return;
+        }
+
+        // 3. Создаём новый пул с размером, достаточным для max_root_index+1
+        NodePool new_pool;
+        new_pool.max_size = pool.max_size;
+        new_pool.update_gc_threshold();
+        size_t new_size = max_root_index + 1;
+        new_pool.nodes.resize(new_size);
+        new_pool.refcount.assign(new_size, 0);
+        new_pool.values = pool.values;
+        new_pool.value_cache = pool.value_cache;
+
+        // 4. Для каждого корня вычисляем значение и создаём константу
+        for (int root_idx : root_indices) {
+            Value v = evaluate(root_idx);
+            int val_idx = new_pool.add_value(v);
+            Node const_node(LazyOp::CONST, val_idx, compute_hash_const(v));
+            new_pool.nodes[root_idx] = std::move(const_node);
+            new_pool.refcount[root_idx] = 1;   // один владелец – сам LazyRational
+        }
+
+        // 5. Находим первый свободный слот для next_free_index
         new_pool.next_free_index = 0;
-        while (new_pool.next_free_index < new_pool.max_size &&
+        while (new_pool.next_free_index < new_size &&
             new_pool.is_occupied(new_pool.nodes[new_pool.next_free_index])) {
             ++new_pool.next_free_index;
         }
 
+        // 6. Заменяем старый пул
         pool = std::move(new_pool);
     }
-
     inline void set_pool_max_size(size_t new_size) {
         if (pool.nodes.empty()) {
             pool.max_size = new_size;
@@ -550,10 +437,29 @@ namespace delta::internal {
         collect_garbage();
     }
 
+    // -------------------------------------------------------------------------
+    // reset_pool – полный сброс пула с инвалидацией всех чистых объектов
+    // -------------------------------------------------------------------------
     inline void reset_pool() {
-        pool.~NodePool();
-        new (&pool) NodePool();
+        // 1. Получить снимок всех чистых объектов (пока старый пул жив)
+        auto clean_objects = get_clean_objects_snapshot();
+
+        // 2. Инвалидировать каждый чистый объект
+        for (delta::LazyRational* obj : clean_objects) {
+            // Уменьшить счётчик ссылок на узел в старом пуле
+            decrement_ref(obj->clean_index_);
+            // Пересоздать объект как грязный ноль (конструктор по умолчанию не регистрирует)
+            obj->~LazyRational();
+            new (obj) delta::LazyRational();
+        }
+
+        // 3. Очистить глобальный пул и кэши
+        pool = NodePool();
         pool.update_gc_threshold();
+        reset_pi_cache();
+
+        // 4. Очистить реестр (все объекты уже удалены, но для гарантии)
+        clear_clean_registry();
     }
 
 } // namespace delta::internal

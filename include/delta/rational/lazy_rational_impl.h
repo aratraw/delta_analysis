@@ -1,18 +1,33 @@
 // lazy_rational_impl.h
-// Версия 3.0 – реализация LazyRational с унифицированными узлами и гетерогенным хранением
+// Версия 3.2 – удалены approx и depth из Node/TempNode, интервалы вычисляются лениво.
 // ----------------------------------------------------------------------------
-// Изменения:
-//   - Адаптировано под новую структуру DirtyNode (value_idx, eps_idx, leaf_values, complex_children)
-//   - Гетерогенное добавление в SUM/PRODUCT через append_sum_children / append_product_children
-//   - Zero-overhead операторы +=, + с Rational (прямая вставка в leaf_values)
-//   - Методы массовой вставки append_values, append_nodes
-//   - Канонизация через TempNode с поддержкой гетерогенного хранения
-//   - Вычисление через evaluate_impl (evaluate_dirty, evaluate_dirty_inplace)
-//   - Оптимизация перемещений, избегание копий
-//   - Исправления: сигнатура new_dirty_node с явными value_idx и eps_idx, исправлены все вызовы
-//   - Удалены упоминания SmallStorage, заменены на Value
-// ----------------------------------------------------------------------------
+// Модификации для реестра чистых объектов (global_state.h)
 
+    // -------------------------------------------------------------------------
+    // TODO: Перспектива компактификации пула с использованием реестра.
+    // -------------------------------------------------------------------------
+    // Теперь, когда у нас есть реестр чистых объектов (g_clean_rationals),
+    // появляется возможность не просто заменять живые поддеревья на константы,
+    // но и перестраивать новый пул так, чтобы все корневые узлы (CONST) шли
+    // подряд с индекса 0. Это позволит:
+    //   - Уменьшить фрагментацию и повысить локальность данных.
+    //   - Сократить размер пула до реально необходимого (после GC).
+    //   - Гарантировать, что clean_index_ каждого чистого LazyRational
+    //     можно обновить, пройдя по реестру и переписав индексы.
+    // 
+    // Алгоритм (потенциальный):
+    //   1. В collect_garbage() после определения живых корней строим
+    //      отображение old_index -> new_compact_index (только для живых узлов).
+    //   2. Создаём новый пул, куда последовательно помещаем узлы-константы
+    //      для каждого живого корня, начиная с индекса 0.
+    //   3. Проходим по реестру g_clean_rationals, для каждого объекта
+    //      обновляем clean_index_ = new_compact_index[старый индекс].
+    //   4. Увеличиваем счётчики ссылок новых узлов соответственно.
+    //   5. Заменяем старый пул новым.
+    //
+    // Это не является критичным для текущей версии, но при необходимости
+    // может быть реализовано без изменения интерфейсов благодаря реестру.
+    // -------------------------------------------------------------------------
 #pragma once
 
 #include "node_pool.h"
@@ -20,20 +35,20 @@
 #include "lazy_nodes.h"
 #include "simplify_impl.h"
 #include "interval.h"
+#include "global_state.h"
 #include <stack>
 #include <cassert>
 #include <algorithm>
 #include <optional>
 #include <vector>
 #include <string>
+#include <cstdint> 
 
-namespace delta {
+    namespace delta {
 
     // ------------------------------------------------------------------------
-    // Вспомогательные функции для грязного дерева
+    // Вспомогательные функции для грязного дерева (интервал)
     // ------------------------------------------------------------------------
-
-    // Вычисление интервала для грязного дерева (итеративно)
     inline internal::Interval compute_interval_dirty(const LazyRational& lr) {
         assert(lr.is_dirty());
         const auto& nodes = lr.nodes_;
@@ -47,12 +62,7 @@ namespace delta {
             int idx = st.top(); st.pop();
             postorder.push_back(idx);
             const auto& dn = nodes[idx];
-            if (dn.op == internal::LazyOp::SUM || dn.op == internal::LazyOp::PRODUCT) {
-                for (int child : dn.complex_children) st.push(child);
-            }
-            else {
-                for (int child : dn.children) st.push(child);
-            }
+            for (int child : dn.children) st.push(child);
         }
 
         for (auto it = postorder.rbegin(); it != postorder.rend(); ++it) {
@@ -68,7 +78,7 @@ namespace delta {
                 for (const auto& v : dn.leaf_values) {
                     sum = sum + internal::Interval(internal::to_double(v));
                 }
-                for (int child : dn.complex_children) {
+                for (int child : dn.children) {
                     sum = sum + intervals[child];
                 }
                 intervals[idx] = sum;
@@ -79,7 +89,7 @@ namespace delta {
                 for (const auto& v : dn.leaf_values) {
                     prod = prod * internal::Interval(internal::to_double(v));
                 }
-                for (int child : dn.complex_children) {
+                for (int child : dn.children) {
                     prod = prod * intervals[child];
                 }
                 intervals[idx] = prod;
@@ -167,6 +177,163 @@ namespace delta {
     }
 
     // ------------------------------------------------------------------------
+    // Вычисление интервала для чистого дерева (по требованию)
+    // ------------------------------------------------------------------------
+    inline internal::Interval compute_interval_clean(int root) {
+        const auto& nodes = internal::pool.nodes;
+        const auto& values = internal::pool.values;
+        std::vector<internal::Interval> intervals(nodes.size());
+        std::stack<int> st;
+        st.push(root);
+        std::vector<int> postorder;
+        while (!st.empty()) {
+            int idx = st.top(); st.pop();
+            postorder.push_back(idx);
+            for (int child : nodes[idx].children) st.push(child);
+        }
+        for (auto it = postorder.rbegin(); it != postorder.rend(); ++it) {
+            int idx = *it;
+            const auto& node = nodes[idx];
+            switch (node.op) {
+            case internal::LazyOp::CONST:
+                intervals[idx] = internal::Interval(internal::to_double(values[node.value_idx]));
+                break;
+            case internal::LazyOp::SUM: {
+                internal::Interval sum = internal::Interval::zero();
+                for (const auto& v : node.leaf_values)
+                    sum = sum + internal::Interval(internal::to_double(v));
+                for (int child : node.children)
+                    sum = sum + intervals[child];
+                intervals[idx] = sum;
+                break;
+            }
+            case internal::LazyOp::PRODUCT: {
+                internal::Interval prod = internal::Interval::one();
+                for (const auto& v : node.leaf_values)
+                    prod = prod * internal::Interval(internal::to_double(v));
+                for (int child : node.children)
+                    prod = prod * intervals[child];
+                intervals[idx] = prod;
+                break;
+            }
+            case internal::LazyOp::NEG:
+                intervals[idx] = -intervals[node.children[0]];
+                break;
+            case internal::LazyOp::RECIP: {
+                const auto& child_int = intervals[node.children[0]];
+                if (child_int.lower() <= 0.0 && child_int.upper() >= 0.0)
+                    intervals[idx] = internal::Interval(-std::numeric_limits<double>::infinity(),
+                        std::numeric_limits<double>::infinity());
+                else {
+                    double lo = 1.0 / child_int.upper();
+                    double hi = 1.0 / child_int.lower();
+                    if (lo > hi) std::swap(lo, hi);
+                    intervals[idx] = internal::Interval(lo, hi);
+                }
+                break;
+            }
+            case internal::LazyOp::SQRT: {
+                const auto& child_int = intervals[node.children[0]];
+                if (child_int.upper() < 0) intervals[idx] = internal::Interval();
+                else {
+                    double lo = child_int.lower() < 0 ? 0.0 : std::sqrt(child_int.lower());
+                    double hi = std::sqrt(child_int.upper());
+                    intervals[idx] = internal::Interval(lo, hi);
+                }
+                break;
+            }
+            case internal::LazyOp::EXP: {
+                const auto& child_int = intervals[node.children[0]];
+                intervals[idx] = internal::Interval(std::exp(child_int.lower()), std::exp(child_int.upper()));
+                break;
+            }
+            case internal::LazyOp::LOG: {
+                const auto& child_int = intervals[node.children[0]];
+                if (child_int.upper() <= 0)
+                    intervals[idx] = internal::Interval(-std::numeric_limits<double>::infinity(),
+                        std::numeric_limits<double>::infinity());
+                else {
+                    double lo = std::log(child_int.lower());
+                    double hi = std::log(child_int.upper());
+                    intervals[idx] = internal::Interval(lo, hi);
+                }
+                break;
+            }
+            case internal::LazyOp::SIN:
+            case internal::LazyOp::COS:
+                intervals[idx] = internal::Interval(-1.0, 1.0);
+                break;
+            case internal::LazyOp::ACOS: {
+                const auto& child_int = intervals[node.children[0]];
+                if (child_int.lower() < -1 || child_int.upper() > 1)
+                    intervals[idx] = internal::Interval(-std::numeric_limits<double>::infinity(),
+                        std::numeric_limits<double>::infinity());
+                else {
+                    double lo = std::acos(child_int.upper());
+                    double hi = std::acos(child_int.lower());
+                    intervals[idx] = internal::Interval(lo, hi);
+                }
+                break;
+            }
+            case internal::LazyOp::PI:
+                intervals[idx] = internal::Interval(3.14159265358979323846);
+                break;
+            case internal::LazyOp::E:
+                intervals[idx] = internal::Interval(2.71828182845904523536);
+                break;
+            case internal::LazyOp::POW: {
+                const auto& base_int = intervals[node.children[0]];
+                const auto& exp_int = intervals[node.children[1]];
+                double lo = std::pow(base_int.lower(), exp_int.lower());
+                double hi = std::pow(base_int.upper(), exp_int.upper());
+                intervals[idx] = internal::Interval(lo, hi);
+                break;
+            }
+            default: throw std::logic_error("compute_interval_clean: unknown op");
+            }
+        }
+        return intervals[root];
+    }
+    // RAII-структура для отключения GC и временного снятия лимита размера пула
+    // RAII-структура для отключения GC и временного снятия лимита размера пула
+    struct CanonicalizeGuard {
+        bool old_gc_disabled;
+        size_t old_max_size;
+        size_t old_gc_threshold;
+        bool expanded;
+
+        CanonicalizeGuard(size_t needed_nodes)
+            : old_gc_disabled(internal::gc_disabled)
+            , old_max_size(internal::pool.max_size)
+            , old_gc_threshold(internal::pool.gc_threshold)
+            , expanded(false)
+        {
+            internal::gc_disabled = true;
+
+            if (internal::pool.next_free_index + needed_nodes > internal::pool.max_size) {
+                internal::pool.max_size = internal::DEFAULT_POOL_MAX_SIZE;
+                internal::pool.update_gc_threshold();
+                expanded = true;
+            }
+        }
+
+        ~CanonicalizeGuard() noexcept(false) {
+            // Восстанавливаем состояние пула и флагов СРАЗУ
+            internal::gc_disabled = old_gc_disabled;
+            internal::pool.max_size = old_max_size;
+            internal::pool.gc_threshold = old_gc_threshold;
+
+            // Если расширяли, но после канонизации не влезли в исходный лимит — бросаем исключение
+            if (expanded && internal::pool.next_free_index > old_max_size) {
+                throw std::runtime_error(
+                    "Canonicalization requires more nodes than max_size allows. "
+                    "Increase max_size before building expression. "
+                    "To silently expand pool, comment out this throw."
+                );
+            }
+        }
+    };
+    // ------------------------------------------------------------------------
     // Конструкторы
     // ------------------------------------------------------------------------
     inline LazyRational::LazyRational() : state_(State::Dirty) {
@@ -187,7 +354,7 @@ namespace delta {
         root_ = 0;
     }
 
-    // Move-конструктор/оператор
+    // Move-конструктор с поддержкой реестра чистых объектов
     inline LazyRational::LazyRational(LazyRational&& other) noexcept
         : state_(other.state_),
         nodes_(std::move(other.nodes_)),
@@ -196,10 +363,17 @@ namespace delta {
         clean_index_(other.clean_index_),
         cached_interval_(std::move(other.cached_interval_))
     {
+        if (other.state_ == State::Clean) {
+            other.unregister_clean();   // other теряет чистоту
+        }
         other.state_ = State::Dirty;
         other.root_ = -1;
         other.clean_index_ = -1;
         other.cached_interval_.reset();
+
+        if (state_ == State::Clean) {
+            register_clean();           // новый объект чистый
+        }
     }
 
     inline LazyRational& LazyRational::operator=(LazyRational&& other) noexcept {
@@ -210,8 +384,10 @@ namespace delta {
         return *this;
     }
 
+    // Деструктор с дерегистрацией, если объект был чистым
     inline LazyRational::~LazyRational() {
         if (state_ == State::Clean) {
+            unregister_clean();
             internal::decrement_ref(clean_index_);
         }
     }
@@ -226,18 +402,17 @@ namespace delta {
     }
 
     inline int LazyRational::new_dirty_node(internal::LazyOp op,
-        absl::InlinedVector<int32_t, 4> children,
-        int value_idx,   // для CONST
-        int eps_idx) {   // для операций с eps
+        absl::InlinedVector<int32_t, 2> children,
+        int value_idx,
+        int eps_idx) {
         assert(state_ == State::Dirty);
         if (op == internal::LazyOp::CONST) {
             nodes_.emplace_back(op, value_idx);
         }
         else if (op == internal::LazyOp::SUM || op == internal::LazyOp::PRODUCT) {
-            nodes_.emplace_back(op, std::vector<internal::Value>{}, absl::InlinedVector<int32_t, 4>{});
+            nodes_.emplace_back(op, std::vector<internal::Value>{}, absl::InlinedVector<int32_t, 2>{});
         }
         else {
-            // Унарные/бинарные/PI/E: eps_idx передаётся явно
             nodes_.emplace_back(op, std::move(children), eps_idx);
         }
         return static_cast<int>(nodes_.size() - 1);
@@ -249,20 +424,15 @@ namespace delta {
     inline int LazyRational::import_tree(const LazyRational& other) {
         assert(state_ == State::Dirty);
 
-        // Self-import: глубокое клонирование
         if (this == &other) {
             LazyRational temp = other.clone();
             return import_tree(temp);
         }
 
-        // ------------------------------------------------------------------------
-        // 1. Источник — грязное дерево (Dirty -> Dirty)
-        // ------------------------------------------------------------------------
         if (other.state_ == State::Dirty) {
             std::vector<int> old_to_new(other.nodes_.size(), -1);
-            std::vector<int> old_const_to_new(other.constants_.size(), -1);  // ← маппинг констант
+            std::vector<int> old_const_to_new(other.constants_.size(), -1);
 
-            // Пост-порядный обход источника
             std::stack<int> st;
             st.push(other.root_);
             std::vector<int> postorder;
@@ -270,12 +440,7 @@ namespace delta {
                 int idx = st.top(); st.pop();
                 postorder.push_back(idx);
                 const auto& dn = other.nodes_[idx];
-                if (dn.op == internal::LazyOp::SUM || dn.op == internal::LazyOp::PRODUCT) {
-                    for (int child : dn.complex_children) st.push(child);
-                }
-                else {
-                    for (int child : dn.children) st.push(child);
-                }
+                for (int child : dn.children) st.push(child);
             }
 
             for (auto it = postorder.rbegin(); it != postorder.rend(); ++it) {
@@ -284,7 +449,6 @@ namespace delta {
                 int new_idx = -1;
 
                 if (old_node.op == internal::LazyOp::CONST) {
-                    // Добавляем константу, если ещё не скопирована
                     if (old_const_to_new[old_node.value_idx] == -1) {
                         old_const_to_new[old_node.value_idx] =
                             add_constant(other.constants_[old_node.value_idx]);
@@ -293,23 +457,20 @@ namespace delta {
                     new_idx = new_dirty_node(old_node.op, {}, new_const, -1);
                 }
                 else if (old_node.op == internal::LazyOp::SUM || old_node.op == internal::LazyOp::PRODUCT) {
-                    absl::InlinedVector<int32_t, 4> new_complex;
-                    for (int child : old_node.complex_children) {
+                    absl::InlinedVector<int32_t, 2> new_complex;
+                    for (int child : old_node.children) {
                         new_complex.push_back(old_to_new[child]);
                     }
-                    std::vector<internal::Value> new_leaf = old_node.leaf_values;  // значения копируются
+                    std::vector<internal::Value> new_leaf = old_node.leaf_values;
                     int new_node_idx = static_cast<int>(nodes_.size());
                     nodes_.emplace_back(old_node.op, std::move(new_leaf), std::move(new_complex));
                     new_idx = new_node_idx;
                 }
                 else {
-                    // Унарные / бинарные / PI / E
-                    absl::InlinedVector<int32_t, 4> new_children;
+                    absl::InlinedVector<int32_t, 2> new_children;
                     for (int child : old_node.children) {
                         new_children.push_back(old_to_new[child]);
                     }
-
-                    // Обработка eps_idx
                     int new_eps = -1;
                     if (old_node.eps_idx != -1) {
                         if (old_const_to_new[old_node.eps_idx] == -1) {
@@ -318,21 +479,13 @@ namespace delta {
                         }
                         new_eps = old_const_to_new[old_node.eps_idx];
                     }
-
                     new_idx = new_dirty_node(old_node.op, std::move(new_children), -1, new_eps);
                 }
-
                 old_to_new[old_idx] = new_idx;
             }
-
             return old_to_new[other.root_];
         }
-
-        // ------------------------------------------------------------------------
-        // 2. Источник — чистое дерево (Clean -> Dirty)
-        // ------------------------------------------------------------------------
         else {
-            // Строим временное грязное дерево из чистого с правильным маппингом констант
             LazyRational temp;
             temp.state_ = State::Dirty;
 
@@ -343,16 +496,11 @@ namespace delta {
                 int idx = st.top(); st.pop();
                 postorder.push_back(idx);
                 const auto& node = internal::pool.nodes[idx];
-                if (node.op == internal::LazyOp::SUM || node.op == internal::LazyOp::PRODUCT) {
-                    for (int child : node.complex_children) st.push(child);
-                }
-                else {
-                    for (int child : node.children) st.push(child);
-                }
+                for (int child : node.children) st.push(child);
             }
 
             std::vector<int> clean_to_dirty(internal::pool.nodes.size(), -1);
-            std::vector<int> value_idx_map(internal::pool.values.size(), -1);  // маппинг констант чистого пула
+            std::vector<int> value_idx_map(internal::pool.values.size(), -1);
 
             for (auto it = postorder.rbegin(); it != postorder.rend(); ++it) {
                 int clean_idx = *it;
@@ -368,8 +516,8 @@ namespace delta {
                     dirty_idx = temp.new_dirty_node(clean_node.op, {}, new_const, -1);
                 }
                 else if (clean_node.op == internal::LazyOp::SUM || clean_node.op == internal::LazyOp::PRODUCT) {
-                    absl::InlinedVector<int32_t, 4> new_complex;
-                    for (int child : clean_node.complex_children) {
+                    absl::InlinedVector<int32_t, 2> new_complex;
+                    for (int child : clean_node.children) {
                         new_complex.push_back(clean_to_dirty[child]);
                     }
                     std::vector<internal::Value> new_leaf = clean_node.leaf_values;
@@ -378,12 +526,10 @@ namespace delta {
                     dirty_idx = new_node_idx;
                 }
                 else {
-                    // Унарные / бинарные / PI / E
-                    absl::InlinedVector<int32_t, 4> new_children;
+                    absl::InlinedVector<int32_t, 2> new_children;
                     for (int child : clean_node.children) {
                         new_children.push_back(clean_to_dirty[child]);
                     }
-
                     int new_eps = -1;
                     if (clean_node.eps_idx != -1) {
                         if (value_idx_map[clean_node.eps_idx] == -1) {
@@ -391,20 +537,15 @@ namespace delta {
                         }
                         new_eps = value_idx_map[clean_node.eps_idx];
                     }
-
                     dirty_idx = temp.new_dirty_node(clean_node.op, std::move(new_children), -1, new_eps);
                 }
-
                 clean_to_dirty[clean_idx] = dirty_idx;
             }
-
             temp.root_ = clean_to_dirty[other.clean_index_];
-
-            // Теперь у нас есть корректное грязное представление чистого дерева,
-            // импортируем его в текущий объект рекурсивным вызовом.
             return import_tree(temp);
         }
     }
+
     // ------------------------------------------------------------------------
     // clone
     // ------------------------------------------------------------------------
@@ -420,15 +561,18 @@ namespace delta {
             copy.state_ = State::Clean;
             copy.clean_index_ = clean_index_;
             internal::increment_ref(clean_index_);
+            copy.register_clean();   // <-- ДОБАВИТЬ
             return copy;
         }
     }
 
     // ------------------------------------------------------------------------
-    // ensure_dirty
+    // ensure_dirty – переход в грязное состояние с дерегистрацией
     // ------------------------------------------------------------------------
     inline void LazyRational::ensure_dirty() {
         if (state_ == State::Clean) {
+            unregister_clean();   // удаляем из реестра чистых объектов
+
             invalidate_interval();
             LazyRational temp;
             temp.state_ = State::Dirty;
@@ -439,16 +583,10 @@ namespace delta {
                 int idx = st.top(); st.pop();
                 postorder.push_back(idx);
                 const auto& node = internal::pool.nodes[idx];
-                if (node.op == internal::LazyOp::SUM || node.op == internal::LazyOp::PRODUCT) {
-                    for (int child : node.complex_children) st.push(child);
-                }
-                else {
-                    for (int child : node.children) st.push(child);
-                }
+                for (int child : node.children) st.push(child);
             }
 
             std::vector<int> clean_to_dirty(internal::pool.nodes.size(), -1);
-            // Маппинг для индексов констант в чистом пуле -> индексы в temp.constants_
             std::vector<int> value_idx_map(internal::pool.values.size(), -1);
 
             for (auto it = postorder.rbegin(); it != postorder.rend(); ++it) {
@@ -456,7 +594,6 @@ namespace delta {
                 const auto& clean_node = internal::pool.nodes[clean_idx];
                 int dirty_idx = -1;
                 if (clean_node.op == internal::LazyOp::CONST) {
-                    // Добавляем константу, если ещё не добавлена
                     int const_idx = clean_node.value_idx;
                     if (value_idx_map[const_idx] == -1) {
                         value_idx_map[const_idx] = temp.add_constant(internal::pool.values[const_idx]);
@@ -465,8 +602,8 @@ namespace delta {
                     dirty_idx = temp.new_dirty_node(clean_node.op, {}, new_const, -1);
                 }
                 else if (clean_node.op == internal::LazyOp::SUM || clean_node.op == internal::LazyOp::PRODUCT) {
-                    absl::InlinedVector<int32_t, 4> new_complex;
-                    for (int child : clean_node.complex_children) {
+                    absl::InlinedVector<int32_t, 2> new_complex;
+                    for (int child : clean_node.children) {
                         new_complex.push_back(clean_to_dirty[child]);
                     }
                     std::vector<internal::Value> new_leaf = clean_node.leaf_values;
@@ -475,11 +612,10 @@ namespace delta {
                     dirty_idx = new_node_idx;
                 }
                 else {
-                    absl::InlinedVector<int32_t, 4> new_children;
+                    absl::InlinedVector<int32_t, 2> new_children;
                     for (int child : clean_node.children) {
                         new_children.push_back(clean_to_dirty[child]);
                     }
-                    // Обрабатываем eps_idx
                     int new_eps = -1;
                     if (clean_node.eps_idx != -1) {
                         if (value_idx_map[clean_node.eps_idx] == -1) {
@@ -496,6 +632,7 @@ namespace delta {
             internal::decrement_ref(clean_index_);
         }
     }
+
     // ------------------------------------------------------------------------
     // append_sum_children / append_product_children (гетерогенные)
     // ------------------------------------------------------------------------
@@ -510,15 +647,15 @@ namespace delta {
             target.leaf_values.insert(target.leaf_values.end(),
                 std::make_move_iterator(other_node.leaf_values.begin()),
                 std::make_move_iterator(other_node.leaf_values.end()));
-            for (int child : other_node.complex_children) {
-                target.complex_children.push_back(child);
+            for (int child : other_node.children) {
+                target.children.push_back(child);
             }
         }
         else if (other_node.op == internal::LazyOp::CONST) {
             target.leaf_values.push_back(constants_[other_node.value_idx]);
         }
         else {
-            target.complex_children.push_back(other_root);
+            target.children.push_back(other_root);
         }
     }
 
@@ -533,15 +670,15 @@ namespace delta {
             target.leaf_values.insert(target.leaf_values.end(),
                 std::make_move_iterator(other_node.leaf_values.begin()),
                 std::make_move_iterator(other_node.leaf_values.end()));
-            for (int child : other_node.complex_children) {
-                target.complex_children.push_back(child);
+            for (int child : other_node.children) {
+                target.children.push_back(child);
             }
         }
         else if (other_node.op == internal::LazyOp::CONST) {
             target.leaf_values.push_back(constants_[other_node.value_idx]);
         }
         else {
-            target.complex_children.push_back(other_root);
+            target.children.push_back(other_root);
         }
     }
 
@@ -555,12 +692,12 @@ namespace delta {
         if (a.nodes_[root].op != internal::LazyOp::SUM) {
             int b_root = a.import_tree(b);
             std::vector<internal::Value> leaf_vals;
-            absl::InlinedVector<int32_t, 4> complex_children;
+            absl::InlinedVector<int32_t, 2> children;
             if (a.nodes_[root].op == internal::LazyOp::CONST) {
                 leaf_vals.push_back(a.constants_[a.nodes_[root].value_idx]);
             }
             else {
-                complex_children.push_back(root);
+                children.push_back(root);
             }
             if (b_root != -1) {
                 const auto& b_node = a.nodes_[b_root];
@@ -568,12 +705,12 @@ namespace delta {
                     leaf_vals.push_back(a.constants_[b_node.value_idx]);
                 }
                 else {
-                    complex_children.push_back(b_root);
+                    children.push_back(b_root);
                 }
             }
             int new_root = a.new_dirty_node(internal::LazyOp::SUM, {}, -1, -1);
             a.nodes_[new_root].leaf_values = std::move(leaf_vals);
-            a.nodes_[new_root].complex_children = std::move(complex_children);
+            a.nodes_[new_root].children = std::move(children);
             a.root_ = new_root;
         }
         else {
@@ -595,17 +732,17 @@ namespace delta {
         }
         else {
             std::vector<internal::Value> leaf_vals;
-            absl::InlinedVector<int32_t, 4> complex_children;
+            absl::InlinedVector<int32_t, 2> children;
             if (a.nodes_[root].op == internal::LazyOp::CONST) {
                 leaf_vals.push_back(a.constants_[a.nodes_[root].value_idx]);
             }
             else {
-                complex_children.push_back(root);
+                children.push_back(root);
             }
             leaf_vals.push_back(b.value());
             int new_root = a.new_dirty_node(internal::LazyOp::SUM, {}, -1, -1);
             a.nodes_[new_root].leaf_values = std::move(leaf_vals);
-            a.nodes_[new_root].complex_children = std::move(complex_children);
+            a.nodes_[new_root].children = std::move(children);
             a.root_ = new_root;
         }
         return a;
@@ -653,12 +790,12 @@ namespace delta {
         if (a.nodes_[root].op != internal::LazyOp::PRODUCT) {
             int b_root = a.import_tree(b);
             std::vector<internal::Value> leaf_vals;
-            absl::InlinedVector<int32_t, 4> complex_children;
+            absl::InlinedVector<int32_t, 2> children;
             if (a.nodes_[root].op == internal::LazyOp::CONST) {
                 leaf_vals.push_back(a.constants_[a.nodes_[root].value_idx]);
             }
             else {
-                complex_children.push_back(root);
+                children.push_back(root);
             }
             if (b_root != -1) {
                 const auto& b_node = a.nodes_[b_root];
@@ -666,12 +803,12 @@ namespace delta {
                     leaf_vals.push_back(a.constants_[b_node.value_idx]);
                 }
                 else {
-                    complex_children.push_back(b_root);
+                    children.push_back(b_root);
                 }
             }
             int new_root = a.new_dirty_node(internal::LazyOp::PRODUCT, {}, -1, -1);
             a.nodes_[new_root].leaf_values = std::move(leaf_vals);
-            a.nodes_[new_root].complex_children = std::move(complex_children);
+            a.nodes_[new_root].children = std::move(children);
             a.root_ = new_root;
         }
         else {
@@ -693,17 +830,17 @@ namespace delta {
         }
         else {
             std::vector<internal::Value> leaf_vals;
-            absl::InlinedVector<int32_t, 4> complex_children;
+            absl::InlinedVector<int32_t, 2> children;
             if (a.nodes_[root].op == internal::LazyOp::CONST) {
                 leaf_vals.push_back(a.constants_[a.nodes_[root].value_idx]);
             }
             else {
-                complex_children.push_back(root);
+                children.push_back(root);
             }
             leaf_vals.push_back(b.value());
             int new_root = a.new_dirty_node(internal::LazyOp::PRODUCT, {}, -1, -1);
             a.nodes_[new_root].leaf_values = std::move(leaf_vals);
-            a.nodes_[new_root].complex_children = std::move(complex_children);
+            a.nodes_[new_root].children = std::move(children);
             a.root_ = new_root;
         }
         return a;
@@ -736,10 +873,9 @@ namespace delta {
     inline LazyRational&& operator/(LazyRational&& a, const Rational& b) {
         return std::move(operator/(a, b));
     }
+
     // Операторы для случая typeof(LValue)==Rational && typeof(Rvalue)==LazyRational.
     // ------------------------------------------------------------------------
-// Мутирующий унарный минус для временных объектов (rvalue)
-// ------------------------------------------------------------------------
     inline LazyRational mutating_unary_minus(LazyRational&& a) {
         a.ensure_dirty();
         a.invalidate_interval();
@@ -760,22 +896,18 @@ namespace delta {
         return std::move(b += a);
     }
 
-    // Вычитание: Rational - LazyRational
     inline LazyRational operator-(const Rational& a, const LazyRational& b) {
-        // a - b = (-b) + a, при этом b не мутируется
-        LazyRational result = -b;   // обычный унарный минус создаёт копию
+        LazyRational result = -b;
         result += a;
         return result;
     }
 
     inline LazyRational operator-(const Rational& a, LazyRational&& b) {
-        // Для rvalue мутируем b напрямую
         LazyRational result = mutating_unary_minus(std::move(b));
         result += a;
         return result;
     }
 
-    // Умножение: Rational * LazyRational
     inline LazyRational& operator*(const Rational& a, LazyRational& b) {
         return b *= a;
     }
@@ -784,9 +916,7 @@ namespace delta {
         return std::move(b *= a);
     }
 
-    // Деление: Rational / LazyRational
     inline LazyRational operator/(const Rational& a, const LazyRational& b) {
-        // a / b = a * (1/b)
         LazyRational recip = b.clone();
         recip.ensure_dirty();
         recip.invalidate_interval();
@@ -798,7 +928,6 @@ namespace delta {
     }
 
     inline LazyRational operator/(const Rational& a, LazyRational&& b) {
-        // Мутируем b в 1/b и умножаем на a
         b.ensure_dirty();
         b.invalidate_interval();
         int b_root = b.root_;
@@ -832,16 +961,16 @@ namespace delta {
         }
         else {
             std::vector<internal::Value> leaf_vals = std::move(values);
-            absl::InlinedVector<int32_t, 4> complex_children;
+            absl::InlinedVector<int32_t, 2> children;
             if (nodes_[root_].op == internal::LazyOp::CONST) {
                 leaf_vals.insert(leaf_vals.begin(), constants_[nodes_[root_].value_idx]);
             }
             else {
-                complex_children.push_back(root_);
+                children.push_back(root_);
             }
             int new_root = new_dirty_node(internal::LazyOp::SUM, {}, -1, -1);
             nodes_[new_root].leaf_values = std::move(leaf_vals);
-            nodes_[new_root].complex_children = std::move(complex_children);
+            nodes_[new_root].children = std::move(children);
             root_ = new_root;
         }
     }
@@ -849,35 +978,37 @@ namespace delta {
     inline void LazyRational::append_nodes(std::vector<int>&& node_indices) {
         ensure_dirty();
         invalidate_interval();
-        absl::InlinedVector<int32_t, 4> complex_children(node_indices.begin(), node_indices.end());
+        absl::InlinedVector<int32_t, 2> children(node_indices.begin(), node_indices.end());
         if (nodes_[root_].op == internal::LazyOp::SUM) {
-            auto& complex = nodes_[root_].complex_children;
-            for (int idx : complex_children) {
+            auto& complex = nodes_[root_].children;
+            for (int idx : children) {
                 complex.push_back(idx);
             }
         }
         else {
             if (nodes_[root_].op != internal::LazyOp::SUM) {
-                complex_children.insert(complex_children.begin(), root_);
+                children.insert(children.begin(), root_);
             }
             int new_root = new_dirty_node(internal::LazyOp::SUM, {}, -1, -1);
-            nodes_[new_root].complex_children = std::move(complex_children);
+            nodes_[new_root].children = std::move(children);
             root_ = new_root;
         }
     }
 
     // ------------------------------------------------------------------------
-    // Канонизация (Dirty -> Clean) с использованием TempNode и simplify_tree
+    // Канонизация (Dirty -> Clean) с регистрацией в реестре
     // ------------------------------------------------------------------------
     inline void LazyRational::canonicalize() const {
         if (state_ != State::Dirty) return;
 
-        // 1. Построить TempNode дерево (без упрощений)
+        // ------------------------------------------------------------
+        // 1. Построение временных узлов TempNode из грязного дерева
+        // ------------------------------------------------------------
         std::vector<internal::TempNode> temp_nodes;
         std::vector<internal::Value> temp_values;
         std::vector<int> dirty_to_temp(nodes_.size(), -1);
 
-        // Пост-порядный обход грязного дерева
+        // Обход в пост-порядке для грязных узлов
         std::stack<int> st;
         st.push(root_);
         std::vector<int> postorder;
@@ -885,25 +1016,16 @@ namespace delta {
             int idx = st.top(); st.pop();
             postorder.push_back(idx);
             const auto& dn = nodes_[idx];
-            if (dn.op == internal::LazyOp::SUM || dn.op == internal::LazyOp::PRODUCT) {
-                for (int child : dn.complex_children) st.push(child);
-            }
-            else {
-                for (int child : dn.children) st.push(child);
-            }
+            for (int child : dn.children) st.push(child);
         }
 
         for (auto it = postorder.rbegin(); it != postorder.rend(); ++it) {
             int dirty_idx = *it;
             const auto& dn = nodes_[dirty_idx];
 
-            std::vector<int> temp_children;
-            for (int child : dn.children) {
-                temp_children.push_back(dirty_to_temp[child]);
-            }
-
+            // Дети текущего узла (уже преобразованные в TempNode)
             std::vector<int> temp_complex;
-            for (int child : dn.complex_children) {
+            for (int child : dn.children) {
                 temp_complex.push_back(dirty_to_temp[child]);
             }
 
@@ -917,41 +1039,22 @@ namespace delta {
                 temp_values.push_back(constants_[dn.eps_idx]);
             }
 
-            // Копируем leaf_values (без изменений)
             std::vector<internal::Value> leaf_vals = dn.leaf_values;
 
-            // Вычисляем метаданные
+            // Вычисление хеша (без approx/depth)
             uint64_t hash = static_cast<uint64_t>(dn.op);
-            internal::Interval approx;
-            int32_t depth = 0;
-
             if (dn.op == internal::LazyOp::CONST) {
-                double d = internal::to_double(temp_values[value_idx]);
                 hash = internal::compute_hash_const(temp_values[value_idx]);
-                approx = internal::Interval(d);
-                depth = 0;
             }
             else if (dn.op == internal::LazyOp::SUM) {
-                approx = internal::Interval::zero();
-                for (const auto& v : leaf_vals) {
-                    approx = approx + internal::Interval(internal::to_double(v));
-                    hash = absl::HashOf(hash, v);
-                }
+                for (const auto& v : leaf_vals) hash = absl::HashOf(hash, v);
                 for (int c : temp_complex) {
-                    depth = std::max(depth, temp_nodes[c].depth + 1);
-                    approx = approx + temp_nodes[c].approx;
                     hash = internal::combine_hash(internal::LazyOp::SUM, hash, temp_nodes[c].hash);
                 }
             }
             else if (dn.op == internal::LazyOp::PRODUCT) {
-                approx = internal::Interval::one();
-                for (const auto& v : leaf_vals) {
-                    approx = approx * internal::Interval(internal::to_double(v));
-                    hash = absl::HashOf(hash, v);
-                }
+                for (const auto& v : leaf_vals) hash = absl::HashOf(hash, v);
                 for (int c : temp_complex) {
-                    depth = std::max(depth, temp_nodes[c].depth + 1);
-                    approx = approx * temp_nodes[c].approx;
                     hash = internal::combine_hash(internal::LazyOp::PRODUCT, hash, temp_nodes[c].hash);
                 }
             }
@@ -959,21 +1062,15 @@ namespace delta {
                 dn.op == internal::LazyOp::SQRT || dn.op == internal::LazyOp::EXP ||
                 dn.op == internal::LazyOp::LOG || dn.op == internal::LazyOp::SIN ||
                 dn.op == internal::LazyOp::COS || dn.op == internal::LazyOp::ACOS) {
-                int c = temp_children[0];
-                depth = 1 + temp_nodes[c].depth;
-                approx = internal::compute_interval(dn.op, temp_nodes[c].approx);
+                int c = temp_complex[0];
                 hash = internal::combine_hash(dn.op, temp_nodes[c].hash, 0, eps_idx);
             }
             else if (dn.op == internal::LazyOp::PI || dn.op == internal::LazyOp::E) {
-                depth = 0;
-                approx = internal::compute_interval(dn.op, internal::Interval());
                 hash = internal::combine_hash(dn.op, 0, eps_idx);
             }
             else if (dn.op == internal::LazyOp::POW) {
-                int base = temp_children[0];
-                int exp = temp_children[1];
-                depth = 1 + std::max(temp_nodes[base].depth, temp_nodes[exp].depth);
-                approx = internal::compute_interval(internal::LazyOp::POW, temp_nodes[base].approx, temp_nodes[exp].approx);
+                int base = temp_complex[0];
+                int exp = temp_complex[1];
                 hash = internal::combine_hash(internal::LazyOp::POW, temp_nodes[base].hash, temp_nodes[exp].hash, eps_idx);
             }
             else {
@@ -983,75 +1080,107 @@ namespace delta {
             int temp_idx = static_cast<int>(temp_nodes.size());
             if (dn.op == internal::LazyOp::SUM || dn.op == internal::LazyOp::PRODUCT) {
                 temp_nodes.emplace_back(dn.op, std::move(leaf_vals), std::move(temp_complex),
-                    value_idx, eps_idx, hash, approx, depth);
+                    value_idx, eps_idx, hash);
             }
             else {
-                temp_nodes.emplace_back(dn.op, std::move(temp_children), value_idx, eps_idx, hash, approx, depth);
+                temp_nodes.emplace_back(dn.op, std::move(temp_complex), value_idx, eps_idx, hash);
             }
             dirty_to_temp[dirty_idx] = temp_idx;
         }
 
         int temp_root = dirty_to_temp[root_];
-
-        // 2. Упрощение (локальное, без глобального пула)
         int simplified_root = internal::simplify_tree(temp_nodes, temp_values, temp_root);
 
-        // 3. Интернирование упрощённого дерева в глобальный пул (ПОСТ-ПОРЯДНЫЙ ОБХОД)
-        std::vector<int> temp_to_global(temp_nodes.size(), -1);
+        // ------------------------------------------------------------
+        // 2. Оценка количества узлов, которые будут созданы в пуле
+        // ------------------------------------------------------------
+        size_t needed_nodes = temp_nodes.size();   // каждый TempNode → один чистый узел
 
-        std::stack<int> st_glob;
-        st_glob.push(simplified_root);
-        std::vector<int> postorder_glob;
-        while (!st_glob.empty()) {
-            int idx = st_glob.top(); st_glob.pop();
-            postorder_glob.push_back(idx);
-            const auto& tn = temp_nodes[idx];
-            if (tn.op == internal::LazyOp::SUM || tn.op == internal::LazyOp::PRODUCT) {
-                for (int c : tn.complex_children) st_glob.push(c);
+        // ------------------------------------------------------------
+        // 3. Попытка уложиться в лимит max_size с помощью GC
+        // ------------------------------------------------------------
+        bool use_guard = false;
+        if (internal::pool.next_free_index + needed_nodes > internal::pool.max_size) {
+            // Не хватает места → пробуем собрать мусор
+            internal::collect_garbage();
+            // После GC проверяем снова
+            if (internal::pool.next_free_index + needed_nodes > internal::pool.max_size) {
+                // Даже после GC не влезаем → придётся отключать GC и снимать лимит (старый путь)
+                use_guard = true;
             }
-            else {
+        }
+
+        // ------------------------------------------------------------
+        // 4. Лямбда, выполняющая реальное выделение узлов в пул
+        // ------------------------------------------------------------
+        auto allocate_global_nodes = [&]() -> int {
+            std::vector<int> temp_to_global(temp_nodes.size(), -1);
+            std::stack<int> st_glob;
+            st_glob.push(simplified_root);
+            std::vector<int> postorder_glob;
+            while (!st_glob.empty()) {
+                int idx = st_glob.top(); st_glob.pop();
+                postorder_glob.push_back(idx);
+                const auto& tn = temp_nodes[idx];
                 for (int c : tn.children) st_glob.push(c);
             }
+
+            for (auto it = postorder_glob.rbegin(); it != postorder_glob.rend(); ++it) {
+                int idx = *it;
+                const auto& tn = temp_nodes[idx];
+                int global_idx = -1;
+
+                if (tn.op == internal::LazyOp::CONST) {
+                    global_idx = internal::add_const(temp_values[tn.value_idx]);
+                }
+                else if (tn.op == internal::LazyOp::SUM) {
+                    absl::InlinedVector<int32_t, 2> children;
+                    for (int c : tn.children) children.push_back(temp_to_global[c]);
+                    global_idx = internal::make_sum_node(tn.leaf_values, std::move(children));
+                }
+                else if (tn.op == internal::LazyOp::PRODUCT) {
+                    absl::InlinedVector<int32_t, 2> children;
+                    for (int c : tn.children) children.push_back(temp_to_global[c]);
+                    global_idx = internal::make_product_node(tn.leaf_values, std::move(children));
+                }
+                else {
+                    absl::InlinedVector<int32_t, 2> children;
+                    for (int c : tn.children) children.push_back(temp_to_global[c]);
+                    int eps_global = (tn.eps_idx != -1) ? internal::pool.add_value(temp_values[tn.eps_idx]) : -1;
+                    global_idx = internal::get_unary_node(tn.op, std::move(children), eps_global);
+                }
+                temp_to_global[idx] = global_idx;
+            }
+            return temp_to_global[simplified_root];
+            };
+
+        // ------------------------------------------------------------
+        // 5. Выделение узлов (с guard или без)
+        // ------------------------------------------------------------
+        int new_clean_root;
+        if (use_guard) {
+            // Старый режим: отключаем GC и при необходимости временно расширяем пул
+            CanonicalizeGuard guard(needed_nodes);
+            new_clean_root = allocate_global_nodes();
+        }
+        else {
+            // Новый режим: GC разрешён, лимит max_size соблюдается
+            new_clean_root = allocate_global_nodes();
         }
 
-        for (auto it = postorder_glob.rbegin(); it != postorder_glob.rend(); ++it) {
-            int idx = *it;
-            const auto& tn = temp_nodes[idx];
-            int global_idx = -1;
-
-            if (tn.op == internal::LazyOp::CONST) {
-                global_idx = internal::add_const(temp_values[tn.value_idx]);
-            }
-            else if (tn.op == internal::LazyOp::SUM) {
-                absl::InlinedVector<int32_t, 4> complex_children;
-                for (int c : tn.complex_children) complex_children.push_back(temp_to_global[c]);
-                global_idx = internal::make_sum_node(tn.leaf_values, std::move(complex_children));
-            }
-            else if (tn.op == internal::LazyOp::PRODUCT) {
-                absl::InlinedVector<int32_t, 4> complex_children;
-                for (int c : tn.complex_children) complex_children.push_back(temp_to_global[c]);
-                global_idx = internal::make_product_node(tn.leaf_values, std::move(complex_children));
-            }
-            else {
-                absl::InlinedVector<int32_t, 4> children;
-                for (int c : tn.children) children.push_back(temp_to_global[c]);
-                int eps_global = (tn.eps_idx != -1) ? internal::pool.add_value(temp_values[tn.eps_idx]) : -1;
-                global_idx = internal::get_unary_node(tn.op, std::move(children), eps_global);
-            }
-
-            temp_to_global[idx] = global_idx;
-        }
-
-        int new_clean_root = temp_to_global[simplified_root];
+        // ------------------------------------------------------------
+        // 6. Переключение объекта в чистое состояние
+        // ------------------------------------------------------------
         internal::increment_ref(new_clean_root);
 
-        // 4. Переход в Clean
         const_cast<LazyRational*>(this)->state_ = State::Clean;
         const_cast<LazyRational*>(this)->clean_index_ = new_clean_root;
         const_cast<LazyRational*>(this)->nodes_.clear();
         const_cast<LazyRational*>(this)->constants_.clear();
         const_cast<LazyRational*>(this)->root_ = -1;
         const_cast<LazyRational*>(this)->cached_interval_.reset();
+
+        const_cast<LazyRational*>(this)->register_clean();
     }
     // ------------------------------------------------------------------------
     // eval, eval_inplace, simplify, approx_interval
@@ -1117,7 +1246,7 @@ namespace delta {
         if (cached_interval_.has_value()) return *cached_interval_;
         internal::Interval result;
         if (state_ == State::Clean) {
-            result = internal::pool.nodes[clean_index_].approx;
+            result = compute_interval_clean(clean_index_);
         }
         else {
             result = compute_interval_dirty(*this);
@@ -1127,28 +1256,21 @@ namespace delta {
     }
 
     // ------------------------------------------------------------------------
-   // Сравнения (многоуровневые)
-   // ------------------------------------------------------------------------
+    // Сравнения (многоуровневые)
+    // ------------------------------------------------------------------------
     inline bool operator==(const LazyRational& a, const LazyRational& b) {
-        // 1. Быстрая проверка: одинаковые чистые узлы (структурное равенство)
         if (a.is_clean() && b.is_clean() && a.clean_index_ == b.clean_index_)
             return true;
 
-        // 2. Получаем кэшированные интервалы или вычисляем с кэшированием если кэша нет
-        // Интервальная проверка: если интервалы не пересекаются – точно не равны.
         if (!a.approx_interval().overlaps(b.approx_interval()))
             return false;
 
-        // 3. Если быстрый выход не сработал
-        // Канонизация (объекты становятся чистыми, грязные данные очищаются)
         a.canonicalize();
         b.canonicalize();
 
-        // 4. Повторная проверка индексов (после канонизации могло совпасть)
         if (a.clean_index_ == b.clean_index_)
             return true;
 
-        // 5. Полное вычисление значений и сравнение (дорогой путь)
         return a.eval() == b.eval();
     }
 
@@ -1157,19 +1279,12 @@ namespace delta {
     }
 
     inline bool operator<(const LazyRational& a, const LazyRational& b) {
-        // 1. Получаем кэшированные интервалы или вычисляем с кэшированием если кэша нет
         internal::Interval ia = a.approx_interval();
         internal::Interval ib = b.approx_interval();
 
-        // 2. Интервальная проверка: если a строго меньше b, ответ известен
-        if (ia.upper() < ib.lower())
-            return true;
+        if (ia.upper() < ib.lower()) return true;
+        if (ia.lower() >= ib.upper()) return false;
 
-        // 3. Если a точно не меньше b (т.е. a >= b), ответ тоже известен
-        if (ia.lower() >= ib.upper())
-            return false;
-
-        // 4. Интервалы пересекаются – канонизируем и сравниваем точные значения
         a.canonicalize();
         b.canonicalize();
         return a.eval() < b.eval();
