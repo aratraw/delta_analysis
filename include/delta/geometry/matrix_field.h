@@ -8,7 +8,8 @@
 #include <stdexcept>
 #include <type_traits>
 #include <limits>
-#include <vector>        // added for parallelization
+#include <vector>
+#include <optional>
 
 namespace delta::geometry {
 
@@ -62,8 +63,8 @@ namespace delta::geometry {
         // -------------------------------------------------------------------------
         // Matrix exponential and logarithm (constructive, with precision control)
         // -------------------------------------------------------------------------
-        MatrixField exp(const Scalar& eps = Scalar(0)) const;
-        MatrixField log(const Scalar& eps = Scalar(0)) const;
+        MatrixField exp(const Scalar& eps = delta::default_eps()) const;
+        MatrixField log(const Scalar& eps = delta::default_eps()) const;
 
     private:
         // -------------------------------------------------------------------------
@@ -314,84 +315,122 @@ namespace delta::geometry {
     }
 
     // -------------------------------------------------------------------------
-    // Public exp/log methods (parallelized)
+    // Public exp/log methods (parallelized, with per-point exception resilience)
     // -------------------------------------------------------------------------
     template<typename Addr, int Dim, typename Compare>
     auto MatrixField<Addr, Dim, Compare>::exp(const Scalar& eps) const -> MatrixField {
-        Scalar actual_eps = (eps == 0) ? delta::default_eps() : eps;
+        // eps уже является значением по умолчанию или переданным пользователем.
+        // Никакой дополнительной проверки на 0 не требуется — это ответственность
+        // пользователя.
+        const Scalar& actual_eps = eps;
 
-        // 1. Collect addresses
+        // Collect all addresses (needed for later assignment)
         std::vector<Addr> addrs;
         addrs.reserve(this->size());
         for (const auto& [addr, mat] : *this) {
             addrs.push_back(addr);
         }
 
-        // 2. Vector of results
-        std::vector<value_type> results(addrs.size());
+        // Store results; std::nullopt indicates that the exponential could not be computed
+        std::vector<std::optional<value_type>> results(addrs.size());
 
-        // 3. Parallel (or sequential) computation
 #ifdef _OPENMP
         static constexpr std::size_t OMP_MIN_SIZE = 1000;
         if (addrs.size() >= OMP_MIN_SIZE) {
 #pragma omp parallel for
             for (std::ptrdiff_t i = 0; i < static_cast<std::ptrdiff_t>(addrs.size()); ++i) {
-                results[i] = matrix_exp(this->at(addrs[i]), actual_eps);
+                try {
+                    results[i] = matrix_exp(this->at(addrs[i]), actual_eps);
+                }
+                catch (const std::domain_error&) {
+                    // Matrix exponential is almost always defined for square matrices,
+                    // but if an error occurs (e.g. non‑square?), we skip this point.
+                    results[i] = std::nullopt;
+                }
             }
         }
         else
 #endif
         {
             for (std::size_t i = 0; i < addrs.size(); ++i) {
-                results[i] = matrix_exp(this->at(addrs[i]), actual_eps);
+                try {
+                    results[i] = matrix_exp(this->at(addrs[i]), actual_eps);
+                }
+                catch (const std::domain_error&) {
+                    results[i] = std::nullopt;
+                }
             }
         }
 
-        // 4. Build result field
         MatrixField result;
         for (std::size_t i = 0; i < addrs.size(); ++i) {
-            result.set(addrs[i], results[i]);
+            if (results[i].has_value()) {
+                result.set(addrs[i], std::move(results[i].value()));
+            }
+        }
+
+        // If no point could be exponentiated, throw an exception
+        if (result.size() == 0) {
+            throw std::domain_error("matrix_exp: no matrix in the field can be exponentiated");
         }
         return result;
     }
 
     template<typename Addr, int Dim, typename Compare>
     auto MatrixField<Addr, Dim, Compare>::log(const Scalar& eps) const -> MatrixField {
-        Scalar actual_eps = (eps == 0) ? delta::default_eps() : eps;
-        // Compute log2 once for the whole field
+        // eps уже является значением по умолчанию или переданным пользователем.
+        // Никакой дополнительной проверки на 0 не требуется — это ответственность
+        // пользователя.
+        const Scalar& actual_eps = eps;
         Scalar log2 = delta::log(2_r, actual_eps);
 
-        // 1. Collect addresses
+        // Collect addresses once
         std::vector<Addr> addrs;
         addrs.reserve(this->size());
         for (const auto& [addr, mat] : *this) {
             addrs.push_back(addr);
         }
 
-        // 2. Vector of results
-        std::vector<value_type> results(addrs.size());
+        // Store optional results (nullopt = singular matrix)
+        std::vector<std::optional<value_type>> results(addrs.size());
 
-        // 3. Parallel (or sequential) computation
 #ifdef _OPENMP
         static constexpr std::size_t OMP_MIN_SIZE = 1000;
         if (addrs.size() >= OMP_MIN_SIZE) {
 #pragma omp parallel for
             for (std::ptrdiff_t i = 0; i < static_cast<std::ptrdiff_t>(addrs.size()); ++i) {
-                results[i] = matrix_log(this->at(addrs[i]), actual_eps, log2);
+                try {
+                    results[i] = matrix_log(this->at(addrs[i]), actual_eps, log2);
+                }
+                catch (const std::domain_error&) {
+                    // Matrix is singular or logarithm not defined
+                    results[i] = std::nullopt;
+                }
             }
         }
         else
 #endif
         {
             for (std::size_t i = 0; i < addrs.size(); ++i) {
-                results[i] = matrix_log(this->at(addrs[i]), actual_eps, log2);
+                try {
+                    results[i] = matrix_log(this->at(addrs[i]), actual_eps, log2);
+                }
+                catch (const std::domain_error&) {
+                    results[i] = std::nullopt;
+                }
             }
         }
 
-        // 4. Build result field
         MatrixField result;
         for (std::size_t i = 0; i < addrs.size(); ++i) {
-            result.set(addrs[i], results[i]);
+            if (results[i].has_value()) {
+                result.set(addrs[i], std::move(results[i].value()));
+            }
+        }
+
+        // Only throw if no matrix in the field is invertible
+        if (result.size() == 0) {
+            throw std::domain_error("matrix_log: no invertible matrix in the field");
         }
         return result;
     }

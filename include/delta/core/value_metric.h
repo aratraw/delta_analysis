@@ -56,7 +56,7 @@ namespace delta {
             return abs(a - b);
         }
 
-        // Для double – оставляем double (для совместимости с тестами и Eigen)
+        // Для double – оставляем double (для полноты)
         double operator()(double a, double b) const {
             return std::abs(a - b);
         }

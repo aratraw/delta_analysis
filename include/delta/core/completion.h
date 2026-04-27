@@ -74,14 +74,17 @@ namespace delta {
             }
         }
 
-        //SHOULD MAYBE REWRITE IT TO ACTUALLY USE RATIONAL INSTEAD OF DOUBLE AFTER TESTS SETTLE?
+        /**
+         * @brief Evaluate the modulus at level n.
+         * @param n Level index (must be ≥ 1 for meaningful results).
+         * @return C * n^{-alpha} as Rational.
+         */
         Rational operator()(std::size_t n) const {
             if (n == 0) return C_; // fallback, but n should be >= start_level > 0
-            // Compute n^{-alpha} approximately via double (acceptable for tests)
-            double dn = static_cast<double>(n);
-            double da = alpha_.to_double();
-            double factor = std::pow(dn, -da);
-            return C_ * Rational(std::to_string(factor));
+            // Compute n^{-alpha} = 1 / n^{alpha} exactly using rational arithmetic
+            Rational n_rational(static_cast<long long>(n));
+            Rational n_pow_alpha = delta::pow(n_rational, alpha_);
+            return C_ / n_pow_alpha;
         }
 
         const Rational& C() const { return C_; }
