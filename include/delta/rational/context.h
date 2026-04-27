@@ -1,33 +1,27 @@
-// context.h
 #pragma once
 
 #include "rational_fwd.h"
 #include "storage.h"
-#include "utils.h"   // для dumb_int
 
 namespace delta::internal {
+    // Эпсилон по умолчанию = 1e-30 = 1/10^30
+    inline Value default_eps_value = Value("1/1000000000000000000000000000000");
 
-    // Эпсилон по умолчанию = 1 / 10^30
-    inline thread_local Value default_eps_value = []() -> Value {
-        // 10^30 = 1 000 000 000 000 000 000 000 000 000 000
-        dumb_int denom("1000000000000000000000000000000");
-        return Value(1) / Value(denom);
-        }();
     inline void reset_default_eps() {
-        dumb_int denom("1000000000000000000000000000000");
-        default_eps_value = Value(1) / Value(denom);
+        default_eps_value = Value("1/1000000000000000000000000000000");
     }
 } // namespace delta::internal
 
 namespace delta {
-
     inline Rational default_eps() {
+        assert(internal::default_eps_value > 0);
         return Rational(internal::default_eps_value);
     }
 
     inline void set_default_eps(const Rational& eps) {
         internal::default_eps_value = eps.value();
     }
+
     inline void reset_default_eps() {
         internal::reset_default_eps();
     }

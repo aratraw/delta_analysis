@@ -129,6 +129,8 @@ namespace delta::testing {
      * @test Square root function f(x)=√x (Hölder with α=0.5).
      */
     TEST_F(ContinuityModulusTest, SqrtWithHolderModulus) {
+
+        internal::reset_default_eps();
         auto func = [](const Addr& x) -> Rational {
             return delta::sqrt(x);
             };
@@ -148,7 +150,8 @@ namespace delta::testing {
      * @test Square root with a linear modulus should fail.
      */
     TEST_F(ContinuityModulusTest, SqrtFailsWithLinearModulus) {
-        
+
+        internal::reset_default_eps();
         auto func = [](const Addr& x) -> Rational {
             return delta::sqrt(x);
             };
@@ -177,6 +180,8 @@ namespace delta::testing {
     class DifferentiabilityModulusTest : public DeltaTest {
     protected:
         void SetUp() override {
+
+            internal::reset_default_eps();
             ListGrid<Addr, Compare> grid0({ 0_r, 1_r });
             auto path = make_midpoint_path(grid0);
             auto func = [](const Addr& x) { return x; };

@@ -145,7 +145,7 @@ namespace delta::testing {
         }
 
     private:
-        Rational old_precision_;
+        Rational old_precision_= default_eps();;
     };
 
     // -------------------------------------------------------------------------
