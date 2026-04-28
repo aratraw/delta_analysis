@@ -71,10 +71,10 @@ namespace delta::geometry {
         // Helper functions
         // -------------------------------------------------------------------------
         static Scalar matrix_norm(const value_type& M);
-        static value_type matrix_exp(const value_type& M, const Scalar& eps);
-        static value_type matrix_log(const value_type& M, const Scalar& eps, const Scalar& log2);
-        static value_type matrix_exp_diag(const value_type& M, const Scalar& eps);
-        static value_type matrix_log_diag(const value_type& M, const Scalar& eps);
+        static value_type matrix_exp(const value_type& M, const Scalar& eps = delta::default_eps());
+        static value_type matrix_log(const value_type& M, const Scalar& eps = delta::default_eps(), const Scalar& log2 = delta::log(2_r, delta::default_eps()));
+        static value_type matrix_exp_diag(const value_type& M, const Scalar& eps = delta::default_eps());
+        static value_type matrix_log_diag(const value_type& M, const Scalar& eps = delta::default_eps());
     };
 
     namespace detail {
@@ -202,56 +202,74 @@ namespace delta::geometry {
     }
 
     // -------------------------------------------------------------------------
-    // Matrix exponential (scaling‑and‑squaring + Padé(6,6))
+    // Matrix exponential (scaling‑and‑squaring + adaptive Padé)
     // -------------------------------------------------------------------------
+    // Helper to determine Padé order based on eps
+    template<typename Scalar>
+    static int pade_order(const Scalar& eps) {
+        double eps_d = eps.to_double();
+        if (eps_d <= 0) return 16;  // maximum reasonable order
+
+        // Estimate: Padé (m,m) gives error ~ (m!)^2 / (2m)! / (2m+1)! * (||A||)^{2m+1}
+        // With ||A|| <= 0.5, for eps = 1e-6 need m = 6
+        // For eps = 1e-30 need m = 16
+
+        if (eps_d >= 1e-3) return 4;
+        if (eps_d >= 1e-7) return 6;
+        if (eps_d >= 1e-12) return 8;
+        if (eps_d >= 1e-17) return 10;
+        if (eps_d >= 1e-22) return 12;
+        if (eps_d >= 1e-27) return 14;
+        return 16;
+    }
+
     template<typename Addr, int Dim, typename Compare>
     auto MatrixField<Addr, Dim, Compare>::matrix_exp(const value_type& M, const Scalar& eps) -> value_type {
         if (detail::is_diagonal(M)) {
             return matrix_exp_diag(M, eps);
         }
-        // 1. Scaling to reduce norm
+
+        // 1. Scaling
         Scalar normM = matrix_norm(M);
         int k = 0;
         Scalar two_pow_k = 1;
-        while (normM / two_pow_k > Rational(1, 2)) {
+        while (normM / two_pow_k > Scalar(1) / Scalar(2)) {
             two_pow_k *= 2;
             ++k;
         }
         value_type A = M / two_pow_k;   // A = M / 2^k
 
-        // 2. Padé(6,6) approximation of exp(A)
-        const Scalar b[] = {
-            Scalar(1) / Scalar(2),      // b1 = 1/2
-            Scalar(1) / Scalar(12),     // b2 = 1/12
-            Scalar(1) / Scalar(120),    // b3 = 1/120
-            Scalar(1) / Scalar(1680),   // b4 = 1/1680
-            Scalar(1) / Scalar(30240),  // b5 = 1/30240
-            Scalar(1) / Scalar(665280)  // b6 = 1/665280
-        };
-        // Precompute powers
-        value_type A2 = A * A;
-        value_type A3 = A2 * A;
-        value_type A4 = A3 * A;
-        value_type A5 = A4 * A;
-        value_type A6 = A5 * A;
+        // 2. Determine Padé order from eps
+        int m = pade_order(eps);
 
-        // Numerator P = I + b1*A + b2*A^2 + ... + b6*A^6
-        value_type P = value_type::Identity();
-        P += b[0] * A + b[1] * A2 + b[2] * A3 + b[3] * A4 + b[4] * A5 + b[5] * A6;
+        // 3. Compute Padé (m,m) coefficients
+        // Recurrence: c_j = c_{j-1} * (m - j + 1) / ((2m - j + 1) * j)
+        std::vector<Scalar> c(m + 1);
+        c[0] = Scalar(1);
+        for (int j = 1; j <= m; ++j) {
+            c[j] = c[j - 1] * Scalar(m - j + 1) / Scalar((2 * m - j + 1) * j);
+        }
 
-        // Denominator Q = I - b1*A + b2*A^2 - b3*A^3 + ... + b6*A^6
-        value_type Q = value_type::Identity();
-        Q -= b[0] * A;
-        Q += b[1] * A2;
-        Q -= b[2] * A3;
-        Q += b[3] * A4;
-        Q -= b[4] * A5;
-        Q += b[5] * A6;
+        // 4. Compute P_m(A) and Q_m(A)
+        // P_m(A) = Σ_{j=0}^{m} c_j * A^j
+        // Q_m(A) = Σ_{j=0}^{m} (-1)^j * c_j * A^j
 
-        // Solve Q * exp(A) = P  => exp(A) = Q^{-1} * P
+        value_type A_pow = value_type::Identity();  // A^0
+        value_type P = value_type::Zero();
+        value_type Q = value_type::Zero();
+
+        for (int j = 0; j <= m; ++j) {
+            if (c[j] != 0) {
+                P += c[j] * A_pow;
+                Q += (j % 2 == 0 ? c[j] : -c[j]) * A_pow;
+            }
+            A_pow = A_pow * A;  // A^{j+1} for next iteration
+        }
+
+        // 5. Solve Q * exp(A) = P → exp(A) = Q^{-1} * P
         value_type E = Q.lu().solve(P);
 
-        // 3. Squaring k times
+        // 6. Squaring k times
         for (int i = 0; i < k; ++i) {
             E = E * E;
         }
@@ -302,9 +320,12 @@ namespace delta::geometry {
             value_type term = Z_pow / Scalar(2 * n + 1);
             sum += term;
 
-            // Check convergence using exact rational comparison.
+            // Use both absolute and relative convergence criteria
             Scalar norm_term = matrix_norm(term);
-            if (norm_term <= eps) break;
+            Scalar norm_sum = matrix_norm(sum);
+            // Relative tolerance with safeguard against zero sum
+            Scalar rel_tol = eps * (norm_sum + 1);
+            if (norm_term <= eps && norm_term <= rel_tol) break;
             if (n > max_series) throw std::runtime_error("matrix_log: series did not converge");
         }
         sum = sum * Scalar(2);

@@ -342,7 +342,7 @@ namespace delta::testing {
         // Ожидаемое поведение: композиция exp(0.5 * log(M,eps=epsilon),eps=epsilon) даёт приближение
         // к квадратному корню, но с накопленной погрешностью РЕЗУЛЬТАТ НИКОГДА НЕ БУДЕТ РАВЕН M с точностью до epsilon.
         // Логарифм даёт погрешность отсечения ряда, а экспонента её раздувает (экспоненциально, да).
-        Rational tolerance = Rational(1, 10000);  // 1e-5
+        Rational tolerance = Rational("1/10000000000000000000000000");  // 1e-25
         EXPECT_TRUE(matrix_near(sqrtM_sq.at(grid[0]), M, tolerance));
     }
 } // namespace delta::testing
