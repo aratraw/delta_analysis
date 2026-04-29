@@ -3,6 +3,8 @@
 
 #include <concepts>
 #include <functional>
+#include <array>
+#include <cmath>
 #include <Eigen/Dense>
 #include "rational.h"
 
@@ -151,9 +153,9 @@ namespace delta {
     static_assert(Betweenness<LessBetweenness, int>);
 
     /**
-         * @struct EuclideanMetric
-         * @brief Euclidean (absolute) distance: |a - b| for scalars, norm for vectors/matrices.
-         */
+     * @struct EuclideanMetric
+     * @brief Euclidean (absolute) distance: |a - b| for scalars, norm for vectors/matrices.
+     */
     struct EuclideanMetric {
         // Для арифметических типов (int, size_t, double и т.д.)
         template<typename T>
@@ -163,9 +165,9 @@ namespace delta {
             return abs(a - b);
         }
 
-        // Для Rational (boost number)
+        // Для Rational
         Rational operator()(const Rational& a, const Rational& b) const {
-            using boost::multiprecision::abs;
+            using delta::abs;
             return abs(a - b);
         }
 
@@ -174,6 +176,31 @@ namespace delta {
         typename Derived::Scalar operator()(const Eigen::MatrixBase<Derived>& a,
             const Eigen::MatrixBase<Derived>& b) const {
             return (a - b).norm();
+        }
+
+        // Для std::array<T, N>, где T — арифметический тип
+        template<typename T, std::size_t N>
+        std::enable_if_t<std::is_arithmetic_v<T>, T>
+            operator()(const std::array<T, N>& a, const std::array<T, N>& b) const {
+            T sum_sq{ 0 };
+            for (std::size_t i = 0; i < N; ++i) {
+                T diff = a[i] - b[i];
+                sum_sq = sum_sq + diff * diff;
+            }
+            using std::sqrt;
+            return sqrt(sum_sq);
+        }
+
+        // Для std::array<Rational, N> (специализация для Rational)
+        template<std::size_t N>
+        Rational operator()(const std::array<Rational, N>& a, const std::array<Rational, N>& b) const {
+            Rational sum_sq{ 0 };
+            for (std::size_t i = 0; i < N; ++i) {
+                Rational diff = a[i] - b[i];
+                sum_sq = sum_sq + diff * diff;
+            }
+            using delta::sqrt;
+            return sqrt(sum_sq);
         }
     };
     static_assert(Metric<EuclideanMetric, int>);
@@ -221,7 +248,7 @@ namespace delta {
     };
 
     // -----------------------------------------------------------------------------
-    // Metrics
+    // Additional metrics
     // -----------------------------------------------------------------------------
 
     /**
@@ -248,7 +275,6 @@ namespace delta {
             if (a == b) return Rational(0);
             size_t common = 0;
             while (common < a.size() && common < b.size() && a[common] == b[common]) ++common;
-            // 2^{-common} = 1 / 2^{common}
             return Rational(1) / delta::pow(Rational(2), static_cast<int>(common));
         }
     };
@@ -292,6 +318,10 @@ namespace delta {
         }
     };
 
+    // -----------------------------------------------------------------------------
+    // Convenience functions
+    // -----------------------------------------------------------------------------
+
     template<typename RI, typename Addr>
     auto distance(const RI& idea, const Addr& a, const Addr& b) {
         return idea.metric(a, b);
@@ -301,7 +331,10 @@ namespace delta {
     bool between(const RI& idea, const Addr& x, const Addr& y, const Addr& z) {
         return idea.betweenness(x, y, z);
     }
-    // Compile‑time checks that the provided types satisfy the required concepts.
+
+    // -----------------------------------------------------------------------------
+    // Compile-time checks
+    // -----------------------------------------------------------------------------
     static_assert(Betweenness<TreeBetweenness, std::string>);
     static_assert(Metric<FrobeniusMetric, Eigen::MatrixXd>);
     static_assert(Metric<StringUltrametric, std::string>);

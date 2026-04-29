@@ -14,6 +14,7 @@
 #include "delta/geometry/matrix_field.h"
 #include "delta/geometry/tensor_field.h"
 #include "delta/numerical/discrete_operators.h"
+#include "delta/numerical/integrals.h"
 
 namespace delta::testing {
     using namespace delta;
@@ -32,6 +33,22 @@ namespace delta::testing {
      */
     class GeometryNumericalTest : public DeltaTest {
     protected:
+
+        // -------------------------------------------------------------------------
+        // Precision management (inherit from DeltaTest, but we add convenience)
+        // -------------------------------------------------------------------------
+        void SetUp() override {
+            old_precision_ = delta::default_eps();
+        }
+
+        void TearDown() override {
+            delta::set_default_eps(old_precision_);
+        }
+
+        static void set_precision(const Rational& eps) {
+            delta::set_default_eps(eps);
+        }
+
         using Scalar = Rational;
 
         // Dimension constants (matching SimplicialComplex)
@@ -404,22 +421,60 @@ namespace delta::testing {
                 return false; // равны
             }
         };
-
         // -------------------------------------------------------------------------
-        // Precision management (inherit from DeltaTest, but we add convenience)
+        // Integrals API proxies (Stage 1) – исправлено: tol имеет тип Rational
         // -------------------------------------------------------------------------
-        void SetUp() override {
-            old_precision_ = delta::default_eps();
+        template<typename Grid, typename Metric>
+        static auto grid_cell_volume(const Grid& grid, std::size_t idx, const Metric& metric) {
+            return delta::numerical::cell_volume(grid, idx, metric);
         }
 
-        void TearDown() override {
-            delta::set_default_eps(old_precision_);
+        template<typename Grid, typename Func, typename Metric>
+        static auto grid_integral(const Grid& grid, Func&& f, const Metric& metric) {
+            return delta::numerical::integral(grid, std::forward<Func>(f), metric);
         }
 
-        static void set_precision(const Rational& eps) {
-            delta::set_default_eps(eps);
+        template<typename Grid, typename Field, typename Metric>
+        static bool check_summation_by_parts_1d(
+            const Grid& grid,
+            const Field& f,
+            const Field& g,
+            const Metric& metric,
+            const typename Field::value_type& g_boundary_right,
+            const typename Field::value_type& tolerance = delta::default_eps()) {
+            return delta::numerical::check_summation_by_parts_1d(
+                grid, f, g, metric, g_boundary_right, tolerance);
         }
 
+        template<typename Grid, typename Field, typename Metric>
+        static bool check_green_first_1d(
+            const Grid& grid,
+            const Field& f,
+            const Field& g,
+            const Metric& metric,
+            const typename Field::value_type& tolerance = delta::default_eps()) {
+            return delta::numerical::check_green_first_1d(grid, f, g, metric, tolerance);
+        }
+
+        template<typename Grid, typename Field, typename Metric>
+        static bool check_green_first_2d(
+            const Grid& grid,
+            const Field& f,
+            const Field& g,
+            const Metric& metric,
+            const typename Field::value_type& tolerance = delta::default_eps()) {
+            return delta::numerical::check_green_first_2d(grid, f, g, metric, tolerance);
+        }
+
+        template<typename Grid, typename Field, typename Metric>
+        static bool check_green_second_2d(
+            const Grid& grid,
+            const Field& f,
+            const Field& g,
+            const Metric& metric,
+            const typename Field::value_type& tolerance = delta::default_eps()) {
+            return delta::numerical::check_green_second_2d(grid, f, g, metric, tolerance);
+        }
     private:
         Rational old_precision_;
     };
