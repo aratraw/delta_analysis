@@ -1,6 +1,27 @@
 // (c) 2026 Timofey Ishimtsev.
 // Licensed under PolyForm Small Business License 1.0.0
 
+// interval.h
+// -----------------------------------------------------------------------------
+// INTERVAL ARITHMETIC FOR FAST APPROXIMATE COMPARISONS
+// -----------------------------------------------------------------------------
+// This lightweight interval arithmetic is used on demand – only when logical
+// comparisons (==, <, >, etc.) involve lazy expressions that cannot be resolved
+// by hash equality alone.
+//
+// No overhead is incurred unless a comparison actually evaluates intervals.
+// The intervals are based on double precision, which is sufficient for
+// reliably separating non‑overlapping values. When intervals overlap, we fall
+// back to exact rational evaluation.
+//
+// Room for Improvement: can be made more accurate by implementing:
+//   - Better rounding control (currently uses std::nextafter for outward rounding)
+//   - Affine arithmetic for tighter bounds
+//   - Higher‑precision interval endpoints (e.g., using cpp_dec_float_100)
+// However, the current implementation is deliberately simple and fast,
+// and has proven sufficient for all practical use cases.
+// -----------------------------------------------------------------------------
+
 #pragma once
 
 #include <algorithm>
@@ -24,7 +45,11 @@ namespace delta::internal {
         constexpr double upper() const noexcept { return hi; }
         constexpr double width() const noexcept { return hi - lo; }
 
-        // Arithmetic operations with outward rounding using nextafter
+        // Arithmetic operations with outward rounding using nextafter.
+        // This guarantees that the true result is contained within the interval.
+        // However, due to double precision limits, the bounds may be slightly
+        // wider than mathematically necessary.
+
         Interval operator+(const Interval& other) const noexcept
         {
             double raw_lo = lo + other.lo;
@@ -91,7 +116,8 @@ namespace delta::internal {
             );
         }
 
-        // Comparisons (without rounding)
+        // Comparisons (without rounding) – these are exact for the interval bounds.
+        // If intervals do not overlap, the comparison is definitive.
         constexpr bool operator<(const Interval& other) const noexcept
         {
             return hi < other.lo;
@@ -113,6 +139,8 @@ namespace delta::internal {
             return lo == other.lo && hi == other.hi;
         }
 
+        // Returns true if the two intervals have any common point.
+        // If false is returned, the values are guaranteed to be separate.
         constexpr bool overlaps(const Interval& other) const noexcept
         {
             return !(hi < other.lo || other.hi < lo);

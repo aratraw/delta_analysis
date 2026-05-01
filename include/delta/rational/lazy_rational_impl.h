@@ -2,35 +2,161 @@
 // Licensed under PolyForm Small Business License 1.0.0
 
 // lazy_rational_impl.h
-// Версия 3.2 – удалены approx и depth из Node/TempNode, интервалы вычисляются лениво.
-// ----------------------------------------------------------------------------
-// Модификации для реестра чистых объектов (global_state.h)
+// -----------------------------------------------------------------------------
+// IMPLEMENTATION OF LAZYRATIONAL – MUTABLE LAZY EXPRESSION TREES
+// -----------------------------------------------------------------------------
+//
+// This file contains the implementation of the LazyRational class declared in
+// lazy_rational.h. It defines all constructors, destructor, move operations,
+// mutating arithmetic operators, comparison operators, lazy transcendental
+// helpers (via friends), canonicalization, evaluation, interval approximation,
+// and interactions with the global node pool and clean object registry.
+//
+// -----------------------------------------------------------------------------
+// OVERALL ARCHITECTURE
+// -----------------------------------------------------------------------------
+//
+// LazyRational has two possible states:
+//
+//   - Dirty (mutable): the expression is stored in a local, un‑canonicalised
+//     tree of DirtyNode objects (inside nodes_ and constants_). In this state
+//     the object can be mutated efficiently – e.g., adding a term to a sum
+//     just pushes a Value onto a vector. The tree is not shared and reference
+//     counting is not used.
+//
+//   - Clean (immutable, hash‑consed): the expression is represented by a single
+//     integer clean_index_ that refers to a node in the global NodePool
+//     (internal::pool). The same physical node can be shared among many
+//     LazyRational objects. Reference counting tracks the number of users.
+//
+// The transition from Dirty to Clean is called canonicalization
+// (canonicalize() method). It:
+//   1. Converts the DirtyNode tree into a temporary TempNode tree.
+//   2. Simplifies that tree algebraically (simplify_tree from simplify_impl.h).
+//   3. Allocates nodes in the global pool (hash‑consing eliminates duplicates).
+//   4. Switches the object to Clean state and registers it in the global
+//      clean object registry (g_clean_rationals) for garbage collection.
+//
+// -----------------------------------------------------------------------------
+// KEY COMPONENTS
+// -----------------------------------------------------------------------------
+//
+// 1. Constructors & Destructor
+//    - Default: constructs a dirty CONST(0) node.
+//    - From Rational: dirty CONST(r).
+//    - Move: transfers ownership, updates registry.
+//    - Destructor: if Clean, unregisters and decrements reference count.
+//
+// 2. Mutating Arithmetic Operators (binary +, -, *, /)
+//    - Always mutate the left operand (ensured by ensure_dirty()).
+//    - They either absorb the right operand into an existing SUM/PRODUCT node
+//      (heterogeneous addition) or create a new SUM/PRODUCT node if needed.
+//    - Return a reference to the left operand, allowing chaining:
+//        acc + 1_r + 2_r + 3_r;
+//    - This design avoids O(N²) copying and keeps allocation minimal.
+//
+// 3. Lazy Transcendentals (friends)
+//    - Functions like lazy_sin, lazy_exp, lazy_pow etc. are declared as friends
+//      and defined in transcendentals.h. They clone the argument, mutate the
+//      clone into a SIN/EXP/POW node, and return it.
+//
+// 4. Comparison Operators (==, <, etc.)
+//    - Use interval arithmetic (approx_interval()) for fast rejection.
+//    - If intervals overlap, canonicalize both sides and compare either by
+//      clean_index_ equality or by evaluating to Rational.
+//    - This is lazy – evaluation only happens when necessary.
+//
+// 5. Canonicalization (canonicalize)
+//    - Convert Dirty → Clean. The most complex function.
+//    - Uses simplify_tree to perform algebraic rewrites (e.g., a+a → 2*a,
+//      x + NEG(x) → 0, flattening nested sums, distributing constants).
+//    - Ensures the resulting tree fits into the pool; may temporarily disable
+//      GC or expand the pool via CanonicalizeGuard.
+//    - Registers the resulting clean object in the registry.
+//
+// 6. Evaluation (eval, eval_inplace)
+//    - eval(): if Clean and node is CONST, returns immediately; otherwise
+//      canonicalizes (unless skip_simplify) and then evaluates via
+//      internal::evaluate().
+//    - eval_inplace(): replaces the object with a single CONST node containing
+//      the evaluated rational.
+//
+// 7. Interval Approximation (approx_interval)
+//    - Computes a double‑based interval for the whole expression without
+//      canonicalising (works on Dirty directly). Cached in cached_interval_.
+//    - Used by comparison operators to avoid unnecessary exact evaluation.
+//
+// 8. Global Pool Interaction
+//    - add_const, make_sum_node, make_product_node, get_unary_node from node_pool.h.
+//    - Reference counting: increment_ref/decrement_ref.
+//    - Garbage collection: collect_garbage() (called automatically when the pool
+//      reaches a threshold) replaces live roots with constant nodes and compacts
+//      the pool.
+//
+// 9. Clean Object Registry (global_state.h)
+//    - All clean LazyRational objects register themselves in
+//      internal::g_clean_rationals (thread‑local set).
+//    - The registry allows the GC to find all live roots.
+//    - When an object becomes dirty or is destroyed, it unregisters.
+//
+// -----------------------------------------------------------------------------
+// THREAD SAFETY NOTE
+// -----------------------------------------------------------------------------
+// All global state (pool, π cache, clean registry, gc_disabled flag) is
+// thread‑local. Different threads do not interfere. Each thread has its own
+// pool, its own π cache, and its own set of clean objects.
+// This design sacrifices memory sharing for simplicity and lock‑free operation.
+//
+// -----------------------------------------------------------------------------
+// PERFORMANCE CONSIDERATIONS
+// -----------------------------------------------------------------------------
+// - Mutating operations are O(1) amortised.
+// - Canonicalization is O(N) in the size of the dirty tree, but is performed
+//   only once (lazily) – when the expression is evaluated or compared.
+// - Algebraic simplification runs in one pass over the tree and can
+//   dramatically reduce the number of nodes (e.g., folding constants).
+// - Interval arithmetic is cheap (double operations) and is used to avoid
+//   expensive exact evaluation in comparisons.
+//
+// -----------------------------------------------------------------------------
+// DESIGN RATIONALE (why mutable + clone instead of immutable)
+// -----------------------------------------------------------------------------
+// Immutable expression trees would require copying the whole tree on every
+// operation, leading to O(N²) time and memory for typical accumulation loops.
+// The mutable design with explicit .clone() gives the user full control:
+//   - Most expressions are built in linear time.
+//   - Copies are only made where actually needed (using clone).
+//   - The API surface is minimal and predictable.
+//
+// The code and comments in this file follow this philosophy consistently.
+// -----------------------------------------------------------------------------
 
-    // -------------------------------------------------------------------------
-    // TODO: Перспектива компактификации пула с использованием реестра.
-    // -------------------------------------------------------------------------
-    // Теперь, когда у нас есть реестр чистых объектов (g_clean_rationals),
-    // появляется возможность не просто заменять живые поддеревья на константы,
-    // но и перестраивать новый пул так, чтобы все корневые узлы (CONST) шли
-    // подряд с индекса 0. Это позволит:
-    //   - Уменьшить фрагментацию и повысить локальность данных.
-    //   - Сократить размер пула до реально необходимого (после GC).
-    //   - Гарантировать, что clean_index_ каждого чистого LazyRational
-    //     можно обновить, пройдя по реестру и переписав индексы.
-    // 
-    // Алгоритм (потенциальный):
-    //   1. В collect_garbage() после определения живых корней строим
-    //      отображение old_index -> new_compact_index (только для живых узлов).
-    //   2. Создаём новый пул, куда последовательно помещаем узлы-константы
-    //      для каждого живого корня, начиная с индекса 0.
-    //   3. Проходим по реестру g_clean_rationals, для каждого объекта
-    //      обновляем clean_index_ = new_compact_index[старый индекс].
-    //   4. Увеличиваем счётчики ссылок новых узлов соответственно.
-    //   5. Заменяем старый пул новым.
-    //
-    // Это не является критичным для текущей версии, но при необходимости
-    // может быть реализовано без изменения интерфейсов благодаря реестру.
-    // -------------------------------------------------------------------------
+// -------------------------------------------------------------------------
+// TODO: Pool compaction perspective using the registry.
+// -------------------------------------------------------------------------
+// Now that we have a registry of clean objects (g_clean_rationals), it becomes
+// possible not only to replace live subtrees with constants, but also to rebuild
+// the pool so that all root nodes (CONST) are contiguous starting from index 0.
+// This would allow:
+//   - Reducing fragmentation and improving data locality.
+//   - Shrinking the pool to the actually needed size (after GC).
+//   - Guaranteeing that the clean_index_ of every clean LazyRational can be
+//     updated by traversing the registry and rewriting indices.
+//
+// Potential algorithm:
+//   1. In collect_garbage(), after determining live roots, build a mapping
+//      old_index -> new_compact_index (only for live nodes).
+//   2. Create a new pool, sequentially placing constant nodes for each live
+//      root, starting from index 0.
+//   3. Traverse the g_clean_rationals registry; for each object update its
+//      clean_index_ = new_compact_index[old_index].
+//   4. Increment reference counts for the new nodes accordingly.
+//   5. Replace the old pool with the new one.
+//
+// This is not critical for the current version, but if needed it can be
+// implemented without changing the interfaces thanks to the registry.
+// -------------------------------------------------------------------------
+
 #pragma once
 
 #include "node_pool.h"
@@ -45,12 +171,12 @@
 #include <optional>
 #include <vector>
 #include <string>
-#include <cstdint> 
+#include <cstdint>
 
-    namespace delta {
+namespace delta {
 
     // ------------------------------------------------------------------------
-    // Вспомогательные функции для грязного дерева (интервал)
+    // Helper functions for dirty tree interval evaluation
     // ------------------------------------------------------------------------
     inline internal::Interval compute_interval_dirty(const LazyRational& lr) {
         assert(lr.is_dirty());
@@ -58,6 +184,7 @@
         const auto& constants = lr.constants_;
         std::vector<internal::Interval> intervals(nodes.size());
 
+        // Post‑order traversal
         std::stack<int> st;
         st.push(lr.root_);
         std::vector<int> postorder;
@@ -68,6 +195,7 @@
             for (int child : dn.children) st.push(child);
         }
 
+        // Evaluate from leaves upward
         for (auto it = postorder.rbegin(); it != postorder.rend(); ++it) {
             int idx = *it;
             const auto& dn = nodes[idx];
@@ -180,7 +308,7 @@
     }
 
     // ------------------------------------------------------------------------
-    // Вычисление интервала для чистого дерева (по требованию)
+    // Interval evaluation for clean tree (on demand)
     // ------------------------------------------------------------------------
     inline internal::Interval compute_interval_clean(int root) {
         const auto& nodes = internal::pool.nodes;
@@ -297,8 +425,10 @@
         }
         return intervals[root];
     }
-    // RAII-структура для отключения GC и временного снятия лимита размера пула
-    // RAII-структура для отключения GC и временного снятия лимита размера пула
+
+    // RAII structure to temporarily disable GC and lift the pool size limit.
+    // This is used during canonicalization when we know we will need a certain
+    // number of nodes and cannot risk GC interfering.
     struct CanonicalizeGuard {
         bool old_gc_disabled;
         size_t old_max_size;
@@ -321,12 +451,13 @@
         }
 
         ~CanonicalizeGuard() noexcept(false) {
-            // Восстанавливаем состояние пула и флагов СРАЗУ
+            // Restore pool state and flags immediately
             internal::gc_disabled = old_gc_disabled;
             internal::pool.max_size = old_max_size;
             internal::pool.gc_threshold = old_gc_threshold;
 
-            // Если расширяли, но после канонизации не влезли в исходный лимит — бросаем исключение
+            // If we expanded the pool but after canonicalization we still don't fit into
+            // the original limit, throw an exception. This prevents silent overflow.
             if (expanded && internal::pool.next_free_index > old_max_size) {
                 throw std::runtime_error(
                     "Canonicalization requires more nodes than max_size allows. "
@@ -336,8 +467,9 @@
             }
         }
     };
+
     // ------------------------------------------------------------------------
-    // Конструкторы
+    // Constructors
     // ------------------------------------------------------------------------
     inline LazyRational::LazyRational() : state_(State::Dirty) {
         int const_idx = add_constant(internal::Value(0));
@@ -357,7 +489,7 @@
         root_ = 0;
     }
 
-    // Move-конструктор с поддержкой реестра чистых объектов
+    // Move constructor with clean object registry support
     inline LazyRational::LazyRational(LazyRational&& other) noexcept
         : state_(other.state_),
         nodes_(std::move(other.nodes_)),
@@ -367,7 +499,7 @@
         cached_interval_(std::move(other.cached_interval_))
     {
         if (other.state_ == State::Clean) {
-            other.unregister_clean();   // other теряет чистоту
+            other.unregister_clean();   // other loses its clean status
         }
         other.state_ = State::Dirty;
         other.root_ = -1;
@@ -375,7 +507,7 @@
         other.cached_interval_.reset();
 
         if (state_ == State::Clean) {
-            register_clean();           // новый объект чистый
+            register_clean();           // the new object is clean
         }
     }
 
@@ -387,7 +519,7 @@
         return *this;
     }
 
-    // Деструктор с дерегистрацией, если объект был чистым
+    // Destructor – unregisters if the object was clean
     inline LazyRational::~LazyRational() {
         if (state_ == State::Clean) {
             unregister_clean();
@@ -396,7 +528,7 @@
     }
 
     // ------------------------------------------------------------------------
-    // Приватные методы: add_constant, new_dirty_node
+    // Private methods: add_constant, new_dirty_node
     // ------------------------------------------------------------------------
     inline int LazyRational::add_constant(const internal::Value& v) {
         assert(state_ == State::Dirty);
@@ -422,20 +554,27 @@
     }
 
     // ------------------------------------------------------------------------
-    // import_tree – копирование поддерева в грязное состояние
+    // import_tree – copy a subtree into the dirty state
+    // ------------------------------------------------------------------------
+    // This function converts either a dirty or a clean tree from another
+    // LazyRational into the current dirty representation. Returns the index
+    // of the imported root node in the current nodes_ vector.
     // ------------------------------------------------------------------------
     inline int LazyRational::import_tree(const LazyRational& other) {
         assert(state_ == State::Dirty);
 
+        // Self-import: create a temporary copy to avoid confusing the algorithm
         if (this == &other) {
             LazyRational temp = other.clone();
             return import_tree(temp);
         }
 
         if (other.state_ == State::Dirty) {
+            // Import from a dirty tree: recursively copy nodes
             std::vector<int> old_to_new(other.nodes_.size(), -1);
             std::vector<int> old_const_to_new(other.constants_.size(), -1);
 
+            // Post‑order traversal to ensure children are copied before parents
             std::stack<int> st;
             st.push(other.root_);
             std::vector<int> postorder;
@@ -452,6 +591,7 @@
                 int new_idx = -1;
 
                 if (old_node.op == internal::LazyOp::CONST) {
+                    // Copy constant value, deduplicate via old_const_to_new map
                     if (old_const_to_new[old_node.value_idx] == -1) {
                         old_const_to_new[old_node.value_idx] =
                             add_constant(other.constants_[old_node.value_idx]);
@@ -460,6 +600,7 @@
                     new_idx = new_dirty_node(old_node.op, {}, new_const, -1);
                 }
                 else if (old_node.op == internal::LazyOp::SUM || old_node.op == internal::LazyOp::PRODUCT) {
+                    // Translate child indices
                     absl::InlinedVector<int32_t, 2> new_complex;
                     for (int child : old_node.children) {
                         new_complex.push_back(old_to_new[child]);
@@ -470,6 +611,7 @@
                     new_idx = new_node_idx;
                 }
                 else {
+                    // Unary or binary operator (NEG, RECIP, SQRT, EXP, LOG, SIN, COS, ACOS, POW, etc.)
                     absl::InlinedVector<int32_t, 2> new_children;
                     for (int child : old_node.children) {
                         new_children.push_back(old_to_new[child]);
@@ -489,9 +631,12 @@
             return old_to_new[other.root_];
         }
         else {
+            // Import from a clean tree: first convert it to a temporary dirty tree,
+            // then import that.
             LazyRational temp;
             temp.state_ = State::Dirty;
 
+            // Post‑order traversal over the clean pool tree
             std::stack<int> st;
             st.push(other.clean_index_);
             std::vector<int> postorder;
@@ -564,21 +709,22 @@
             copy.state_ = State::Clean;
             copy.clean_index_ = clean_index_;
             internal::increment_ref(clean_index_);
-            copy.register_clean();   // <-- ДОБАВИТЬ
+            copy.register_clean();   // added for registry
             return copy;
         }
     }
 
     // ------------------------------------------------------------------------
-    // ensure_dirty – переход в грязное состояние с дерегистрацией
+    // ensure_dirty – transition to dirty state with deregistration
     // ------------------------------------------------------------------------
     inline void LazyRational::ensure_dirty() {
         if (state_ == State::Clean) {
-            unregister_clean();   // удаляем из реестра чистых объектов
+            unregister_clean();   // remove from clean object registry
 
             invalidate_interval();
             LazyRational temp;
             temp.state_ = State::Dirty;
+            // Traverse the clean pool tree and build a dirty representation
             std::stack<int> st;
             st.push(clean_index_);
             std::vector<int> postorder;
@@ -637,7 +783,10 @@
     }
 
     // ------------------------------------------------------------------------
-    // append_sum_children / append_product_children (гетерогенные)
+    // append_sum_children / append_product_children (heterogeneous)
+    // ------------------------------------------------------------------------
+    // These methods merge another LazyRational into an existing SUM or PRODUCT
+    // node, flattening nested operations when possible.
     // ------------------------------------------------------------------------
     inline void LazyRational::append_sum_children(int sum_node, const LazyRational& other) {
         assert(state_ == State::Dirty);
@@ -647,6 +796,7 @@
         const auto& other_node = nodes_[other_root];
 
         if (other_node.op == internal::LazyOp::SUM) {
+            // Flatten: absorb all leaf_values and children of the other SUM
             target.leaf_values.insert(target.leaf_values.end(),
                 std::make_move_iterator(other_node.leaf_values.begin()),
                 std::make_move_iterator(other_node.leaf_values.end()));
@@ -686,7 +836,14 @@
     }
 
     // ------------------------------------------------------------------------
-    // Мутирующие операторы (с гетерогенным добавлением)
+    // Mutating operators (with heterogeneous addition)
+    // ------------------------------------------------------------------------
+    // All these operators follow the same pattern:
+    // - Ensure the left operand is dirty.
+    // - If its root is already of the required type (SUM for addition, PRODUCT
+    //   for multiplication), absorb the right operand into it.
+    // - Otherwise, create a new SUM/PRODUCT node that combines the old root
+    //   and the (possibly imported) right operand.
     // ------------------------------------------------------------------------
     inline LazyRational& operator+(LazyRational& a, const LazyRational& b) {
         a.ensure_dirty();
@@ -755,7 +912,7 @@
         return std::move(operator+(a, b));
     }
 
-    // Унарный минус
+    // Unary minus
     inline LazyRational operator-(const LazyRational& a) {
         LazyRational result = a.clone();
         result.ensure_dirty();
@@ -766,7 +923,7 @@
         return result;
     }
 
-    // Бинарное вычитание через сложение с унарным минусом
+    // Binary subtraction: a - b = a + (-b)
     inline LazyRational& operator-(LazyRational& a, const LazyRational& b) {
         LazyRational neg_b = -b;
         return a + neg_b;
@@ -785,7 +942,7 @@
         return std::move(operator-(a, b));
     }
 
-    // Умножение
+    // Multiplication
     inline LazyRational& operator*(LazyRational& a, const LazyRational& b) {
         a.ensure_dirty();
         a.invalidate_interval();
@@ -853,7 +1010,7 @@
         return std::move(operator*(a, b));
     }
 
-    // Деление = * RECIP
+    // Division: a / b = a * RECIP(b)
     inline LazyRational& operator/(LazyRational& a, const LazyRational& b) {
         LazyRational recip_b = b.clone();
         recip_b.ensure_dirty();
@@ -877,7 +1034,8 @@
         return std::move(operator/(a, b));
     }
 
-    // Операторы для случая typeof(LValue)==Rational && typeof(Rvalue)==LazyRational.
+    // Operators for the case where the left operand is Rational and the right is LazyRational.
+    // These are defined as free functions.
     // ------------------------------------------------------------------------
     inline LazyRational mutating_unary_minus(LazyRational&& a) {
         a.ensure_dirty();
@@ -889,7 +1047,7 @@
     }
 
     // ------------------------------------------------------------------------
-    // Операторы с Rational слева (Rational +/*/-/ / LazyRational)
+    // Operators with Rational on the left (Rational +/*/-/ / LazyRational)
     // ------------------------------------------------------------------------
     inline LazyRational& operator+(const Rational& a, LazyRational& b) {
         return b += a;
@@ -940,7 +1098,7 @@
         return std::move(b);
     }
 
-    // Составные операторы
+    // Compound assignment operators (delegated to binary ones)
     inline LazyRational& operator+=(LazyRational& a, const LazyRational& b) { return a + b; }
     inline LazyRational& operator+=(LazyRational& a, const Rational& b) { return a + b; }
     inline LazyRational& operator-=(LazyRational& a, const LazyRational& b) { return a - b; }
@@ -951,7 +1109,7 @@
     inline LazyRational& operator/=(LazyRational& a, const Rational& b) { return a / b; }
 
     // ------------------------------------------------------------------------
-    // Методы массовой вставки (bulk append)
+    // Bulk insertion methods
     // ------------------------------------------------------------------------
     inline void LazyRational::append_values(std::vector<internal::Value>&& values) {
         ensure_dirty();
@@ -999,19 +1157,29 @@
     }
 
     // ------------------------------------------------------------------------
-    // Канонизация (Dirty -> Clean) с регистрацией в реестре
+    // canonicalize – Dirty -> Clean conversion with registry registration
+    // ------------------------------------------------------------------------
+    // This is the most complex function. It converts the dirty tree into a
+    // canonical (hash‑consed) representation in the global pool.
+    // Steps:
+    //   1. Build a temporary TempNode tree from the dirty nodes.
+    //   2. Simplify that tree using simplify_tree (algebraic rewrites).
+    //   3. Estimate how many nodes will be needed in the pool.
+    //   4. Try to fit within the pool limits; if not, temporarily raise limits.
+    //   5. Allocate global nodes from the simplified temporary tree.
+    //   6. Switch the LazyRational to clean state.
     // ------------------------------------------------------------------------
     inline void LazyRational::canonicalize() const {
         if (state_ != State::Dirty) return;
 
         // ------------------------------------------------------------
-        // 1. Построение временных узлов TempNode из грязного дерева
+        // 1. Build temporary TempNode nodes from the dirty tree
         // ------------------------------------------------------------
         std::vector<internal::TempNode> temp_nodes;
         std::vector<internal::Value> temp_values;
         std::vector<int> dirty_to_temp(nodes_.size(), -1);
 
-        // Обход в пост-порядке для грязных узлов
+        // Post‑order traversal to ensure children are processed first
         std::stack<int> st;
         st.push(root_);
         std::vector<int> postorder;
@@ -1026,7 +1194,7 @@
             int dirty_idx = *it;
             const auto& dn = nodes_[dirty_idx];
 
-            // Дети текущего узла (уже преобразованные в TempNode)
+            // Children already converted to TempNode indices
             std::vector<int> temp_complex;
             for (int child : dn.children) {
                 temp_complex.push_back(dirty_to_temp[child]);
@@ -1044,7 +1212,7 @@
 
             std::vector<internal::Value> leaf_vals = dn.leaf_values;
 
-            // Вычисление хеша (без approx/depth)
+            // Compute hash (without approx/depth)
             uint64_t hash = static_cast<uint64_t>(dn.op);
             if (dn.op == internal::LazyOp::CONST) {
                 hash = internal::compute_hash_const(temp_values[value_idx]);
@@ -1095,26 +1263,26 @@
         int simplified_root = internal::simplify_tree(temp_nodes, temp_values, temp_root);
 
         // ------------------------------------------------------------
-        // 2. Оценка количества узлов, которые будут созданы в пуле
+        // 2. Estimate how many nodes will be created in the pool
         // ------------------------------------------------------------
-        size_t needed_nodes = temp_nodes.size();   // каждый TempNode → один чистый узел
+        size_t needed_nodes = temp_nodes.size();   // each TempNode → one clean node
 
         // ------------------------------------------------------------
-        // 3. Попытка уложиться в лимит max_size с помощью GC
+        // 3. Try to fit within max_size using GC
         // ------------------------------------------------------------
         bool use_guard = false;
         if (internal::pool.next_free_index + needed_nodes > internal::pool.max_size) {
-            // Не хватает места → пробуем собрать мусор
+            // Not enough space – try garbage collection
             internal::collect_garbage();
-            // После GC проверяем снова
+            // Check again after GC
             if (internal::pool.next_free_index + needed_nodes > internal::pool.max_size) {
-                // Даже после GC не влезаем → придётся отключать GC и снимать лимит (старый путь)
+                // Still doesn't fit – we'll need to temporarily lift the limit
                 use_guard = true;
             }
         }
 
         // ------------------------------------------------------------
-        // 4. Лямбда, выполняющая реальное выделение узлов в пул
+        // 4. Lambda that performs actual allocation of global nodes
         // ------------------------------------------------------------
         auto allocate_global_nodes = [&]() -> int {
             std::vector<int> temp_to_global(temp_nodes.size(), -1);
@@ -1158,21 +1326,21 @@
             };
 
         // ------------------------------------------------------------
-        // 5. Выделение узлов (с guard или без)
+        // 5. Allocate nodes (with or without guard)
         // ------------------------------------------------------------
         int new_clean_root;
         if (use_guard) {
-            // Старый режим: отключаем GC и при необходимости временно расширяем пул
+            // Old mode: disable GC and temporarily expand the pool if necessary
             CanonicalizeGuard guard(needed_nodes);
             new_clean_root = allocate_global_nodes();
         }
         else {
-            // Новый режим: GC разрешён, лимит max_size соблюдается
+            // New mode: GC is allowed, max_size is respected
             new_clean_root = allocate_global_nodes();
         }
 
         // ------------------------------------------------------------
-        // 6. Переключение объекта в чистое состояние
+        // 6. Switch the object to clean state
         // ------------------------------------------------------------
         internal::increment_ref(new_clean_root);
 
@@ -1185,6 +1353,7 @@
 
         const_cast<LazyRational*>(this)->register_clean();
     }
+
     // ------------------------------------------------------------------------
     // eval, eval_inplace, simplify, approx_interval
     // ------------------------------------------------------------------------
@@ -1259,7 +1428,13 @@
     }
 
     // ------------------------------------------------------------------------
-    // Сравнения (многоуровневые)
+    // Comparisons (multi‑level)
+    // ------------------------------------------------------------------------
+    // Strategy:
+    //   1. If both objects are clean and have the same clean_index -> equal.
+    //   2. If intervals do not overlap -> can decide without evaluation.
+    //   3. Otherwise, canonicalize both and compare either by index or by
+    //      evaluating to Rational.
     // ------------------------------------------------------------------------
     inline bool operator==(const LazyRational& a, const LazyRational& b) {
         if (a.is_clean() && b.is_clean() && a.clean_index_ == b.clean_index_)
@@ -1298,7 +1473,7 @@
     inline bool operator>=(const LazyRational& a, const LazyRational& b) { return !(a < b); }
 
     // ------------------------------------------------------------------------
-    // Вывод в поток
+    // Output stream
     // ------------------------------------------------------------------------
     inline std::ostream& operator<<(std::ostream& os, const LazyRational& lr) {
         os << lr.eval();

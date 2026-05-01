@@ -2,8 +2,28 @@
 // Licensed under PolyForm Small Business License 1.0.0
 
 // lazy_nodes.h
-// Версия 3.2 – удалены поля approx и depth из TempNode; DirtyNode без изменений.
-// ----------------------------------------------------------------------------
+// -----------------------------------------------------------------------------
+// NODE STRUCTURES FOR LAZY EXPRESSION TREES
+// -----------------------------------------------------------------------------
+// This file defines two node types used for representing lazy rational
+// expressions:
+//
+//   - DirtyNode: used by LazyRational when it is in "dirty" (mutable) state.
+//                Nodes are stored in std::vector and can be mutated in place.
+//                No hashing or global uniquification.
+//
+//   - TempNode: used during canonicalization (simplify_impl.h) for building
+//               a temporary representation before converting to the global
+//               immutable pool. Contains hashes for equality detection.
+//
+// These structures are separate to avoid pulling in simplif_impl.h dependencies
+// into the core mutable representation.
+//
+// TODO: could/should merge with node_types.h for clarity but beware circular
+// dependencies. The general include-architecture of the whole folder is very
+// tight and interwoven. Keeping them separate is a deliberate choice to
+// minimise header dependencies.
+// -----------------------------------------------------------------------------
 
 #pragma once
 
@@ -17,14 +37,16 @@
 namespace delta::internal {
 
     // ------------------------------------------------------------------------
-    // DirtyNode – узел грязного дерева (без approx/depth изначально)
+    // DirtyNode – node of the dirty (mutable) expression tree
+    // Originally had approx and depth fields, but they were removed as they
+    // were unused and only added complexity.
     // ------------------------------------------------------------------------
     struct DirtyNode {
         LazyOp op;
-        int32_t value_idx = -1;
-        int32_t eps_idx = -1;
-        std::vector<Value> leaf_values;               // только для SUM/PRODUCT
-        absl::InlinedVector<int32_t, 2> children;     // все дочерние узлы
+        int32_t value_idx = -1;      // index into constants_ vector (for CONST nodes)
+        int32_t eps_idx = -1;        // index into constants_ vector (epsilon for transcendentals)
+        std::vector<Value> leaf_values;               // for SUM/PRODUCT only (constant literals)
+        absl::InlinedVector<int32_t, 2> children;     // child node indices
 
         DirtyNode() = default;
 
@@ -49,17 +71,20 @@ namespace delta::internal {
     };
 
     // ------------------------------------------------------------------------
-    // TempNode – временный узел для локального построения и упрощения
+    // TempNode – temporary node used during simplification/canonicalization
+    // Stores hash for equality detection. Children are indices into a temporary
+    // vector (not the global pool). This structure is used exclusively in
+    // simplify_impl.h and is destroyed after canonisation.
     // ------------------------------------------------------------------------
     struct TempNode {
         LazyOp op;
-        int value_idx = -1;
-        int eps_idx = -1;
-        std::vector<Value> leaf_values;      // только для SUM/PRODUCT
-        std::vector<int> children;           // все дочерние узлы
-        uint64_t hash;
+        int value_idx = -1;      // temporary value index (for CONST)
+        int eps_idx = -1;        // temporary epsilon index
+        std::vector<Value> leaf_values;      // for SUM/PRODUCT only
+        std::vector<int> children;           // child TempNode indices (not DirtyNode indices!)
+        uint64_t hash;                       // precomputed hash for fast equality
 
-        // Конструктор для всех операций, кроме SUM/PRODUCT
+        // Constructor for all operations except SUM/PRODUCT
         TempNode(LazyOp op_,
             std::vector<int> children_,
             int value_idx_,
@@ -72,7 +97,7 @@ namespace delta::internal {
             hash(hash_) {
         }
 
-        // Конструктор для SUM/PRODUCT с гетерогенным хранением
+        // Constructor for SUM/PRODUCT with heterogeneous storage
         TempNode(LazyOp op_,
             std::vector<Value> leaf_values_,
             std::vector<int> children_,

@@ -2,59 +2,74 @@
 // Licensed under PolyForm Small Business License 1.0.0
 
 // simplify_impl.h
-// Версия 5.5 – однопроходная группировка и оптимизированные эвристики
 // ----------------------------------------------------------------------------
-// Философия: все свёртки выполняются через построение новых узлов (PRODUCT, POW),
-// а не через вычисление значений. Это гарантирует сохранение символьного
-// представления и возможность дальнейших упрощений.
+// PHILOSOPHY: All simplifications are performed by constructing new nodes
+// (PRODUCT, POW) rather than by evaluating values. This preserves the symbolic
+// representation and enables further algebraic simplifications later.
 //
-// СТРАТЕГИЯ УПРОЩЕНИЯ ДЛЯ КАЖДОГО ТИПА УЗЛА:
+// SIMPLIFICATION STRATEGY FOR EACH NODE TYPE:
 //
-// 1. CONST – всегда остаётся без изменений (уже константа).
+// 1. CONST – always unchanged (already a constant).
 // 2. SUM:
-//    a) Flattening: разворачиваем вложенные SUM (SUM(a, SUM(b,c)) -> SUM(a,b,c)).
-//    b) Удаляем нули из leaf_values и константных детей.
-//    c) ЭВРИСТИКА ПРОПУСКА:
-//       - Если узел не имеет детей (all_children.empty()) и среди leaf_values
-//         нет повторяющихся значений (проверяется через однопроходную карту
-//         частот с ранним выходом), то группировка и дистрибутивность невозможны.
-//         В этом случае после сортировки leaf_values сразу создаётся SUM узел.
-//    d) Группировка скалярных констант, свёртка повторяющихся (a+a -> 2*a)
-//       выполняется ЕДИНЫМ ПРОХОДОМ с использованием flat_hash_map.
-//    e) Свёртка одинаковых дочерних узлов (A+A -> 2*A).
-//    f) Дистрибутивность (a*b + a*c -> a*(b+c)) – только если среди детей есть
-//       хотя бы один узел PRODUCT.
-//    g) Каноническая сортировка leaf_values и детей.
-//    h) Сокращение x + NEG(x) -> 0.
-//    i) Сборка итогового узла.
+//    a) Flatten nested SUMs (SUM(a, SUM(b,c)) → SUM(a,b,c)).
+//    b) Remove zeros from leaf_values and constant children.
+//    c) SKIP HEURISTIC:
+//       - If the node has no children (all_children.empty()) and there are no
+//         duplicate leaf_values (checked via a single‑pass frequency map with
+//         early exit), then grouping and distributivity are impossible.
+//         In this case, after sorting leaf_values, we directly create a SUM node.
+//    d) Group scalar constants, folding duplicates (a+a → 2*a) using a single
+//       pass with flat_hash_map.
+//    e) Fold identical child nodes (A+A → 2*A).
+//    f) Distributivity (a*b + a*c → a*(b+c)) – only if at least one child is a PRODUCT.
+//    g) Canonical sorting of leaf_values and children.
+//    h) Cancel x + NEG(x) → 0.
+//    i) Assemble the final node.
 //
 // 3. PRODUCT:
-//    a) Flattening вложенных PRODUCT.
-//    b) Удаление единиц, обработка нуля (весь продукт -> 0).
-//    c) ЭВРИСТИКА ПРОПУСКА аналогично SUM: если нет детей и все множители
-//       уникальны, группировка не нужна.
-//    d) Группировка скалярных множителей с возведением в степень (a*a -> a^2)
-//       выполняется однопроходной картой частот.
-//    e) Свёртка одинаковых подузлов (A*A -> A^2).
-//    f) Каноническая сортировка leaf_values и детей.
-//    g) Сокращение x * RECIP(x) -> 1.
-//    h) Сборка итогового узла.
+//    a) Flatten nested PRODUCTs.
+//    b) Remove ones, handle zero (entire product → 0).
+//    c) SKIP HEURISTIC (similar to SUM): if no children and all factors are
+//       unique, grouping is not needed.
+//    d) Group scalar factors with exponentiation (a*a → a^2) using a single‑pass
+//       frequency map.
+//    e) Fold identical child nodes (A*A → A^2).
+//    f) Canonical sorting of leaf_values and children.
+//    g) Cancel x * RECIP(x) → 1.
+//    h) Assemble the final node.
 //
-// 4. Унарные операции: упрощение цепочек (NEG(NEG(x)) -> x, RECIP(RECIP(x)) -> x,
-//    EXP(LOG(x)) -> x, LOG(EXP(x)) -> x).
+// 4. Unary ops: cancel chains (NEG(NEG(x)) → x, RECIP(RECIP(x)) → x,
+//    EXP(LOG(x)) → x, LOG(EXP(x)) → x).
 //
-// 5. POW: частные случаи (0^положит=0, 1^любое=1, степень0=1, степень1=base,
-//    (x^a)^b -> x^(a*b) для целых показателей).
+// 5. POW: special cases (0^positive=0, 1^any=1, exponent0=1, exponent1=base,
+//    (x^a)^b → x^(a*b) for integer exponents).
 //
 // ----------------------------------------------------------------------------
-// ИСТОРИЯ ИЗМЕНЕНИЙ:
-// Версия 5.3 – радикальное ускорение сортировок Value и безопасный компаратор.
-// Версия 5.4 – добавлена эвристика пропуска группировки и дистрибутивности
-//              для SUM с уникальными константами.
-// Версия 5.5 – заменена двухпроходная группировка (set + map) на однопроходную
-//              с flat_hash_map и флагом has_duplicate; добавлена аналогичная
-//              эвристика для PRODUCT.
+// TODO: ADD NEW LAZY TRANSCENDENTAL NODES AND THEIR SIMPLIFICATIONS
 // ----------------------------------------------------------------------------
+// - Once asin, acos, atan, tan are added to LazyOp (see transcendentals.h),
+//   implement simplifications:
+//   * asin(sin(x)) → x (for x in [-π/2, π/2]), sin(asin(x)) → x (for x in [-1,1])
+//   * acos(cos(x)) → x (for x in [0, π]), cos(acos(x)) → x
+//   * atan(tan(x)) → x (for x in (-π/2, π/2)), tan(atan(x)) → x
+//   * tan(sin/cos) could be kept as is; no deep rewriting needed initially.
+// - Also consider symmetrical simplifications for negative arguments
+//   (e.g., asin(-x) → -asin(x)) if not already handled by unary minus folding.
+//
+// ----------------------------------------------------------------------------
+// TODO: FAST HEURISTIC TO SKIP UNNECESSARY SIMPLIFICATIONS
+// ----------------------------------------------------------------------------
+// - Currently, simplify_tree always runs the full set of rules (grouping,
+//   distributivity, cancellation) for every SUM and PRODUCT node, even when the
+//   tree contains no transcendental functions or no repeated sub‑expressions.
+// - A cheap preliminary check could set a flag (“has_transcendentals” or
+//   “has_potential_cancellations”) during the post‑order traversal. If the flag
+//   is false, many branches (e.g., transcendental composition rules) could be
+//   skipped entirely, saving time on large purely algebraic expressions.
+// - The skip heuristics already applied for constant‑only sums/products could
+//   be extended to more general cases.
+// - However, the current implementation is already fast enough for typical
+//   expressions; this optimization is deferred until benchmarks show a need.
 
 #pragma once
 
@@ -70,7 +85,7 @@
 namespace delta::internal {
 
     // ------------------------------------------------------------------------
-    // Вспомогательные предикаты для TempNode
+    // Helper predicates for TempNode
     // ------------------------------------------------------------------------
     inline bool is_temp_zero(const TempNode& node, const std::vector<Value>& values) {
         if (node.op != LazyOp::CONST) return false;
@@ -89,13 +104,18 @@ namespace delta::internal {
         return is_positive(values[node.value_idx]);
     }
 
+    // ------------------------------------------------------------------------
+    // Create a constant TempNode (adds the constant to values vector)
+    // ------------------------------------------------------------------------
     inline int make_temp_const(std::vector<Value>& values, const Value& v) {
         int idx = static_cast<int>(values.size());
         values.push_back(v);
         return idx;
     }
 
-    // Создание TempNode для не-SUM/PRODUCT
+    // ------------------------------------------------------------------------
+    // Create a TempNode (non‑SUM/PRODUCT) with hash computation
+    // ------------------------------------------------------------------------
     inline int make_temp_node(std::vector<TempNode>& nodes,
         std::vector<Value>& values,
         LazyOp op,
@@ -128,6 +148,9 @@ namespace delta::internal {
         return idx;
     }
 
+    // ------------------------------------------------------------------------
+    // Create a SUM TempNode (with leaf_values and children)
+    // ------------------------------------------------------------------------
     inline int make_temp_sum_node(std::vector<TempNode>& nodes,
         std::vector<Value>& values,
         std::vector<Value> leaf_values,
@@ -140,6 +163,9 @@ namespace delta::internal {
         return idx;
     }
 
+    // ------------------------------------------------------------------------
+    // Create a PRODUCT TempNode (with leaf_values and children)
+    // ------------------------------------------------------------------------
     inline int make_temp_product_node(std::vector<TempNode>& nodes,
         std::vector<Value>& values,
         std::vector<Value> leaf_values,
@@ -153,7 +179,7 @@ namespace delta::internal {
     }
 
     // ------------------------------------------------------------------------
-    // Каноническая сортировка вектора Value (по хешу, затем по значению)
+    // Canonical sorting of a vector of Values (by hash, then by value)
     // ------------------------------------------------------------------------
     inline void sort_value_vector_canonical(std::vector<Value>& vals) {
         struct Pair { size_t hash; Value val; };
@@ -174,7 +200,7 @@ namespace delta::internal {
     }
 
     // ------------------------------------------------------------------------
-    // Сравнение TempNode (использует хеши)
+    // Equality test for two TempNodes (using hashes and structural equality)
     // ------------------------------------------------------------------------
     inline bool temp_nodes_equal(const std::vector<TempNode>& nodes,
         const std::vector<Value>& values,
@@ -225,7 +251,7 @@ namespace delta::internal {
     }
 
     // ------------------------------------------------------------------------
-    // Основная функция упрощения дерева
+    // Main tree simplification function
     // ------------------------------------------------------------------------
     inline int simplify_tree(std::vector<TempNode>& nodes,
         std::vector<Value>& values,
@@ -241,21 +267,28 @@ namespace delta::internal {
             for (int child : tn.children) st.push(child);
         }
 
+        // Process nodes from leaves upward
         for (auto it = postorder.rbegin(); it != postorder.rend(); ++it) {
             int idx = *it;
             TempNode& node = nodes[idx];
             for (int& child : node.children) child = simplified[child];
 
             switch (node.op) {
+                // --------------------------------------------------------------------
+                // CONST
+                // --------------------------------------------------------------------
             case LazyOp::CONST:
                 simplified[idx] = idx;
                 break;
 
+                // --------------------------------------------------------------------
+                // SUM simplification
+                // --------------------------------------------------------------------
             case LazyOp::SUM: {
                 std::vector<Value> all_leaf_values = std::move(node.leaf_values);
                 std::vector<int> all_children = std::move(node.children);
 
-                // 1. Flattening вложенных SUM
+                // 1. Flatten nested SUMs
                 for (size_t i = 0; i < all_children.size(); ) {
                     int child = all_children[i];
                     const TempNode& child_node = nodes[child];
@@ -270,7 +303,7 @@ namespace delta::internal {
                     else ++i;
                 }
 
-                // 2. Удаление нулей и константных нулевых детей
+                // 2. Remove zeros and zero constants
                 {
                     std::vector<Value> new_leaf;
                     for (auto& v : all_leaf_values) {
@@ -293,7 +326,7 @@ namespace delta::internal {
                     all_children = std::move(new_children);
                 }
 
-                // 3. Быстрая проверка на возможность упрощений
+                // 3. Quick check for possible simplifications
                 bool has_product = false;
                 for (int child : all_children) {
                     if (nodes[child].op == LazyOp::PRODUCT) {
@@ -302,9 +335,8 @@ namespace delta::internal {
                     }
                 }
 
-                // Если нет детей и все leaf_values уникальны – пропускаем группировку
+                // Skip‑heuristic: if no children and all leaf_values are unique
                 if (all_children.empty()) {
-                    // Однопроходная проверка уникальности через map (с ранним выходом)
                     absl::flat_hash_map<Value, dumb_int, ValueHash, ValueEqual> freq;
                     bool has_duplicate = false;
                     for (const auto& v : all_leaf_values) {
@@ -318,7 +350,6 @@ namespace delta::internal {
                         }
                     }
                     if (!has_duplicate) {
-                        // Все уникальны – просто сортируем и создаём SUM
                         sort_value_vector_canonical(all_leaf_values);
                         if (all_leaf_values.empty()) {
                             int zero_idx = make_temp_const(values, Value(0));
@@ -335,7 +366,7 @@ namespace delta::internal {
                     }
                 }
 
-                // 4. Группировка скалярных констант (однопроходная)
+                // 4. Group scalar constants (single pass)
                 {
                     absl::flat_hash_map<Value, dumb_int, ValueHash, ValueEqual> freq;
                     for (auto& v : all_leaf_values) {
@@ -348,7 +379,7 @@ namespace delta::internal {
                             all_leaf_values.push_back(std::move(val));
                         }
                         else {
-                            // Создаём PRODUCT(CONST(cnt), CONST(val))
+                            // Create PRODUCT(CONST(cnt), CONST(val))
                             int cnt_val_idx = make_temp_const(values, Value(cnt));
                             int cnt_node = make_temp_node(nodes, values, LazyOp::CONST, {}, cnt_val_idx);
                             int v_val_idx = make_temp_const(values, val);
@@ -361,7 +392,7 @@ namespace delta::internal {
                     }
                 }
 
-                // 5. Свёртка одинаковых дочерних узлов (A+A+... → N*A)
+                // 5. Fold identical child nodes (A+A+... → N*A)
                 {
                     absl::flat_hash_map<uint64_t, std::vector<int>> hash_buckets;
                     for (int child : all_children) {
@@ -406,7 +437,7 @@ namespace delta::internal {
                     }
                 }
 
-                // 6. Дистрибутивность (только если есть произведения)
+                // 6. Distributivity (only if there are PRODUCT children)
                 if (has_product && all_children.size() >= 2) {
                     struct ProdInfo {
                         int idx;
@@ -507,7 +538,7 @@ namespace delta::internal {
                     }
                 }
 
-                // 7. Каноническая сортировка
+                // 7. Canonical sorting
                 sort_value_vector_canonical(all_leaf_values);
                 std::sort(all_children.begin(), all_children.end(),
                     [&](int a, int b) {
@@ -516,7 +547,7 @@ namespace delta::internal {
                         return a < b;
                     });
 
-                // 8. Сокращение x + NEG(x) → 0
+                // 8. Cancel x + NEG(x) → 0
                 std::vector<bool> keep(all_children.size(), true);
                 for (size_t i = 0; i < all_children.size(); ++i) {
                     if (!keep[i]) continue;
@@ -538,7 +569,7 @@ namespace delta::internal {
                 for (size_t i = 0; i < all_children.size(); ++i)
                     if (keep[i]) after_cancel.push_back(all_children[i]);
 
-                // 9. Сборка итогового узла
+                // 9. Assemble the final node
                 if (all_leaf_values.empty() && after_cancel.empty()) {
                     int zero_idx = make_temp_const(values, Value(0));
                     simplified[idx] = make_temp_node(nodes, values, LazyOp::CONST, {}, zero_idx);
@@ -557,11 +588,14 @@ namespace delta::internal {
                 break;
             }
 
+            // --------------------------------------------------------------------
+            // PRODUCT simplification
+            // --------------------------------------------------------------------
             case LazyOp::PRODUCT: {
                 std::vector<Value> all_leaf_values = std::move(node.leaf_values);
                 std::vector<int> all_children = std::move(node.children);
 
-                // Flattening вложенных PRODUCT
+                // Flatten nested PRODUCTs
                 for (size_t i = 0; i < all_children.size(); ) {
                     int child = all_children[i];
                     if (nodes[child].op == LazyOp::PRODUCT) {
@@ -575,7 +609,7 @@ namespace delta::internal {
                     else ++i;
                 }
 
-                // Обработка нуля и единиц
+                // Handle zero and ones
                 {
                     std::vector<Value> new_leaf;
                     bool found_zero = false;
@@ -608,7 +642,7 @@ namespace delta::internal {
                     all_children = std::move(new_children);
                 }
 
-                // Быстрая проверка: если нет детей и все множители уникальны – пропускаем группировку
+                // Skip heuristic: if no children and all leaf_values are unique
                 if (all_children.empty()) {
                     absl::flat_hash_map<Value, dumb_int, ValueHash, ValueEqual> freq;
                     bool has_duplicate = false;
@@ -623,7 +657,6 @@ namespace delta::internal {
                         }
                     }
                     if (!has_duplicate) {
-                        // Все уникальны – сортируем и создаём PRODUCT
                         sort_value_vector_canonical(all_leaf_values);
                         if (all_leaf_values.empty()) {
                             int one_idx = make_temp_const(values, Value(1));
@@ -640,7 +673,7 @@ namespace delta::internal {
                     }
                 }
 
-                // Группировка скалярных множителей (однопроходная)
+                // Group scalar factors with exponentiation (single pass)
                 {
                     absl::flat_hash_map<Value, dumb_int, ValueHash, ValueEqual> freq;
                     for (auto& v : all_leaf_values) {
@@ -664,7 +697,7 @@ namespace delta::internal {
                     }
                 }
 
-                // Свёртка одинаковых дочерних узлов (A*A*A... → A^N)
+                // Fold identical child nodes (A*A*A... → A^N)
                 {
                     absl::flat_hash_map<uint64_t, std::vector<int>> hash_buckets;
                     for (int child : all_children) {
@@ -706,7 +739,7 @@ namespace delta::internal {
                     }
                 }
 
-                // Каноническая сортировка
+                // Canonical sorting
                 sort_value_vector_canonical(all_leaf_values);
                 std::sort(all_children.begin(), all_children.end(),
                     [&](int a, int b) {
@@ -715,7 +748,7 @@ namespace delta::internal {
                         return a < b;
                     });
 
-                // Сокращение x * RECIP(x) → 1
+                // Cancel x * RECIP(x) → 1
                 std::vector<bool> keep(all_children.size(), true);
                 for (size_t i = 0; i < all_children.size(); ++i) {
                     if (!keep[i]) continue;
@@ -738,11 +771,13 @@ namespace delta::internal {
                 for (size_t i = 0; i < all_children.size(); ++i)
                     if (keep[i]) after_cancel.push_back(all_children[i]);
 
+                // Remove remaining ones
                 all_leaf_values.erase(
                     std::remove_if(all_leaf_values.begin(), all_leaf_values.end(),
                         [](const Value& v) { return is_one(v); }),
                     all_leaf_values.end());
 
+                // Assemble the final node
                 if (all_leaf_values.empty() && after_cancel.empty()) {
                     int one_idx = make_temp_const(values, Value(1));
                     simplified[idx] = make_temp_node(nodes, values, LazyOp::CONST, {}, one_idx);
@@ -761,6 +796,9 @@ namespace delta::internal {
                 break;
             }
 
+            // --------------------------------------------------------------------
+            // Unary operations: cancel chains
+            // --------------------------------------------------------------------
             case LazyOp::NEG: {
                 int child = node.children[0];
                 if (nodes[child].op == LazyOp::NEG) {
@@ -801,6 +839,7 @@ namespace delta::internal {
                 }
                 break;
             }
+                            // No simplifications for these yet (could be extended)
             case LazyOp::SQRT:
             case LazyOp::SIN:
             case LazyOp::COS:
@@ -809,6 +848,10 @@ namespace delta::internal {
             case LazyOp::E:
                 simplified[idx] = idx;
                 break;
+
+                // --------------------------------------------------------------------
+                // POW special cases
+                // --------------------------------------------------------------------
             case LazyOp::POW: {
                 int base = node.children[0];
                 int exp = node.children[1];
@@ -816,23 +859,28 @@ namespace delta::internal {
                 const TempNode& exp_node = nodes[exp];
 
                 if (is_temp_zero(exp_node, values)) {
+                    // x^0 → 1
                     int one_idx = make_temp_const(values, Value(1));
                     simplified[idx] = make_temp_node(nodes, values, LazyOp::CONST, {}, one_idx);
                 }
                 else if (is_temp_one(exp_node, values)) {
+                    // x^1 → x
                     simplified[idx] = base;
                 }
                 else if (is_temp_one(base_node, values)) {
+                    // 1^x → 1
                     int one_idx = make_temp_const(values, Value(1));
                     simplified[idx] = make_temp_node(nodes, values, LazyOp::CONST, {}, one_idx);
                 }
                 else if (is_temp_zero(base_node, values) && is_temp_positive_const(exp_node, values)) {
+                    // 0^positive → 0
                     int zero_idx = make_temp_const(values, Value(0));
                     simplified[idx] = make_temp_node(nodes, values, LazyOp::CONST, {}, zero_idx);
                 }
                 else if (base_node.op == LazyOp::POW &&
                     nodes[base_node.children[1]].op == LazyOp::CONST &&
                     exp_node.op == LazyOp::CONST) {
+                    // (x^a)^b → x^(a*b) for integer exponents
                     const Value& b_val = values[nodes[base_node.children[1]].value_idx];
                     const Value& c_val = values[exp_node.value_idx];
                     if (denominator(b_val) == 1 && denominator(c_val) == 1) {

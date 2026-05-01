@@ -2,9 +2,20 @@
 // Licensed under PolyForm Small Business License 1.0.0
 
 // global_state.h
-// Единая точка управления всем глобальным состоянием библиотеки.
-// НЕ подключает ни evaluation_core.h, ни node_pool.h.
-// Подключается ВСЕМИ, кому нужен доступ к кэшам и реестру чистых объектов.
+// -----------------------------------------------------------------------------
+// SINGLE POINT OF CONTROL FOR ALL GLOBAL STATE IN THE LIBRARY
+// -----------------------------------------------------------------------------
+// This header does NOT include evaluation_core.h or node_pool.h.
+// It is included by EVERYONE who needs access to caches and the clean object
+// registry.
+//
+// Contents:
+//   - π cache (thread‑local, used by evaluation_core.h)
+//   - Registry of clean LazyRational objects (for garbage collection)
+//   - GC disable flag and pool size control
+//
+// TODO: merge context.h with global_state.h, priority low
+// -----------------------------------------------------------------------------
 
 #pragma once
 
@@ -13,7 +24,7 @@
 #include <unordered_set>
 #include <vector>
 
-// Forward declaration для LazyRational (избегаем циклической зависимости)
+// Forward declaration for LazyRational (avoids circular dependency)
 namespace delta {
     class LazyRational;
 }
@@ -21,7 +32,8 @@ namespace delta {
 namespace delta::internal {
 
     // ------------------------------------------------------------------------
-    // Кэш числа π (используется в evaluation_core.h)
+    // π cache (used by evaluation_core.h)
+    // Thread‑local to avoid contention; each thread computes its own π.
     // ------------------------------------------------------------------------
     inline thread_local std::map<Value, Value> pi_cache;
 
@@ -30,7 +42,11 @@ namespace delta::internal {
     }
 
     // ------------------------------------------------------------------------
-    // Реестр чистых объектов LazyRational (только clean state)
+    // Registry of clean LazyRational objects (clean state only)
+    // ------------------------------------------------------------------------
+    // Used by garbage collection to find all live roots.
+    // Each LazyRational registers itself when it becomes clean and
+    // unregisters when mutated or destroyed.
     // ------------------------------------------------------------------------
     inline thread_local std::unordered_set<delta::LazyRational*> g_clean_rationals;
 
@@ -50,9 +66,18 @@ namespace delta::internal {
     inline void clear_clean_registry() {
         g_clean_rationals.clear();
     }
-    static constexpr size_t DEFAULT_POOL_MAX_SIZE = 1000000;
+
     // ------------------------------------------------------------------------
-    // Флаг отключения сборщика мусора (GC) и временное снятие лимита размера пула
+    // Pool configuration
+    // ------------------------------------------------------------------------
+    static constexpr size_t DEFAULT_POOL_MAX_SIZE = 1000000;
+
+    // ------------------------------------------------------------------------
+    // GC disable flag and temporary pool size limit override
+    // ------------------------------------------------------------------------
+    // When gc_disabled == true, collect_garbage() does NOT run even if the
+    // pool threshold is exceeded. Used during canonicalization to prevent
+    // premature GC while building large expressions.
     // ------------------------------------------------------------------------
     inline thread_local bool gc_disabled = false;
 

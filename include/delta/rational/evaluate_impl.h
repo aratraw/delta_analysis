@@ -1,14 +1,26 @@
-// (c) 2026 Timofey Ishimtsev.
+// (c) 2026 Timofey Ishmisev.
 // Licensed under PolyForm Small Business License 1.0.0
 
 // evaluate_impl.h
-// Версия 3.1 – единая шаблонная функция evaluate_tree с унифицированными children
-// ----------------------------------------------------------------------------
-// Изменения:
-//   - Удалены обращения к удалённому полю children; везде используется children.
-//   - Упрощены обходы: для всех типов узлов дети доступны через children.
-//   - Устранено ветвление по op для проверки готовности детей (всегда children).
-// ----------------------------------------------------------------------------
+// -----------------------------------------------------------------------------
+// Evaluation of lazy expression trees (both dirty and clean nodes).
+//
+// This file provides the core tree evaluation machinery used by LazyRational.
+// It traverses a directed acyclic graph (DAG) of nodes (SUM, PRODUCT, unary
+// ops, constants, etc.) and computes the resulting Value.
+//
+// Key features:
+//   - Post‑order traversal with caching (each node evaluated once)
+//   - Two summation strategies:
+//       * Standard: copies leaf values, uses pyramidal compact reduction (PCR)
+//       * Inplace: moves leaf values, modifies the input vector for speed
+//   - Flat product evaluation via sequential multiplication
+//   - Dispatch to eager transcendentals (sqrt, sin, cos, etc.) from evaluation_core.h
+//
+// The summation uses PCR (pyramidal_compact_reduce) which groups terms into
+// batches of BATCH_SIZE (default 32) and reduces hierarchically. This minimizes
+// intermediate expression swell and improves performance for large sums.
+// -----------------------------------------------------------------------------
 
 #pragma once
 
@@ -28,8 +40,9 @@
 namespace delta::internal {
 
     // ------------------------------------------------------------------------
-    // Стратегии суммирования (политика обработки узла SUM)
+    // Summation strategies (handling of SUM nodes)
     // ------------------------------------------------------------------------
+    // Standard strategy: copies leaf values, uses PCR without modifying input.
     struct SumStrategy_Standard {
         static constexpr bool allows_inplace = false;
         Value operator()(const std::vector<Value>& values) const {
@@ -37,6 +50,8 @@ namespace delta::internal {
         }
     };
 
+    // Inplace strategy: moves leaf values, modifies the input vector.
+    // This reduces memory allocations but destroys the original leaf_values.
     struct SumStrategy_Inplace {
         static constexpr bool allows_inplace = true;
         Value operator()(std::vector<Value>& values) const {
@@ -46,8 +61,10 @@ namespace delta::internal {
     };
 
     // ------------------------------------------------------------------------
-    // Стратегия умножения (последовательная, без батчинга)
+    // Multiplication strategy (sequential, no batching)
     // ------------------------------------------------------------------------
+    // Multiplies a mix of leaf constants and child node results.
+    // Leaf values are moved, child values are copied.
     struct ProdStrategy_Sequential {
         Value operator()(std::vector<Value> leaf_values, const std::vector<Value>& child_values) const {
             if (leaf_values.empty() && child_values.empty()) {
@@ -68,7 +85,11 @@ namespace delta::internal {
     };
 
     // ------------------------------------------------------------------------
-    // Единая шаблонная функция вычисления дерева
+    // Unified template function for evaluating an expression tree
+    // ------------------------------------------------------------------------
+    // NodeType can be DirtyNode or Node (from node_pool.h).
+    // ValueAccessor provides const_value(node) and eps_value(node).
+    // SumStrategy and ProdStrategy are policy classes for reduction.
     // ------------------------------------------------------------------------
     template<typename NodeType, typename ValueAccessor, typename SumStrategy, typename ProdStrategy>
     Value evaluate_tree(int root,
@@ -92,7 +113,7 @@ namespace delta::internal {
             const NodeType& node = nodes[idx];
             bool children_ready = true;
 
-            // Проверяем готовность детей – теперь все дети хранятся в children
+            // Check if all children have been evaluated
             for (int child : node.children) {
                 if (!cache[child].has_value()) {
                     st.push(child);
@@ -207,10 +228,10 @@ namespace delta::internal {
     }
 
     // ------------------------------------------------------------------------
-    // Публичные API для грязного дерева (DirtyNode)
+    // Public APIs for dirty tree (DirtyNode)
     // ------------------------------------------------------------------------
 
-    // evaluate_dirty – вычисление без разрушения дерева
+    // evaluate_dirty – evaluates the tree without destroying it
     inline Value evaluate_dirty(const std::vector<DirtyNode>& nodes,
         const std::vector<Value>& constants,
         int root) {
@@ -228,7 +249,7 @@ namespace delta::internal {
         return evaluate_tree<DirtyNode>(root, nodes, Accessor{ constants }, sum_strategy, prod_strategy);
     }
 
-    // evaluate_dirty_inplace – вычисление с разрушением leaf_values (оптимизация)
+    // evaluate_dirty_inplace – evaluates the tree, moving leaf_values (optimization)
     inline Value evaluate_dirty_inplace(std::vector<DirtyNode>& nodes,
         std::vector<Value>& constants,
         int root) {
