@@ -323,16 +323,16 @@
 // =========================================================================================================
 #pragma once
 
-// Основной класс Rational и его реализация
+// Main Rational and LazyRational classses and implementation
 #include "delta/rational/rational_class.h"
 #include "delta/rational/lazy_rational.h"
-// Пользовательские литералы (_r)
+// Custom Literal (_r)
 #include "delta/rational/literals.h"
 
-// Трансцендентные функции (sqrt, exp, log, sin, cos, acos, pi, e, pow)
+// Transcendental functions (sqrt, exp, log, sin, cos, acos, pi, e, pow)
 #include "delta/rational/transcendentals.h"
 #include "delta/rational/context.h"
-// Интеграция с Eigen (опционально)
+// Eigen Integration
 #include "delta/rational/eigen_integration.h"
 
 

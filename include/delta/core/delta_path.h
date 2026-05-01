@@ -45,9 +45,9 @@ namespace delta {
     public:
         using GridType = ListGrid<Addr, Compare>;
         using Func = std::function<Value(const Addr&)>;
-        using grid_type = GridType;      // Чтобы ProductGrid понимал, что за сетка
-        using metric_type = Metric;        // Чтобы ProductPath видел тип метрики
-        using value_type = Value;         // На будущее, пригодится
+        using grid_type = GridType;      // For ProductGrid to see the grid type
+        using metric_type = Metric;        // For ProductGrid to see metric
+        using value_type = Value;         //general utility.
         using addr_type = Addr;
 
         /**

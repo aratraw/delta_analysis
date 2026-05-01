@@ -11,7 +11,7 @@
 namespace delta {
 
     // -----------------------------------------------------------------------------
-    // SimpleGrid: минимальный интерфейс сетки
+    // SimpleGrid: minimal grid interface
     // -----------------------------------------------------------------------------
     template<typename G>
     concept SimpleGrid = requires(G g, const G cg, std::size_t i) {
@@ -23,7 +23,7 @@ namespace delta {
     };
 
     // -----------------------------------------------------------------------------
-    // OrderedGrid: сетка с компаратором (строгий порядок)
+    // OrderedGrid: grid with a comparator (strict ordering)
     // -----------------------------------------------------------------------------
     template<typename G>
     concept OrderedGrid = SimpleGrid<G> && requires(G g, const G cg) {
@@ -34,7 +34,7 @@ namespace delta {
     };
 
     // -----------------------------------------------------------------------------
-    // VertexGrid: сетка, где элементы являются вершинами (доступ по индексу к вершинам)
+    // VertexGrid: grid whose elements are vertices (indexed access to vertices)
     // -----------------------------------------------------------------------------
     template<typename G>
     concept VertexGrid = SimpleGrid<G> && requires(G g, const G cg, std::size_t i) {
@@ -43,7 +43,7 @@ namespace delta {
     };
 
     // -----------------------------------------------------------------------------
-    // SimplicialComplex: сетка с рёбрами и треугольниками (2D симплициальный комплекс)
+    // SimplicialComplex: grid with edges and triangles (2D simplicial complex)
     // -----------------------------------------------------------------------------
     template<typename G>
     concept SimplicialComplex = VertexGrid<G> && requires(G g, const G cg, std::size_t i) {

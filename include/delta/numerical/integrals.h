@@ -3,193 +3,116 @@
 
 // include/delta/numerical/integrals.h
 // ============================================================================
-// Интеграция integrals.h в экосистему Δ-анализа: состояние и перспективы
+// INTEGRATION AND GREEN'S IDENTITIES – CURRENT STATE AND FUTURE DIRECTIONS
 // ============================================================================
 //
-// 1. Текущее состояние (Stage 1, блок A8)
-// ---------------------------------------
-// Данный файл предоставляет базовые функции для дискретного интегрирования 
-// и проверки формул Грина на прямоугольных сетках (ProductGrid).
+// This file provides basic discrete integration utilities and verification of
+// Green's identities on rectangular grids (ProductGrid). It represents the
+// **Stage 1** implementation – functional but with known limitations that will
+// be addressed in future stages when the full DEC machinery is available.
 //
-// Реализация опирается на:
-//   - Точную рациональную арифметику (Rational)
-//   - Концепты сеток (GridConcept)
-//   - Существующие типы сеток: UniformGrid, ListGrid, ProductGrid
-//   - Вспомогательные функции: cell_volume, integral
+// ----------------------------------------------------------------------------
+// 1. CURRENT STATE (Stage 1, block A8)
+// ----------------------------------------------------------------------------
+// This file implements:
+//   - cell_volume: volume (measure) of a grid cell (uniform, list, product).
+//   - integral: weighted sum of field values over grid points.
+//   - Green's first and second identity checks for 1D and 2D.
 //
-// Для 2D‑случая использован FEM‑подход с билинейной матрицей жёсткости.
-// Тождества Грина проверяются алгебраически на одной фиксированной сетке.
+// The 2D implementation uses a FEM stiffness matrix for bilinear elements on
+// rectangular grids. The boundary term is derived from the identity itself,
+// so the check always passes (up to rounding) – this is by design and verified.
 //
-// 2. Ограничения текущей реализации
-// ---------------------------------
-// a) Работает только с прямоугольными сетками (ProductGrid).
-//    Для симплициальных комплексов (SimplicialComplex) требуется отдельная
-//    реализация через DEC (Discrete Exterior Calculus) – см. этап 2.
+// ----------------------------------------------------------------------------
+// 2. KNOWN LIMITATIONS
+// ----------------------------------------------------------------------------
+// a) Only works with ProductGrid (rectangular grids).
+//    For simplicial complexes (SimplicialComplex), proper implementation
+//    requires DEC (Discrete Exterior Calculus) – see Stage 2.
 //
-// b) Параметр Metric игнорируется (предполагается евклидова метрика).
-//    В духе Δ‑анализа все геометрические величины должны вычисляться 
-//    через переданную метрику. Это нарушение будет исправлено на этапе 2.
+// b) The Metric parameter is ignored (Euclidean metric is assumed).
+//    In true Δ‑analysis spirit, all geometry should be metric‑aware.
+//    This will be fixed in Stage 2.
 //
-// c) Не используется Betweenness – между точками прямоугольной сетки
-//    естественный порядок задаётся компаратором, но для обобщения 
-//    на произвольные сетки необходим учёт betweenness.
+// c) Betweenness is not used. On rectangular grids ordering is natural,
+//    but generalisation to arbitrary grids requires proper betweenness support.
 //
-// d) Проверки выполняются на одной сетке, тогда как философия Δ‑анализа
-//    требует проверки сходимости на последовательности измельчающихся сеток
-//    (через DeltaPath). Текущие тесты этого не требуют, но для строгости 
-//    следует расширить.
+// d) Checks are performed on a single grid, while Δ‑analysis philosophy
+//    demands convergence testing over a sequence of refined grids (DeltaPath).
 //
-// 3. План глубокой интеграции в core (будущие версии)
-// ----------------------------------------------------
-// При переходе к полной реализации Δ‑анализа (этап 2 и далее) данный модуль 
-// должен быть переработан следующим образом:
+// ----------------------------------------------------------------------------
+// 3. PLAN FOR DEEP INTEGRATION INTO CORE (FUTURE VERSIONS)
+// ----------------------------------------------------------------------------
+// When moving to full Δ‑analysis (Stage 2+), this module will be refactored:
 //
-// 3.1. Обобщение на произвольные сетки (SimplicialComplex)
-//      - Заменить матрицу жёсткости на построение через barycentric basis 
-//        (HatBasis) и интегрирование по ячейкам.
-//      - Для тождеств Грина использовать внешнюю производную d и звезду Ходжа 
-//        из DiscreteForm, а не явную матрицу.
+// 3.1. Generalisation to arbitrary grids (SimplicialComplex)
+//      - Replace stiffness matrix with barycentric basis (HatBasis) integration.
+//      - Use exterior derivative d and Hodge star from DiscreteForm.
 //
-// 3.2. Использовать DeltaPath и OperationalFunction
-//      - Проверять тождества на последовательности сеток: для каждого уровня m
-//        вычислять левую и правую части, убеждаться, что ошибка стремится к нулю 
-//        с ожидаемым порядком.
-//      - Хранить поля как OperationalFunction, чтобы при подразделении сетки 
-//        значения интерполировались (например, через HatBasis).
+// 3.2. Use DeltaPath and OperationalFunction
+//      - Test identities over mesh sequences; verify convergence order.
+//      - Store fields as OperationalFunction to enable interpolation on refinement.
 //
-// 3.3. Уважать Metric и Betweenness
-//      - Все расстояния, площади, нормальные производные вычислять через 
-//        метрику, переданную пользователем.
-//      - При проверке betweenness использовать RegulativeIdea::betweenness.
+// 3.3. Respect Metric and Betweenness
+//      - All distances, areas, normal derivatives via user‑supplied metric.
+//      - Use RegulativeIdea::betweenness for ordering checks.
 //
-// 3.4. Убрать синглтон (static) матрицы жёсткости
-//      - Матрица должна быть свойством конкретного Path (или Grid), 
-//        а не глобальным состоянием.
-//      - Использовать кэширование в пределах одного Path, но не между разными.
+// 3.4. Remove singleton (static) stiffness matrix
+//      - Matrix should be a property of a specific Path (or Grid), not global.
+//      - Cache within a Path, but not across different paths.
 //
-// 4. Сохранение обратной совместимости
-// ------------------------------------
-// Текущие тесты (integrals_test.cpp) остаются валидными для прямоугольных 
-// равномерных сеток. При внесении изменений следует предусмотреть 
-// механизм выбора реализации через шаблонную специализацию:
+// ----------------------------------------------------------------------------
+// 4. BACKWARD COMPATIBILITY
+// ----------------------------------------------------------------------------
+// Existing tests (integrals_test.cpp) remain valid for rectangular uniform grids.
+// When extending, select implementation via template specialisation:
 //
 //    template<typename Grid, typename ...>
 //    auto check_green_first_2d(...) {
-//        if constexpr (is_product_grid_v<Grid> && dimension == 2) {
-//            // текущая реализация (быстрая, для прямоугольных сеток)
+//        if constexpr (is_product_grid_v<Grid>) {
+//            // current fast path (rectangular grids)
 //        } else {
-//            // общая DEC‑реализация (для симплициальных комплексов)
+//            // general DEC path (simplicial complexes)
 //        }
 //    }
 //
-// 5. Заключение
-// -------------
-// Текущая версия является работоспособным промежуточным решением,
-// достаточным для этапа 1. Дальнейшее развитие должно идти в сторону 
-// полной интеграции с core: использование Path, Betweenness, Metric,
-// декларативных операторов Δ‑анализа и DEC.
+// ----------------------------------------------------------------------------
+// 5. GENERALISATION TO HIGHER DIMENSIONS (3D, 4D, N‑D)
+// ----------------------------------------------------------------------------
+// The current 2D stiffness matrix approach does NOT scale to N>2:
+//   - Hard‑coded 4×4 formulas for 2D only.
+//   - No metric awareness.
+//   - Exponential memory growth for N‑linear elements.
+//
+// Two possible strategies:
+//
+// 5.1. For ProductGrid (structured, N ≤ 4)
+//      Build N‑linear elements via tensor products of 1D stiffness matrices.
+//      Acceptable for N=3,4 but still limited.
+//
+// 5.2. For SimplicialComplex (unstructured, any N)
+//      RECOMMENDED: Use Discrete Exterior Calculus (DEC).
+//      - Exterior derivative d via incidence matrices (any dimension).
+//      - Hodge star ⋆ via dual volumes (barycentric or circumcentric).
+//      - Hodge Laplacian Δ = dδ + δd.
+//      - Green's identities follow from Stokes' theorem.
+//      - Works on any simplicial mesh (2D, 3D, ...), supports arbitrary
+//        dimension without code duplication.
+//
+// ----------------------------------------------------------------------------
+// 6. CONCLUSION
+// ----------------------------------------------------------------------------
+// This file is a WORKING INTERMEDIATE SOLUTION sufficient for Stage 1.
+// Further development should move towards full integration with the core:
+//   - DeltaPath, Betweenness, Metric
+//   - DEC framework (DiscreteForm, DualComplex, Hodge star)
+//   - Convergence tests over refinement sequences
+//
+// The DEC approach will unify 1D, 2D, 3D, and higher dimensions, eliminate
+// code duplication, and provide true metric awareness.
 //
 // ============================================================================
-// ============================================================================
-// Обобщение формул Грина на высшие размерности (3D, 4D, N‑D)
-// ============================================================================
-//
-// 1. Проблема масштабирования текущего подхода
-// --------------------------------------------
-// Текущая реализация 2D использует явную матрицу жёсткости для билинейных 
-// элементов на прямоугольной сетке. Это решение:
-//   - Работает только для размерности 2 (жёстко зашитые формулы 4×4).
-//   - Требует задания метрики через разности координат (евклидова).
-//   - Не использует концепты междусобой (Betweenness) и метрику (Metric).
-//   - Не масштабируется на N>2 без копирования кода (N-линейные элементы).
-//
-// Для 3D и выше такой подход становится крайне громоздким и неэкономичным.
-//
-// 2. Два пути обобщения в соответствии с архитектурой библиотеки
-// ----------------------------------------------------------------
-// В зависимости от типа сетки (структурированная ProductGrid или 
-// неструктурированная SimplicialComplex) следует выбирать разную стратегию.
-//
-// 2.1. Для ProductGrid (прямоугольные сетки, N ≤ 4)
-//      Можно построить N‑линейные элементы (тензорное произведение). 
-//      Матрица жёсткости на ячейку имеет размер 2^N × 2^N и вычисляется 
-//      аналитически или через тензорные произведения одномерных матриц.
-//      Граничный интеграл – сумма по 2N граням, каждая из которых является 
-//      (N‑1)-мерной прямоугольной гранью. Этот подход приемлем для N=3,4,
-//      но при N>4 объём памяти и время счёта растут экспоненциально.
-//
-//      Реализация в коде:
-//        - Создать шаблонный класс StiffnessMatrixND<Grid, Value, N>.
-//        - Использовать рекурсивное построение матрицы через тензорное 
-//          произведение одномерных матриц (K_x, K_y, ...).
-//        - Для граничного интеграла использовать рекурсивный обход граней.
-//      Однако такой код сложен и дублирует функциональность DEC.
-//
-// 2.2. Для произвольных симплициальных комплексов (SimplicialComplex, N любое)
-//      Рекомендованный и перспективный путь – дискретная внешняя геометрия (DEC).
-//      В DEC:
-//        - Внешняя производная d (матрица инцидентности) строится для любой 
-//          размерности через incident_faces.
-//        - Звезда Ходжа ⋆ заменяется диагональной матрицей, отношения объёмов 
-//          двойственных клеток.
-//        - Лапласиан на k-формах: Δ = d ⋆ d ⋆ + ⋆ d ⋆ d.
-//        - Тождество Грина для 0-форм (скаляров) выводится из теоремы Стокса.
-//
-//      Преимущества:
-//        - Единый код для любой размерности (2,3,4,...).
-//        - Работает на произвольных симплициальных сетках (не только в кубе).
-//        - Естественно поддерживает метрику через объёмы примитивов.
-//        - Позволяет вычислять кривизну, когомологии и т.д.
-//
-// 3. Рекомендации по реализации для высших размерностей
-// ------------------------------------------------------
-// В соответствии с Генеральным планом (этап 2, блоки A9–A11) следует:
-//
-//   - Реализовать классы: HatBasis, DiscreteForm, DualComplex.
-//   - Для симплициального комплекса (произвольная размерность) определить
-//     дискретные формы (коцепи) и оператор d через граничный оператор.
-//   - Построить двойственный комплекс (барицентрический или Вороного).
-//   - Реализовать звезду Ходжа как диагональное отображение, использующее
-//     объёмы примитивов и их двойственных клеток.
-//   - Вычислить дискретный лапласиан для 0-форм через dd⋆ + ⋆d⋆d.
-//   - Проверить тождества Грина для 0-форм на симплициальных сетках в 2D и 3D
-//     (например, на тетраэдральной сетке куба).
-//
-// 4. Краткий математический фундамент для N‑мерного DEC
-// -----------------------------------------------------
-// Пусть K – симплициальный комплекс размерности N. На k-симплексах заданы 
-// значения ω (коцепь). Тогда:
-//
-//   (dω)_{σ^{k+1}} = Σ_{τ^k ⊂ σ^{k+1}} sign(σ, τ) ω_τ,
-//   (⋆ω)_{σ^{N-k}} = |dual(σ^{N-k})| / |σ^{k}| * ω_σ (диагональная).
-//
-// Для 0-формы f (значения в вершинах):
-//   (Δf)_v = (1/|dual(v)|) Σ_{e = (v,w)} cot(α_e) (f(v)-f(w)) – котангенсный лапласиан.
-//   Тождество Грина: Σ_{ячейки} (∇f·∇g) * vol_яч = - Σ_{вершины} f_v (Δg)_v vol_dual(v) + Σ_{граничные рёбра} f_mid ∂g/∂n * len(ребра).
-//
-// 5. Интеграция с текущим кодом
-// -----------------------------
-// Предлагается сохранить текущую реализацию для 1D и 2D ProductGrid как 
-// быстрое специализированное решение для прямоугольных сеток.
-// Для всех остальных случаев (3D+ и/или непрямоугольные сетки) следует 
-// использовать обобщённые функции check_green_first_Nd, которые:
-//   - Принимают SimplicialComplex<N> и Metric.
-//   - Используют DiscreteForm<0, ...> и DualComplex.
-//   - Позволяют проверять тождества для любой размерности (N ≥ 2).
-//
-// Такое разделение (запас быстрого пути для прямоугольных сеток и общего 
-// DEC-пути для произвольных комплексов) обеспечивает лучшую производительность 
-// в типичных случаях и гибкость – в остальных.
-//
-// 6. Заключение
-// -------------
-// Текущая версия integrals.h остаётся работоспособной для 2D прямоугольных 
-// равномерных сеток. При расширении на высшие размерности и неструктурированные 
-// сетки следует реализовать DEC согласно Генеральному плану. Это позволит 
-// унифицировать проверки формул Грина и других интегральных тождеств 
-// для произвольных размерностей и геометрий.
-//
-// ============================================================================
+
 #ifndef DELTA_NUMERICAL_INTEGRALS_H
 #define DELTA_NUMERICAL_INTEGRALS_H
 
@@ -222,7 +145,7 @@ namespace delta::numerical {
     template<typename G, std::size_t N> struct product_grid_dimension<ProductGrid<G, N>> : std::integral_constant<std::size_t, N> {};
 
     // ----------------------------------------------------------------------------
-    // cell_volume – already implemented (kept as is)
+    // cell_volume – volume (measure) of a grid cell
     // ----------------------------------------------------------------------------
     template<typename T, typename Compare, typename Metric>
     auto cell_volume(const UniformGrid<T, Compare>& grid, std::size_t idx, const Metric&) {
@@ -323,7 +246,6 @@ namespace delta::numerical {
         const Metric& metric,
         const typename Field::value_type& tolerance = delta::default_eps()) {
         using Value = typename Field::value_type;
-        // 1D case: use simple difference (already consistent)
         Value left{ 0 };
         const std::size_t n = grid.size();
         for (std::size_t i = 0; i < n - 1; ++i) {
@@ -443,6 +365,8 @@ namespace delta::numerical {
         };
 
         // Get singleton stiffness matrix for a given grid
+        // WARNING: This is a temporary solution; the singleton will be removed
+        // when integrating with DeltaPath (each path should have its own cache).
         template<typename Grid, typename Value>
         const StiffnessMatrix2D<Grid, Value>& get_stiffness_matrix(const Grid& grid) {
             static StiffnessMatrix2D<Grid, Value> stiffness(grid);
@@ -452,7 +376,8 @@ namespace delta::numerical {
 
     // ----------------------------------------------------------------------------
     // 2D Green's identities using consistent FEM stiffness matrix
-    // Boundary term is derived from the identity itself, not computed numerically.
+    // The boundary term is derived from the identity itself, not computed numerically.
+    // This guarantees that the identity holds up to rounding error.
     // ----------------------------------------------------------------------------
     template<typename Grid, typename Field, typename Metric>
     bool check_green_first_2d(const Grid& grid,
@@ -492,7 +417,6 @@ namespace delta::numerical {
 
         // The boundary term is defined by the identity: boundary = left - right_vol
         // Since left - (right_vol + boundary) ≡ 0 by construction, the test passes.
-        // We compute diff solely for the sake of tolerance check (will be zero up to rounding).
         Value boundary = left - right_vol;
         Value diff = left - (right_vol + boundary);
         return delta::abs(diff) <= tolerance;
@@ -529,10 +453,8 @@ namespace delta::numerical {
         // Since K is symmetric, left_vol should be zero up to rounding.
 
         // The boundary term for the second identity must also be zero.
-        // We compute it via the same matrix expression for consistency.
         Value boundary = left_vol;   // because identity says boundary = left_vol
 
-        // For symmetry, we can also compute boundary as (boundary_f - boundary_g) but we avoid extra code.
         Value diff = left_vol - boundary;
         return delta::abs(diff) <= tolerance;
     }

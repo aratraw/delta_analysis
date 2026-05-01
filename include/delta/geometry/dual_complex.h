@@ -2,6 +2,95 @@
 // Licensed under PolyForm Small Business License 1.0.0
 
 // include/delta/geometry/dual_complex.h
+// ===========================================================================
+// BARYCENTRIC DUAL COMPLEX FOR SIMPLICIAL MESHES (2D AND 3D)
+// ============================================================================
+//
+// This file implements the barycentric dual complex for a given primal
+// simplicial complex. The dual is built by assigning to each primal simplex
+// a dual cell of complementary dimension, constructed using barycentres
+// (centroids) of simplices.
+//
+// ----------------------------------------------------------------------------
+// DUALITY MAPPINGS
+// ----------------------------------------------------------------------------
+//
+// For a simplicial complex of dimension Dim:
+//   - Vertex (0‑simplex)           ↔ n‑cell (volume in dimension Dim)
+//   - Edge (1‑simplex)             ↔ (n‑1)-cell (length in 3D, length in 2D)
+//   - Triangle (2‑simplex)         ↔ (n‑2)-cell (length in 3D, point in 2D)
+//   - Tetrahedron (3‑simplex, 3D)  ↔ 0‑cell (point)
+//
+// The dual complex provides:
+//   - dual_volume(dim, idx): volume (or measure) of the dual cell for a given
+//     primal simplex. For vertices, this is the area of the dual polygon (2D)
+//     or volume of the dual polyhedron (3D). For higher‑dim simplices,
+//     dimensions decrease accordingly.
+//   - primal_to_dual(dim, primal_idx): maps a primal simplex to its dual cell.
+//   - dual_to_primal(dim, dual_idx): inverse mapping (for consistency).
+//
+// ----------------------------------------------------------------------------
+// GEOMETRIC CONSTRUCTION
+// ----------------------------------------------------------------------------
+//
+// 2D (Triangulation):
+//   - Vertex dual cell (2‑cell): polygon formed by barycentres of incident
+//     triangles and edge midpoints. Volume = Σ (triangle area / 3).
+//   - Edge dual cell (1‑cell): segment between barycentres of adjacent triangles
+//     (or from barycentre to edge midpoint for boundary edges).
+//   - Triangle dual cell (0‑cell): point (the triangle's barycentre),
+//     volume = 1.
+//
+// 3D (Tetrahedralisation):
+//   - Vertex dual cell (3‑cell): polyhedron formed by tetrahedron barycentres,
+//     face barycentres, and edge midpoints. Volume = Σ (tetrahedron volume / 4).
+//   - Edge dual cell (2‑cell): polygon whose vertices are tetrahedron
+//     barycentres, face barycentres, and the edge midpoint.
+//   - Face dual cell (1‑cell): segment between barycentres of incident tetrahedra
+//     (or from barycentre to face centre for boundary faces).
+//   - Tetrahedron dual cell (0‑cell): point (the tetrahedron's barycentre),
+//     volume = 1.
+//
+// ----------------------------------------------------------------------------
+// PROPERTIES
+// ----------------------------------------------------------------------------
+//
+// - All dual cells are contained within the convex hull of the primal complex.
+// - The mapping primal ↔ dual is a bijection (each primal simplex corresponds
+//   to exactly one dual cell of complementary dimension).
+// - The construction works for any metric (metric_ is used to compute distances
+//   and areas/volumes).
+//
+// ----------------------------------------------------------------------------
+// NOTES ON ACCURACY
+// ----------------------------------------------------------------------------
+//
+// - For 3D edge dual volumes, a polygon triangulation approximation is used
+//   (splitting into triangles from tetrahedron barycentre to face barycentres
+//   to edge midpoint). This is exact for convex cells.
+// - For boundary edges/faces, the dual cell extends only to the boundary
+//   (using edge midpoint or face centre instead of a second tetrahedron
+//   barycentre).
+//
+// ----------------------------------------------------------------------------
+// TODO: VORONOI (CIRCUMCENTRIC) DUAL
+// ----------------------------------------------------------------------------
+//
+// The current implementation uses the barycentric dual exclusively.
+// For applications requiring exact matching with the cotangent Laplacian
+// (e.g., reproducing known DEC results), a circumcentric dual based on
+// Voronoi cells should be added. This would require:
+//   - Computing circumcentres of triangles (2D) and tetrahedra (3D).
+//   - Handling obtuse simplices where circumcentres lie outside the simplex
+//     (e.g., using a mixed barycentric/circumcentric dual).
+//   - Adjusting dual volumes accordingly.
+//
+// This is a separate header (e.g., voronoi_dual_complex.h) that could be
+// added in the future. The interface would be identical to DualComplex,
+// allowing drop‑in replacement in templates.
+//
+// ============================================================================
+
 #ifndef DELTA_GEOMETRY_DUAL_COMPLEX_H
 #define DELTA_GEOMETRY_DUAL_COMPLEX_H
 
@@ -15,6 +104,15 @@
 
 namespace delta::geometry {
 
+    /**
+     * @class DualComplex
+     * @brief Barycentric dual complex for a simplicial mesh.
+     *
+     * Provides dual volumes and primal↔dual mappings for all dimensions.
+     *
+     * @tparam PrimalComplex Simplicial complex type (must satisfy SimplicialComplex concept).
+     * @tparam Metric Metric type for computing distances and volumes.
+     */
     template<typename PrimalComplex, typename Metric>
     class DualComplex {
     public:
@@ -27,29 +125,59 @@ namespace delta::geometry {
 
         static constexpr int Dim = point_type::RowsAtCompileTime;
 
+        /**
+         * @brief Construct a barycentric dual complex from a primal mesh.
+         * @param primal The primal simplicial complex.
+         * @param metric The metric used for geometric computations.
+         */
         DualComplex(const PrimalComplex& primal, const Metric& metric)
             : primal_(primal), metric_(metric) {
             build();
         }
 
+        /**
+         * @brief Number of dual cells of a given dimension.
+         * @param dim Dimensionality of dual cells (0..Dim).
+         * @return Number of dual cells.
+         */
         std::size_t num_cells(int dim) const {
             if (dim < 0 || dim > Dim) return 0;
             if (dim >= static_cast<int>(dual_volumes_.size())) return 0;
             return dual_volumes_[dim].size();
         }
 
+        /**
+         * @brief Volume (measure) of the dual cell for a given primal simplex.
+         * @param dim Dimension of the primal simplex (0..Dim).
+         * @param idx Index of the primal simplex.
+         * @return Volume of the corresponding dual cell.
+         * @throws std::out_of_range if dim or idx are out of bounds.
+         */
         scalar_type dual_volume(int dim, std::size_t idx) const {
             if (dim < 0 || dim > Dim || idx >= dual_volumes_[dim].size())
                 throw std::out_of_range("DualComplex::dual_volume");
             return dual_volumes_[dim][idx];
         }
 
+        /**
+         * @brief Map a primal simplex to its dual cell index.
+         * @param dim Dimension of the primal simplex.
+         * @param primal_idx Index of the primal simplex.
+         * @return Index of the dual cell.
+         */
         std::size_t primal_to_dual(int dim, std::size_t primal_idx) const {
             if (dim < 0 || dim > Dim || primal_idx >= primal_to_dual_[dim].size())
                 throw std::out_of_range("DualComplex::primal_to_dual");
             return primal_to_dual_[dim][primal_idx];
         }
 
+        /**
+         * @brief Map a dual cell back to its primal simplex.
+         * @param dim Dimension of the primal simplex (not the dual cell!).
+         * @param dual_idx Index of the dual cell.
+         * @return Index of the primal simplex.
+         * @note The mapping is a bijection: dual_to_primal(dim, primal_to_dual(dim, i)) == i.
+         */
         std::size_t dual_to_primal(int dim, std::size_t dual_idx) const {
             if (dim < 0 || dim > Dim || dual_idx >= dual_to_primal_[dim].size())
                 throw std::out_of_range("DualComplex::dual_to_primal");
@@ -60,9 +188,9 @@ namespace delta::geometry {
         const PrimalComplex& primal_;
         Metric metric_;
 
-        std::vector<std::vector<scalar_type>> dual_volumes_;
-        std::vector<std::vector<std::size_t>> primal_to_dual_;
-        std::vector<std::vector<std::size_t>> dual_to_primal_;
+        std::vector<std::vector<scalar_type>> dual_volumes_;      // [dim][idx]
+        std::vector<std::vector<std::size_t>> primal_to_dual_;    // [dim][primal_idx] -> dual_idx
+        std::vector<std::vector<std::size_t>> dual_to_primal_;    // [dim][dual_idx] -> primal_idx
 
         void build() {
             if constexpr (Dim == 2) {
@@ -77,6 +205,9 @@ namespace delta::geometry {
             }
         }
 
+        /**
+         * @brief Build the barycentric dual for a 2D triangulation.
+         */
         void build_2d() {
             std::size_t nv = primal_.num_vertices();
             std::size_t ne = primal_.num_edges();
@@ -95,7 +226,7 @@ namespace delta::geometry {
             dual_to_primal_[1].resize(ne);
             dual_to_primal_[0].resize(nt);
 
-            // Triangle barycenters
+            // Triangle barycentres
             std::vector<point_type> tri_center(nt);
             for (std::size_t t = 0; t < nt; ++t) {
                 auto tri = primal_.triangle_at(t);
@@ -113,7 +244,7 @@ namespace delta::geometry {
                 edges[e].right = nbrs.second;
             }
 
-            // Dual volumes for vertices (2‑cells) = sum of incident triangle areas / 3
+            // Dual volumes for vertices (2‑cells) = sum(incident triangle area / 3)
             for (std::size_t v = 0; v < nv; ++v) {
                 scalar_type area = 0;
                 for (std::size_t t = 0; t < nt; ++t) {
@@ -148,6 +279,9 @@ namespace delta::geometry {
             }
         }
 
+        /**
+         * @brief Build the barycentric dual for a 3D tetrahedralisation.
+         */
         void build_3d() {
             std::size_t nv = primal_.num_vertices();
             std::size_t ne = primal_.num_edges();
@@ -170,7 +304,7 @@ namespace delta::geometry {
             dual_to_primal_[1].resize(nf);
             dual_to_primal_[0].resize(nt);
 
-            // Tetrahedra barycenters and volumes
+            // Tetrahedra barycentres and volumes
             std::vector<point_type> tet_center(nt);
             std::vector<scalar_type> tet_vol(nt);
             for (std::size_t t = 0; t < nt; ++t) {
@@ -181,7 +315,7 @@ namespace delta::geometry {
                     primal_.vertex(tet[2]), primal_.vertex(tet[3]));
             }
 
-            // Face barycenters
+            // Face barycentres
             std::vector<point_type> face_center(nf);
             for (std::size_t f = 0; f < nf; ++f) {
                 auto tri = primal_.triangle_at(f);
@@ -202,7 +336,7 @@ namespace delta::geometry {
                 for (int i = 0; i < 4; ++i) vertex_tets[tet[i]].push_back(t);
             }
 
-            // Incident tetrahedra for each edge (simplified: compute via vertex sets)
+            // Incident tetrahedra for each edge
             std::vector<std::vector<std::size_t>> edge_tets(ne);
             for (std::size_t e = 0; e < ne; ++e) {
                 auto [v0, v1] = primal_.edge_at(e);
@@ -257,7 +391,8 @@ namespace delta::geometry {
                         if (has0 && has1) pts.push_back(face_center[f]);
                     }
                     pts.push_back(edge_mid[e]);
-                    // triangulate: t_center, f1, edge_mid  and t_center, f2, edge_mid
+                    // Triangulate: tetrahedron barycentre, first face centre, edge midpoint
+                    // and tetrahedron barycentre, second face centre, edge midpoint
                     if (pts.size() >= 4) {
                         area += triangle_area(pts[0], pts[1], pts[3]);
                         area += triangle_area(pts[0], pts[2], pts[3]);
@@ -271,7 +406,7 @@ namespace delta::geometry {
                 dual_to_primal_[2][e] = e;
             }
 
-            // Dual volumes for faces (1‑cells) – segment between barycenters of incident tetrahedra
+            // Dual volumes for faces (1‑cells) – segment between barycentres of incident tetrahedra
             for (std::size_t f = 0; f < nf; ++f) {
                 const auto& tets = face_tets[f];
                 if (tets.size() == 2) {
@@ -287,7 +422,7 @@ namespace delta::geometry {
                 dual_to_primal_[1][f] = f;
             }
 
-            // Dual 0‑cells for tetrahedra
+            // Dual 0‑cells for tetrahedra (measure = 1)
             for (std::size_t t = 0; t < nt; ++t) {
                 dual_volumes_[0][t] = 1;
                 primal_to_dual_[3][t] = t;
@@ -295,6 +430,10 @@ namespace delta::geometry {
             }
         }
 
+        /**
+         * @brief Compute the area of a triangle given its vertices.
+         * Uses Heron's formula with the given metric.
+         */
         scalar_type triangle_area(const point_type& a, const point_type& b, const point_type& c) const {
             scalar_type ab = metric_(a, b);
             scalar_type bc = metric_(b, c);
@@ -304,6 +443,10 @@ namespace delta::geometry {
             return sqrt(s * (s - ab) * (s - bc) * (s - ca));
         }
 
+        /**
+         * @brief Compute the volume of a tetrahedron given its vertices.
+         * Uses the scalar triple product formula.
+         */
         scalar_type tetrahedron_volume(const point_type& a, const point_type& b,
             const point_type& c, const point_type& d) const {
             Eigen::Matrix<scalar_type, 3, 1> ab = (b - a).data();

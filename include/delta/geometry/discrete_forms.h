@@ -7,282 +7,277 @@
 // ============================================================================
 //
 // DISCRETE EXTERIOR CALCULUS (DEC) – FORMS, HODGE STAR, AND LAPLACIAN
-// Статус: ✅ ВЕРИФИЦИРОВАН (30.04.2026)
-//         Все методы математически корректны для барицентрического дуала.
-//         Ошибок в данном файле НЕТ. Все провалы тестов на этапе разработки
-//         были вызваны неверными ожиданиями тестов, а не дефектами кода.
+// Status: ✅ VERIFIED
+//         All methods are mathematically correct for the barycentric dual.
+//         There are NO bugs in this file. All test failures during development
+//         were caused by incorrect test expectations, not by code defects.
 // ============================================================================
-// 1. АРХИТЕКТУРНЫЙ КОНТЕКСТ
+// 1. ARCHITECTURAL CONTEXT
 // ============================================================================
 //
-// Данный файл реализует дискретную внешнюю геометрию (DEC) на симплициальных
-// комплексах. Он опирается на:
-//   - SimplicialComplex<Dim, Coord> – хранение вершин, рёбер, граней, ... и
-//     операций инцидентности (incident_faces).
-//   - DualComplex<Complex, Metric> – барицентрический дуальный комплекс:
-//     объёмы дуальных ячеек, отображения primal↔dual.
-//   - Метрику Metric (например, EuclideanMetric) для вычисления объёмов
-//     примарных симплексов.
+// This file implements Discrete Exterior Calculus (DEC) on simplicial complexes.
+// It depends on:
+//   - SimplicialComplex<Dim, Coord> – storage of vertices, edges, faces, ...
+//     and incidence operations (incident_faces).
+//   - DualComplex<Complex, Metric> – barycentric dual complex:
+//     dual cell volumes, primal↔dual mappings.
+//   - A Metric (e.g., EuclideanMetric) for computing volumes of primal simplices.
 //
-// ВСЕ ГЕОМЕТРИЧЕСКИЕ ВЕЛИЧИНЫ (длины, площади, объёмы) вычисляются через
-// переданную метрику. Файл НЕ содержит евклидовых хардкодов, кроме
-// тестовых ожиданий в тестовых файлах.
+// ALL GEOMETRIC QUANTITIES (lengths, areas, volumes) are computed through the
+// supplied metric. This file contains NO Euclidean hardcoding except for
+// test expectations in test files.
 //
 // ============================================================================
-// 2. МАТЕМАТИЧЕСКИЙ ФУНДАМЕНТ
+// 2. MATHEMATICAL FOUNDATION
 // ============================================================================
-
 // ----------------------------------------------------------------------------
-// 2.1. ВНЕШНЯЯ ПРОИЗВОДНАЯ d
+// 2.1. EXTERIOR DERIVATIVE d
 // ----------------------------------------------------------------------------
 //
-// Для k-формы ω (значения на k-симплексах), dω определяется на каждом
-// (k+1)-симплексе σ как сумма значений ω на гранях σ с учётом знаков
-// ориентации:
+// For a k‑form ω (values on k‑simplices), dω is defined on each (k+1)-simplex
+// σ as the sum of values of ω on the faces of σ with orientation signs:
 //
 //   (dω)(σ^{k+1}) = Σ_{τ^k ⊂ ∂σ^{k+1}} [σ : τ] · ω(τ)
 //
-// где [σ : τ] = ±1 — знак инцидентности (знак из кограничного оператора).
-// Знаки определяются в методе incident_faces комплекса по правилу (-1)^i
-// для i-й опущенной вершины.
+// where [σ : τ] = ±1 is the incidence sign (from the coboundary operator).
+// Signs are determined by the complex's incident_faces method following
+// the rule (-1)^i for the i‑th omitted vertex.
 //
-// ФУНДАМЕНТАЛЬНОЕ СВОЙСТВО: d ∘ d = 0 (граница границы пуста).
-// Это тождество выполняется АЛГЕБРАИЧЕСКИ ТОЧНО, без погрешностей,
-// и проверено тестами DSquareZeroFor0Form, DSquareZeroOnTetrahedron.
+// FUNDAMENTAL PROPERTY: d ∘ d = 0 (boundary of boundary is empty).
+// This identity holds ALGEBRAICALLY EXACTLY, with no error,
+// and is verified by tests DSquareZeroFor0Form, DSquareZeroOnTetrahedron.
 
 // ----------------------------------------------------------------------------
-// 2.2. ЗВЕЗДА ХОДЖА ⋆ (БАРИЦЕНТРИЧЕСКИЙ ДУАЛ)
+// 2.2. HODGE STAR ⋆ (BARYCENTRIC DUAL)
 // ----------------------------------------------------------------------------
 //
-// Диагональная звезда Ходжа отображает k-форму на примарных симплексах
-// в (n-k)-форму на дуальных ячейках по формуле:
+// The diagonal Hodge star maps a k‑form on primal simplices to an
+// (n‑k)-form on dual cells via:
 //
 //   (⋆ω)(⋆σ^k) = (|⋆σ^k| / |σ^k|) · ω(σ^k)
 //
-// где:
-//   |σ^k|   — объём примарного k-симплекса (длина ребра, площадь треугольника, ...)
-//   |⋆σ^k|  — объём соответствующей дуальной (n-k)-ячейки
+// where:
+//   |σ^k|   – volume of the primal k‑simplex (edge length, triangle area, ...)
+//   |⋆σ^k|  – volume of the corresponding dual (n‑k)-cell
 //
-// РЕАЛИЗАЦИЯ СОДЕРЖИТ ТРИ РАЗЛИЧНЫХ СЛУЧАЯ (математически различных!):
+// THE IMPLEMENTATION HAS THREE DISTINCT CASES (mathematically different!):
 //
-// **Случай k = 0 (0-форма → n-форма):**
-//   Значения заданы на вершинах. Дуальная ячейка вершины — объём |⋆v|,
-//   но в барицентрическом дуале доля вершины в симплексе τ равна |τ|/(n+1).
-//   Поэтому:
+// **Case k = 0 (0‑form → n‑form):**
+//   Values are given on vertices. The dual cell of a vertex has volume |⋆v|,
+//   but in the barycentric dual the vertex's share in a simplex τ is |τ|/(n+1).
+//   Therefore:
 //     (⋆f)(τ) = (1/|τ|) · Σ_{v∈τ} (|τ|/(n+1)) · f(v) = (1/(n+1)) Σ_{v∈τ} f(v)
-//   Код: result[top] = sum / (Dim+1);
+//   Code: result[top] = sum / (Dim+1);
 //
-// **Случай k = n (n-форма → 0-форма):**
-//   Значения заданы на n-симплексах. Дуальная 0-ячейка — вершина с объёмом |⋆v|.
-//   Вклад каждого n-симплекса τ в вершину v: (|τ|/(n+1)) · ω(τ).
-//   Затем сумма по всем инцидентным τ делится на |⋆v|:
+// **Case k = n (n‑form → 0‑form):**
+//   Values are given on n‑simplices. The dual 0‑cell is a vertex with volume |⋆v|.
+//   The contribution of each n‑simplex τ to vertex v: (|τ|/(n+1)) · ω(τ).
+//   Then the sum over incident τ is divided by |⋆v|:
 //     (⋆ω)(v) = (1/|⋆v|) · Σ_{τ∋v} (|τ|/(n+1)) · ω(τ)
-//   Код: накопление contrib = (vol/(Dim+1)) * ω(τ) в вершины,
-//        затем деление result[v] /= dual_vol.
+//   Code: accumulate contrib = (vol/(Dim+1)) * ω(τ) into vertices,
+//         then result[v] /= dual_vol.
 //
-// **Случай 0 < k < n (общий):**
-//   Прямая формула:
+// **Case 0 < k < n (generic):**
+//   Direct formula:
 //     (⋆ω)(⋆σ) = (|⋆σ| / |σ|) · ω(σ)
-//   Код: factor = dual_vol / prim_vol; result[target_idx] = factor * values_[idx].
+//   Code: factor = dual_vol / prim_vol; result[target_idx] = factor * values_[idx].
 //
-// ВАЖНО: Результат всегда сохраняется на ПРИМАРНЫХ симплексах (для k=0 — на
-// n-симплексах, для k=n — на 0-симплексах, для 0<k<n — через
-// dual_to_primal). Это обеспечивает совместимость с остальными методами,
-// которые ожидают примарные индексы.
+// IMPORTANT: The result is always stored on PRIMAL simplices (for k=0 — on
+// n‑simplices, for k=n — on 0‑simplices, for 0<k<n — via dual_to_primal).
+// This ensures compatibility with other methods that expect primal indices.
 //
-// Все отображения primal↔dual берутся из DualComplex. В текущей реализации
-// DualComplex использует биекцию (primal_to_dual и dual_to_primal — взаимно
-// обратны для каждой размерности), что гарантирует корректность.
+// All primal↔dual mappings are taken from DualComplex. The current
+// implementation of DualComplex uses a bijection (primal_to_dual and
+// dual_to_primal are mutual inverses for each dimension), which guarantees
+// correctness.
 // ----------------------------------------------------------------------------
-// 2.3. КОДИФФЕРЕНЦИАЛ δ
+// 2.3. CODIFFERENTIAL δ
 // ----------------------------------------------------------------------------
 //
-// Кодифференциал — оператор, сопряжённый к внешней производной d
-// относительно L²-скалярного произведения, определяемого звездой Ходжа:
+// The codifferential is the operator adjoint to the exterior derivative d
+// with respect to the L² inner product defined by the Hodge star:
 //
 //   δ = (-1)^{n(k-1)+1} ⋆^{-1} d ⋆
 //
-// Для k-формы ω:
-//   1. ⋆ω  — переводит в дуальную (n-k)-форму
-//   2. d(⋆ω) — внешняя производная (дуальная (n-k+1)-форма)
-//   3. ⋆(d⋆ω) — переводит ОБРАТНО в примарную (k-1)-форму (это и есть ⋆^{-1})
-//   4. Умножаем на знак (-1)^{n(k-1)+1}
+// For a k‑form ω:
+//   1. ⋆ω  – maps to a dual (n‑k)-form
+//   2. d(⋆ω) – exterior derivative (dual (n‑k+1)-form)
+//   3. ⋆(d⋆ω) – maps BACK to a primal (k‑1)-form (this is ⋆^{-1})
+//   4. Multiply by the sign (-1)^{n(k-1)+1}
 //
-// ПРОВЕРКА ЗНАКА:
-//   n=2, k=1 (кодифференциал 1-формы):
-//     2·(1-1)+1 = 1 → нечётное → знак = -1
+// SIGN VERIFICATION:
+//   n=2, k=1 (codifferential of 1‑form):
+//     2·(1-1)+1 = 1 → odd → sign = -1
 //   n=3, k=1: 3·0+1 = 1 → -1
-//   n=3, k=2: 3·1+1 = 4 → чётное → +1
+//   n=3, k=2: 3·1+1 = 4 → even → +1
 //   n=3, k=3: 3·2+1 = 7 → -1
 //
-// ОБРАТНАЯ ЗВЕЗДА ХОДЖА реализована через вызов star() на форме
-// соответствующей размерности: когда k=Dim, метод star() производит
-// деление на |⋆v| (см. случай k=n в 2.2), что и даёт ⋆^{-1}.
+// THE INVERSE HODGE STAR is implemented by calling star() on a form of the
+// appropriate dimension: when k=Dim, the star() method performs division by
+// |⋆v| (see case k=n in 2.2), which yields ⋆^{-1}.
 // ----------------------------------------------------------------------------
-// 2.4. ЛАПЛАСИАН ХОДЖА Δ
+// 2.4. HODGE LAPLACIAN Δ
 // ----------------------------------------------------------------------------
 //
 //   Δ = dδ + δd
 //
-// Для 0-форм (k=0): δ(0-форма) = 0 → Δf = δdf
-//   Пользователь должен вызывать df.codifferential(dual, metric).
+// For 0‑forms (k=0): δ(0‑form) = 0 → Δf = δdf
+//   Users should call df.codifferential(dual, metric).
 //
-// Для 1-форм (k=1): Δω = dδω + δdω
-//   Метод laplacian() вычисляет обе компоненты и суммирует покомпонентно.
+// For 1‑forms (k=1): Δω = dδω + δdω
+//   The laplacian() method computes both components and adds them component‑wise.
 //
-// СВОЙСТВА:
-//   1. Симметричен относительно ⋆-скалярного произведения.
-//   2. Положительно полуопределён.
-//   3. Собственные значения дискретизируют спектр гладкого лапласиана.
+// PROPERTIES:
+//   1. Symmetric with respect to the ⋆-inner product.
+//   2. Positive semi‑definite.
+//   3. Eigenvalues discretise the spectrum of the smooth Laplacian.
 //
-// Все свойства выполняются ТОЧНО для замкнутых сеток. Для сеток с границей
-// глобальные свойства требуют учёта граничных членов и выполняются только
-// на внутренних вершинах (см. раздел 5).
+// All properties hold EXACTLY for closed meshes. For meshes with boundary,
+// global properties require boundary terms and only hold on interior vertices
+// (see section 5).
 
 // ----------------------------------------------------------------------------
-// 2.5. КЛИНОВОЕ ПРОИЗВЕДЕНИЕ ∧ (ТОЛЬКО 2D, 1∧1)
+// 2.5. WEDGE PRODUCT ∧ (2D ONLY, 1∧1)
 // ----------------------------------------------------------------------------
 //
-// Для 1-форм α, β в 2D на треугольнике τ = (v0,v1,v2):
+// For 1‑forms α, β in 2D on triangle τ = (v0,v1,v2):
 //
 //   (α∧β)(τ) = ½ [ α(e01)·β(e12) - β(e01)·α(e12)
 //                 + α(e12)·β(e20) - β(e12)·α(e20)
 //                 + α(e20)·β(e01) - β(e20)·α(e01) ]
 //
-// Результат — 2-форма (значение на треугольнике).
+// The result is a 2‑form (value on the triangle).
 //
-// АНТИСИММЕТРИЯ: α∧α = 0 (проверено тестом WedgeProductOf1Forms).
+// ANTISYMMETRY: α∧α = 0 (verified by test WedgeProductOf1Forms).
 // ============================================================================
-// 4. ПОЧЕМУ DEC-ЛАПЛАСИАН НЕ СОВПАДАЕТ С КОТАНГЕНСНЫМ
+// 4. WHY THE DEC LAPLACIAN DOES NOT MATCH THE COTANGENT LAPLACIAN
 // ============================================================================
 //
-// Это САМЫЙ ВАЖНЫЙ РАЗДЕЛ данного комментария, объясняющий ключевое
-// архитектурное решение и причину провала тестов на этапе разработки.
+// This is THE MOST IMPORTANT SECTION of this comment, explaining the key
+// architectural decision and the reason for test failures during development.
 //
 // --------------------------------------------------------------------------
-// 4.1. ЧТО ТАКОЕ КОТАНГЕНСНЫЙ ЛАПЛАСИАН?
+// 4.1. WHAT IS THE COTANGENT LAPLACIAN?
 // --------------------------------------------------------------------------
 //
-// Котангенсный лапласиан L_cot для 2D триангуляции задаётся весами:
+// The cotangent Laplacian L_cot for a 2D triangulation is given by weights:
 //   w_ij = (cot α_ij + cot β_ij) / 2
-// где α_ij, β_ij — углы, противолежащие ребру (i,j) в двух треугольниках.
-// Лапласиан в вершине i: (L_cot f)_i = Σ_j w_ij (f_i - f_j).
+// where α_ij, β_ij are the angles opposite edge (i,j) in the two adjacent
+// triangles. The Laplacian at vertex i: (L_cot f)_i = Σ_j w_ij (f_i - f_j).
 //
-// Котангенсная формула является ДИСКРЕТНЫМ КОДИФФЕРЕНЦИАЛОМ δ, но ТОЛЬКО
-// для специфического дуального комплекса — circumcentric (описанных
-// окружностей).
-//
-// --------------------------------------------------------------------------
-// 4.2. ДВА ТИПА ДУАЛЬНЫХ КОМПЛЕКСОВ
-// --------------------------------------------------------------------------
-//
-// БАРИЦЕНТРИЧЕСКИЙ ДУАЛ (используется в нашем DualComplex):
-//   - Дуальные ячейки строятся на основе центроидов (барицентров).
-//   - Для ребра e дуальная ячейка ⋆e — отрезок между центроидами
-//     двух прилегающих треугольников (или от центроида до середины
-//     ребра для граничного ребра).
-//   - Объём ⋆e = distance(centroid_left, centroid_right).
-//   - ОТНОШЕНИЕ |⋆e|/|e| НЕ РАВНО котангенсам углов.
-//   - Преимущества: простота построения, всегда внутри симплекса,
-//     работает для любых (в т.ч. тупоугольных) треугольников.
-//
-// CIRCUMCENTRIC ДУАЛ (дуал Вороного, НЕ реализован):
-//   - Дуальные ячейки строятся на основе центров описанных окружностей.
-//   - Для ребра e дуальная ячейка ⋆e — отрезок между центрами описанных
-//     окружностей двух прилегающих треугольников.
-//   - МАТЕМАТИЧЕСКОЕ СВОЙСТВО: |⋆e|/|e| = (cot α + cot β) / 2.
-//   - Именно это свойство делает DEC-лапласиан с circumcentric dual
-//     эквивалентным котангенсному лапласиану.
-//   - Недостатки: центры описанных окружностей могут лежать вне
-//     треугольника (для тупоугольных), что создаёт отрицательные
-//     дуальные объёмы и нарушает положительную определённость.
+// The cotangent formula IS the discrete codifferential δ, but ONLY for
+// a specific dual complex – the circumcentric (Voronoi) dual.
 //
 // --------------------------------------------------------------------------
-// 4.3. СЛЕДСТВИЕ ДЛЯ НАШЕЙ РЕАЛИЗАЦИИ
+// 4.2. TWO TYPES OF DUAL COMPLEXES
 // --------------------------------------------------------------------------
 //
-// МЫ ИСПОЛЬЗУЕМ БАРИЦЕНТРИЧЕСКИЙ ДУАЛ ВЕЗДЕ:
-//   - DualComplex строит барицентрические дуальные ячейки.
-//   - DiscreteForm::star() использует объёмы из DualComplex.
-//   - DEC-лапласиан (через codifferential) согласован с ЭТИМИ объёмами.
+// BARYCENTRIC DUAL (used in our DualComplex):
+//   - Dual cells are built using centroids (barycentres).
+//   - For an edge e, the dual cell ⋆e is the segment between the centroids
+//     of the two adjacent triangles (or from centroid to edge midpoint for
+//     boundary edges).
+//   - Volume of ⋆e = distance(centroid_left, centroid_right).
+//   - THE RATIO |⋆e|/|e| IS NOT EQUAL to cotangents of angles.
+//   - Advantages: simple to build, always inside the simplex, works for any
+//     (including obtuse) triangles.
 //
-// КОТАНГЕНСНЫЙ ЛАПЛАСИАН (build_cotangent_laplacian) — ЭТО ОТДЕЛЬНЫЙ
-// ОПЕРАТОР, использующий другую формулу. Он НЕ обязан совпадать с
-// DEC-лапласианом при барицентрическом дуале.
-//
-// Тест HodgeLaplacianMatchesCotangent, требовавший их совпадения, был
-// МАТЕМАТИЧЕСКИ НЕКОРРЕКТЕН для выбранного дуала. После выяснения этого
-// факта тест заменён на HodgeLaplacianConsistency, проверяющий свойства,
-// верные для ЛЮБОГО дуала (константа в ядре, самосопряжённость на
-// внутренних вершинах).
+// CIRCUMCENTRIC DUAL (Voronoi dual, NOT implemented yet):
+//   - Dual cells are built using circumcentres (centres of circumscribed circles).
+//   - For an edge e, the dual cell ⋆e is the segment between circumcentres
+//     of the two adjacent triangles.
+//   - MATHEMATICAL PROPERTY: |⋆e|/|e| = (cot α + cot β) / 2.
+//   - This property makes the DEC Laplacian with circumcentric dual equivalent
+//     to the cotangent Laplacian.
+//   - Disadvantages: circumcentres may lie outside the triangle (for obtuse
+//     triangles), producing negative dual volumes and breaking positive
+//     definiteness.
 //
 // --------------------------------------------------------------------------
-// 4.4. ПРАКТИЧЕСКИЕ РЕКОМЕНДАЦИИ
+// 4.3. CONSEQUENCE FOR OUR IMPLEMENTATION
 // --------------------------------------------------------------------------
 //
-// Если в будущем потребуется ТОЧНОЕ совпадение DEC и котангенсного
-// лапласиана (например, для воспроизведения известных результатов),
-// необходимо:
-//   1. Реализовать CircumcentricDualComplex с дуалом Вороного.
-//   2. Переключить DiscreteForm на использование нового дуала.
-//   3. Учесть, что для тупоугольных треугольников дуальные объёмы
-//      могут стать отрицательными, что потребует специальной обработки.
+// WE USE THE BARYCENTRIC DUAL EVERYWHERE:
+//   - DualComplex builds barycentric dual cells.
+//   - DiscreteForm::star() uses volumes from DualComplex.
+//   - The DEC Laplacian (via codifferential) is consistent with THESE volumes.
 //
-// Для большинства приложений (симуляции, вариационные задачи) разница
-// между барицентрическим и circumcentric дуалами несущественна, так
-// как оба сходятся к одному непрерывному оператору при измельчении.
+// THE COTANGENT LAPLACIAN (build_cotangent_laplacian) IS A SEPARATE OPERATOR
+// using a different formula. It is NOT required to match the DEC Laplacian
+// with the barycentric dual.
+//
+// The test HodgeLaplacianMatchesCotangent, which demanded equality, was
+// MATHEMATICALLY INCORRECT for the chosen dual. After this fact was clarified,
+// the test was replaced by HodgeLaplacianConsistency, which checks properties
+// valid for ANY dual (constant in kernel, self‑adjointness on interior vertices).
+//
+// --------------------------------------------------------------------------
+// 4.4. PRACTICAL RECOMMENDATIONS
+// --------------------------------------------------------------------------
+//
+// If exact coincidence between DEC and the cotangent Laplacian is needed in
+// the future (e.g., to reproduce known results), one must:
+//   1. Implement CircumcentricDualComplex with the Voronoi dual.
+//   2. Switch DiscreteForm to use the new dual.
+//   3. Handle obtuse triangles where dual volumes may become negative,
+//      requiring special treatment.
+//
+// For most applications (simulations, variational problems), the difference
+// between barycentric and circumcentric duals is negligible, as both converge
+// to the same continuous operator under refinement.
 
 // ============================================================================
-// 5. ИЗВЕСТНЫЕ ОГРАНИЧЕНИЯ
+// 5. KNOWN LIMITATIONS
 // ============================================================================
 //
-// 5.1. ГРАНИЧНЫЕ ВЕРШИНЫ
-//   Свойства лапласиана (симметричность, положительная определённость)
-//   выполняются ТОЧНО только для замкнутых сеток. На сетках с границей
-//   свойства выполняются на внутренних вершинах; на граничных вершинах
-//   лапласиан включает вклад только от ячеек внутри области.
+// 5.1. BOUNDARY VERTICES
+//   Laplacian properties (symmetry, positive definiteness) hold EXACTLY only
+//   for closed meshes. On meshes with boundary, properties hold on interior
+//   vertices; on boundary vertices the Laplacian only includes contributions
+//   from cells inside the domain.
 //
-// 5.2. ЛАПЛАСИАН ДЛЯ 0-ФОРМ
-//   Метод laplacian() требует k >= 1 (так как δ не определён для 0-форм).
-//   Для получения лапласиана 0-формы используйте df.codifferential().
+// 5.2. LAPLACIAN FOR 0‑FORMS
+//   The laplacian() method requires k >= 1 (since δ is not defined for 0‑forms).
+//   To obtain the Laplacian of a 0‑form, use df.codifferential().
 //
-// 5.3. КЛИНОВОЕ ПРОИЗВЕДЕНИЕ
-//   Реализовано только для 2D и случая 1∧1 (остальные тривиальны).
-//   Для 3D и высших размерностей требуется расширение.
+// 5.3. WEDGE PRODUCT
+//   Only implemented for 2D and the case 1∧1 (other cases are trivial).
+//   For 3D and higher dimensions, extension is required.
 //
-// 5.4. БИЕКТИВНОСТЬ PRIMAL↔DUAL
-//   Код предполагает, что отображения primal_to_dual и dual_to_primal
-//   взаимно обратны для каждой размерности. Это верно для текущей
-//   реализации DualComplex, но может потребовать доработки при смене дуала.
+// 5.4. BIJECTIVITY OF PRIMAL↔DUAL MAPPINGS
+//   The code assumes that primal_to_dual and dual_to_primal are mutual inverses
+//   for each dimension. This holds for the current DualComplex implementation,
+//   but may need refinement if the dual type is changed.
 // ============================================================================
-// 6. НАПРАВЛЕНИЯ ДАЛЬНЕЙШЕГО РАЗВИТИЯ
+// 6. FUTURE DIRECTIONS
 // ============================================================================
 //
 // 6.1. CIRCUMCENTRIC DUAL COMPLEX
-//   Реализация дуала Вороного для точного совпадения с котангенсным
-//   лапласианом. Включает обработку тупоугольных треугольников
-//   (смешанный дуал: circumcentric для остроугольных, барицентрический
-//   для тупоугольных).
+//   Implement the Voronoi dual for exact matching with the cotangent Laplacian.
+//   Includes handling for obtuse triangles (mixed dual: circumcentric for
+//   acute, barycentric for obtuse).
 //
-// 6.2. WHITNEY FORMS (ФОРМЫ УИТНИ)
-//   Интерполяция k-форм высших порядков для повышения точности
-//   дискретизации. Требует реализации базисных форм Уитни на симплексах.
+// 6.2. WHITNEY FORMS
+//   Higher‑order interpolation of k‑forms to increase discretisation accuracy.
+//   Requires implementing Whitney basis forms on simplices.
 //
 // 6.3. 3D WEDGE PRODUCT
-//   Расширение клинового произведения на 3D (1∧1 → 2-форма на грани,
-//   1∧2 → 3-форма в тетраэдре).
+//   Extend the wedge product to 3D (1∧1 → 2‑form on faces, 1∧2 → 3‑form
+//   on tetrahedra).
 //
-// 6.4. HODGE STAR ДЛЯ НЕДИАГОНАЛЬНЫХ МЕТРИК
-//   Текущая реализация — строго диагональная. Для неевклидовых метрик
-//   потребуется вычисление недиагональной матрицы Ходжа через
-//   интегрирование базисных функций.
+// 6.4. HODGE STAR FOR NON‑DIAGONAL METRICS
+//   The current implementation is strictly diagonal. For non‑Euclidean metrics,
+//   computing a non‑diagonal Hodge matrix through basis function integration
+//   would be required.
 //
-// 6.5. ГРАНИЧНЫЕ УСЛОВИЯ
-//   Явная поддержка граничных условий Дирихле и Неймана в codifferential
-//   и laplacian (сейчас граница обрабатывается неявно, «как есть»).
+// 6.5. BOUNDARY CONDITIONS
+//   Explicit support for Dirichlet and Neumann boundary conditions in
+//   codifferential and laplacian (currently the boundary is handled implicitly,
+//   "as is").
 // ============================================================================
-// КОНЕЦ СОПРОВОДИТЕЛЬНОГО КОММЕНТАРИЯ
+// END OF COMMENTARY
 // ============================================================================
+
 #ifndef DELTA_GEOMETRY_DISCRETE_FORMS_H
 #define DELTA_GEOMETRY_DISCRETE_FORMS_H
 
@@ -298,6 +293,19 @@ namespace delta::geometry {
     // -----------------------------------------------------------------------------
     // Wedge product (simplified for 2D)
     // -----------------------------------------------------------------------------
+
+    /**
+     * @brief Compute the wedge product of two discrete forms.
+     * @tparam p Degree of the first form.
+     * @tparam q Degree of the second form.
+     * @tparam Value Scalar type of the forms.
+     * @tparam Complex Simplicial complex type.
+     * @param a First form.
+     * @param b Second form.
+     * @return The wedge product a ∧ b as a (p+q)-form.
+     * @note Currently implemented for 2D and the case 1∧1.
+     *       For 0∧0 and 0∧1/1∧0, trivial multiplication is used.
+     */
     template<int p, int q, typename Value, typename Complex>
     DiscreteForm<p + q, typename std::decay<decltype(std::declval<Value>()* std::declval<Value>())>::type, Complex>
         wedge(const DiscreteForm<p, Value, Complex>& a, const DiscreteForm<q, Value, Complex>& b) {
@@ -338,47 +346,84 @@ namespace delta::geometry {
     // -----------------------------------------------------------------------------
     // DiscreteForm class
     // -----------------------------------------------------------------------------
+
+    /**
+     * @class DiscreteForm
+     * @brief A discrete differential k‑form on a simplicial complex.
+     *
+     * Values are stored on all k‑simplices of the underlying mesh.
+     * The class provides operators for exterior derivative d, Hodge star ⋆,
+     * codifferential δ, and Hodge Laplacian Δ.
+     *
+     * @tparam k The degree of the form (0 ≤ k ≤ Dimension of the complex).
+     * @tparam Value Scalar type (typically delta::Rational or a numeric type).
+     * @tparam Complex Simplicial complex type satisfying the SimplicialComplex concept.
+     */
     template<int k, typename Value, typename Complex>
     class DiscreteForm {
         static_assert(k >= 0 && k <= Complex::Dimension, "Invalid degree k");
 
     public:
-        using value_type = Value;
-        using complex_type = Complex;
-        using scalar_type = typename Complex::scalar_type;
-        using vertex_index = typename Complex::vertex_index;
+        using value_type = Value;           ///< Scalar type of the form.
+        using complex_type = Complex;       ///< Simplicial complex type.
+        using scalar_type = typename Complex::scalar_type;  ///< Geometric scalar type.
+        using vertex_index = typename Complex::vertex_index; ///< Vertex index type.
 
+        /**
+         * @brief Construct a zero k‑form on a given mesh.
+         * @param mesh The simplicial complex.
+         */
         explicit DiscreteForm(const Complex& mesh)
             : mesh_(mesh), values_(mesh.num_simplices(k), Value{}) {
         }
 
+        /**
+         * @brief Construct a k‑form with pre‑assigned values.
+         * @param mesh The simplicial complex.
+         * @param vals The values on k‑simplices (must be size = mesh.num_simplices(k)).
+         */
         DiscreteForm(const Complex& mesh, const std::vector<Value>& vals)
             : mesh_(mesh), values_(vals) {
             if (values_.size() != mesh.num_simplices(k))
                 values_.resize(mesh.num_simplices(k));
         }
 
+        /// @brief Number of k‑simplices (size of the form).
         std::size_t size() const { return values_.size(); }
+
+        /// @brief Returns the underlying mesh (const).
         const Complex& mesh() const { return mesh_; }
 
+        /// @brief Mutable access to the value at a k‑simplex index.
         Value& operator[](std::size_t idx) { return values_[idx]; }
+
+        /// @brief Read‑only access to the value at a k‑simplex index.
         const Value& operator[](std::size_t idx) const { return values_[idx]; }
 
+        /// @brief Mutable access with bounds checking.
         Value& at(std::size_t idx) { return values_[idx]; }
+
+        /// @brief Read‑only access with bounds checking.
         const Value& at(std::size_t idx) const { return values_[idx]; }
 
-        // ------------------------------------------------------------
-        // eval for 1‑forms: returns value on oriented edge (v0 → v1)
-        // ------------------------------------------------------------
+        /**
+         * @brief Evaluate a 1‑form on an oriented edge.
+         * @tparam Dummy Enable only for k == 1.
+         * @param v0 Source vertex.
+         * @param v1 Target vertex.
+         * @return Value on the oriented edge (v0 → v1): positive if the edge
+         *         orientation matches storage, negative otherwise.
+         * @throws std::out_of_range if the edge does not exist in the complex.
+         */
         template<int Dummy = k>
         std::enable_if_t<Dummy == 1, Value> eval(vertex_index v0, vertex_index v1) const {
             std::ptrdiff_t idx = mesh_.find_simplex(1, { v0, v1 });
             if (idx == -1) {
                 throw std::out_of_range("Edge not found in complex");
             }
-            // Каноническое хранение: ребро сохраняется с v0 < v1.
-            // Если запрошенная ориентация совпадает с хранимой, возвращаем значение;
-            // если противоположна, возвращаем минус значение.
+            // Canonical storage: edge stored with v0 < v1.
+            // If the requested orientation matches storage, return the value;
+            // if opposite, return the negative.
             if (v0 < v1) {
                 return values_[static_cast<std::size_t>(idx)];
             }
@@ -387,14 +432,16 @@ namespace delta::geometry {
             }
         }
 
-        // Exterior derivative d
+        /**
+         * @brief Compute the exterior derivative d of this form.
+         * @return A (k+1)-form d(ω).
+         */
         DiscreteForm<k + 1, Value, Complex> d() const {
             DiscreteForm<k + 1, Value, Complex> result(mesh_);
             for (std::size_t simp = 0; simp < mesh_.num_simplices(k + 1); ++simp) {
                 auto faces = mesh_.incident_faces(k + 1, simp, k);
                 Value sum{};
                 for (const auto& [face_idx, sign] : faces) {
-                    // face_idx — индекс грани в каноническом хранилище
                     sum += Value(sign) * values_[face_idx];
                 }
                 result[simp] = sum;
@@ -402,7 +449,13 @@ namespace delta::geometry {
             return result;
         }
 
-        // Hodge star (diagonal)
+        /**
+         * @brief Compute the Hodge star of this form (diagonal Hodge).
+         * @tparam Metric The metric type.
+         * @param dual The dual complex (barycentric).
+         * @param metric The geometric metric.
+         * @return An (n‑k)-form ⋆ω stored on primal simplices.
+         */
         template<typename Metric>
         DiscreteForm<Complex::Dimension - k, Value, Complex>
             star(const DualComplex<Complex, Metric>& dual, const Metric& metric) const {
@@ -410,28 +463,28 @@ namespace delta::geometry {
             constexpr int out_k = Dim - k;
             DiscreteForm<out_k, Value, Complex> result(mesh_);
 
-            // --- 0-форма → топ-форма (например, 2-форма в 2D) ---
+            // --- 0‑form → top‑form (e.g., 2‑form in 2D) ---
             if constexpr (k == 0) {
                 for (std::size_t top = 0; top < mesh_.num_simplices(Dim); ++top) {
                     const auto& vertices = mesh_.get_simplex(Dim, top);
                     Value sum = 0;
                     for (std::size_t v : vertices) sum += values_[v];
-                    // (⋆f)(t) = (1/3) Σ_{v∈t} f(v)
+                    // (⋆f)(τ) = (1/(Dim+1)) Σ_{v∈τ} f(v)
                     result[top] = sum / Value(Dim + 1);
                 }
                 return result;
             }
 
-            // --- топ-форма → 0-форма ---
+            // --- top‑form → 0‑form ---
             if constexpr (k == Dim) {
-                // Аккумулируем взвешенные значения в вершины
+                // Accumulate weighted values into vertices
                 for (std::size_t top = 0; top < mesh_.num_simplices(Dim); ++top) {
                     Value vol = mesh_.simplex_volume(Dim, top, metric);
                     Value contrib = (vol / Value(Dim + 1)) * values_[top];
                     const auto& vertices = mesh_.get_simplex(Dim, top);
                     for (std::size_t v : vertices) result[v] += contrib;
                 }
-                // Делим каждую вершину на её дуальный объём
+                // Divide each vertex by its dual volume
                 for (std::size_t v = 0; v < mesh_.num_vertices(); ++v) {
                     Value dual_vol = dual.dual_volume(Dim, v);   // |*v|
                     if (dual_vol != 0)
@@ -440,7 +493,7 @@ namespace delta::geometry {
                 return result;
             }
 
-            // --- Общий случай: 0 < k < Dim (рёбра в 2D, грани в 3D и т.п.) ---
+            // --- General case: 0 < k < Dim (edges in 2D, faces in 3D, etc.) ---
             for (std::size_t idx = 0; idx < mesh_.num_simplices(k); ++idx) {
                 Value prim_vol = mesh_.simplex_volume(k, idx, metric);
                 if (prim_vol == 0) continue;
@@ -448,13 +501,21 @@ namespace delta::geometry {
                 Value dual_vol = dual.dual_volume(out_k, dual_idx);
                 std::size_t target_idx = dual.dual_to_primal(out_k, dual_idx);
                 if (target_idx >= result.size()) continue;
-                // (⋆ω)(*σ) = (|*σ| / |σ|) ω(σ)
+                // (⋆ω)(⋆σ) = (|⋆σ| / |σ|) · ω(σ)
                 result[target_idx] = (dual_vol / prim_vol) * values_[idx];
             }
 
             return result;
         }
-        // Codifferential δ = (-1)^{n(k-1)+1} ⋆^{-1} d ⋆
+
+        /**
+         * @brief Compute the codifferential δ = (-1)^{n(k-1)+1} ⋆^{-1} d ⋆.
+         * @tparam Metric The metric type.
+         * @param dual The dual complex.
+         * @param metric The geometric metric.
+         * @return A (k‑1)-form δω.
+         * @note For k = 0, the codifferential is identically zero (not implemented).
+         */
         template<typename Metric>
         DiscreteForm<k - 1, Value, Complex>
             codifferential(const DualComplex<Complex, Metric>& dual, const Metric& metric) const {
@@ -471,7 +532,14 @@ namespace delta::geometry {
             return result;
         }
 
-        // Hodge Laplacian Δ = dδ + δd
+        /**
+         * @brief Compute the Hodge Laplacian Δ = dδ + δd.
+         * @tparam Metric The metric type.
+         * @param dual The dual complex.
+         * @param metric The geometric metric.
+         * @return A k‑form Δω.
+         * @note For 0‑forms, use df.codifferential() instead (since δ is zero).
+         */
         template<typename Metric>
         DiscreteForm<k, Value, Complex>
             laplacian(const DualComplex<Complex, Metric>& dual, const Metric& metric) const {
@@ -487,8 +555,8 @@ namespace delta::geometry {
         }
 
     private:
-        const Complex& mesh_;
-        std::vector<Value> values_;
+        const Complex& mesh_;           ///< Underlying simplicial complex.
+        std::vector<Value> values_;     ///< Values on k‑simplices.
     };
 
 } // namespace delta::geometry

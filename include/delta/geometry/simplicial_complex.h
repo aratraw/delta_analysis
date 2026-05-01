@@ -2,6 +2,83 @@
 // Licensed under PolyForm Small Business License 1.0.0
 
 //include/delta/geometry/simplicial_complex.h
+// ============================================================================
+// SIMPLICIAL COMPLEX – VERTICES, EDGES, TRIANGLES, TETRAHEDRA
+// ============================================================================
+//
+// This file defines the SimplicialComplex class – a container for simplicial
+// meshes in 2D and 3D. It stores all simplices up to the given dimension,
+// provides incidence queries, geometric calculations with arbitrary metrics,
+// and barycentric subdivision.
+//
+// ----------------------------------------------------------------------------
+// KEY FEATURES
+// ----------------------------------------------------------------------------
+//
+// 1. **Vertex storage** – points with coordinates of type Coord (default Rational).
+// 2. **Simplex storage** – edges (1‑simplices), triangles (2‑simplices),
+//    tetrahedra (3‑simplices) stored with canonical orientation (sorted vertices).
+// 3. **Incidence queries** – incident_faces(top_dim, idx, low_dim) returns
+//    the boundary simplices of codimension 1 with orientation signs (-1)^i.
+// 4. **Geometric queries** – edge_length, triangle_area, tetrahedron_volume
+//    work with any metric that satisfies the Metric concept.
+// 5. **Barycentric subdivision** – produces a refined complex where each
+//    simplex is divided at its barycentre. Returns the new complex and a
+//    mapping from original simplices to the set of covering simplices.
+// 6. **Concept compliance** – satisfies OrderedGrid and SimplicialComplex
+//    concepts, allowing use in generic algorithms (discrete forms, DEC, etc.).
+//
+// ----------------------------------------------------------------------------
+// ORIENTATION AND CANONICAL STORAGE
+// ----------------------------------------------------------------------------
+//
+// - Vertices are stored as they are added.
+// - Edges are stored with the smaller vertex index first.
+// - Triangles and tetrahedra are stored with vertex indices sorted
+//   (lexicographically). This simplifies lookups but loses orientation.
+//   For orientation‑sensitive operations (incident_faces), the complex
+//   reconstructs orientation using the original order of vertices as they
+//   appear in the simplex (the order in which they were added).
+//
+// ----------------------------------------------------------------------------
+// GEOMETRY WITH ARBITRARY METRICS
+// ----------------------------------------------------------------------------
+//
+// The complex itself does not assume Euclidean geometry. All distance/area/
+// volume computations are performed through the supplied metric object.
+// This allows the same mesh to be used with different regulative ideas
+// (e.g., Euclidean, p‑adic, graph metric, product metrics).
+//
+// For area and volume, the metric must be compatible with the geometric
+// interpretation (e.g., Euclidean for Heron's formula). The library does
+// not enforce this – it is the user's responsibility.
+//
+// ----------------------------------------------------------------------------
+// BARYCENTRIC SUBDIVISION
+// ----------------------------------------------------------------------------
+//
+// The algorithm:
+//   1. Copy all original vertices.
+//   2. For each edge, add its midpoint.
+//   3. For each triangle, add its centroid.
+//   4. Subdivide each triangle into 6 smaller triangles by connecting
+//      vertices, edge midpoints, and the centroid.
+//   5. For 3D, the same principle applies (tetrahedra → smaller tetrahedra).
+//
+// The subdivision map allows tracing which fine simplices originated from
+// a given coarse simplex – essential for multigrid and hierarchical methods.
+//
+// ----------------------------------------------------------------------------
+// TODO: 3D SUBDIVISION AND EDGE NEIGHBORS
+// ----------------------------------------------------------------------------
+//
+// - Barycentric subdivision for tetrahedra (3D) is partially implemented but
+//   not yet complete.
+// - edge_neighbors_2d is available only for 2D; a 3D analogue (face_neighbors)
+//   would be useful for volume mesh processing.
+// - The edge_to_triangles cache is built lazily when first requested.
+//
+// ============================================================================
 #pragma once
 
 #include <vector>
@@ -18,7 +95,7 @@
 #include "delta/core/rational.h"
 #include "delta/core/grid_concept.h"
 #include "delta/core/regulative_idea.h"
-#include "delta/geometry/constructive_core.h"  // ДОБАВЛЕНО для Vector
+#include "delta/geometry/constructive_core.h"// for our Vector type
 
 namespace delta::geometry {
     using namespace delta;

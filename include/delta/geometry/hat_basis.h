@@ -147,6 +147,20 @@
 
 namespace delta::geometry {
 
+    /**
+     * @class HatBasis
+     * @brief Piecewise linear Lagrange basis (hat functions) on a simplicial complex.
+     *
+     * Hat (or “tent”) functions φ_v are continuous, piecewise linear functions
+     * associated with each vertex v. They satisfy φ_v(v) = 1 and φ_v(other vertices) = 0.
+     * On each top‑dimensional simplex, φ_v coincides with the barycentric coordinate λ_v.
+     *
+     * This class provides evaluation of φ_v(p) and its gradient ∇φ_v(p) at any point p.
+     * All computations use oriented (signed) areas/volumes, ensuring correct signs
+     * and consistent interpolation.
+     *
+     * @tparam Complex Simplicial complex type (2D or 3D).
+     */
     template<typename Complex>
     class HatBasis {
     public:
@@ -158,12 +172,23 @@ namespace delta::geometry {
         static constexpr int Dim = point_type::RowsAtCompileTime;
         static_assert(Dim == 2 || Dim == 3, "HatBasis only for 2D or 3D");
 
+        /**
+         * @brief Construct the hat basis for a given mesh.
+         * @param mesh The simplicial complex (triangles in 2D, tetrahedra in 3D).
+         * @param eps Tolerance for inside/outside tests (default: delta::default_eps()).
+         */
         explicit HatBasis(const Complex& mesh,
             const scalar_type& eps = delta::default_eps())
             : mesh_(mesh), eps_(eps) {
             precompute_gradients();
         }
 
+        /**
+         * @brief Evaluate φ_v(p) – the hat function value at point p.
+         * @param v Vertex index.
+         * @param p Point coordinates (must be within the mesh).
+         * @return φ_v(p), or 0 if p is not inside an incident simplex.
+         */
         scalar_type evaluate(vertex_index v, const point_type& p) const {
             auto loc = locate_point(p);
             if (!loc) return scalar_type(0);
@@ -177,6 +202,12 @@ namespace delta::geometry {
             return scalar_type(0);
         }
 
+        /**
+         * @brief Evaluate ∇φ_v(p) – the gradient of the hat function at point p.
+         * @param v Vertex index.
+         * @param p Point coordinates (must be within the mesh).
+         * @return ∇φ_v(p) as a point_type (vector), or zero vector if p not inside.
+         */
         point_type gradient(vertex_index v, const point_type& p) const {
             auto loc = locate_point(p);
             if (!loc) return point_type::Zero();
@@ -197,6 +228,12 @@ namespace delta::geometry {
             return point_type::Zero();
         }
 
+        /**
+         * @brief Interpolate vertex‑based scalar values at point p.
+         * @param p Point coordinates.
+         * @param vertex_values Values at vertices (size = mesh.num_vertices()).
+         * @return Σ_i φ_{v_i}(p) * vertex_values[v_i].
+         */
         scalar_type interpolate(const point_type& p, const std::vector<scalar_type>& vertex_values) const {
             auto loc = locate_point(p);
             if (!loc) return scalar_type(0);
@@ -211,6 +248,12 @@ namespace delta::geometry {
             return result;
         }
 
+        /**
+         * @brief Find the simplex containing point p and compute its barycentric coordinates.
+         * @param p Point coordinates.
+         * @return Optional pair: ((dim, simplex_index), barycentric_coordinates)
+         *         Returns nullopt if p is not inside any simplex (within tolerance eps_).
+         */
         std::optional<std::pair<std::pair<int, std::size_t>, std::vector<scalar_type>>>
             locate_point(const point_type& p) const {
             const int top_dim = Dim;
@@ -225,6 +268,7 @@ namespace delta::geometry {
                     }
                 }
                 if (inside) {
+                    // Clamp coordinates to [0,1] within epsilon tolerance
                     for (auto& coord : bary) {
                         if (coord < 0 && coord > -eps_) coord = 0;
                         if (coord > 1 && coord < 1 + eps_) coord = 1;
@@ -239,9 +283,16 @@ namespace delta::geometry {
         const Complex& mesh_;
         scalar_type eps_;
 
+        // Precomputed gradients for each top-dimensional simplex.
+        // For 2D: each entry is a 2x3 matrix whose i-th column is ∇φ_{vertex_i}.
+        // For 3D: each entry is a 3x4 matrix.
         std::vector<Eigen::Matrix<scalar_type, Dim, Dim + 1>> grad2d_;
         std::vector<Eigen::Matrix<scalar_type, Dim, Dim + 1>> grad3d_;
 
+        /**
+         * @brief Precompute gradients of all hat functions on all top‑dimensional simplices.
+         * Uses signed area/volume to ensure correct orientation.
+         */
         void precompute_gradients() {
             if constexpr (Dim == 2) {
                 grad2d_.resize(mesh_.num_triangles());
@@ -257,16 +308,19 @@ namespace delta::geometry {
                     scalar_type area = cross_val / 2;
                     if (area == 0) continue;
 
+                    // ∇λ0 = (v2 - v1)⊥ / (2 * area)   with ⊥ = (dy, -dx)
                     vector_type v2v1 = v2 - v1;
                     point_type grad0;
-                    grad0 << -v2v1.y(), v2v1.x();      // поворот на +90°
+                    grad0 << -v2v1.y(), v2v1.x();
                     grad0 /= (2 * area);
 
+                    // ∇λ1 = (v0 - v2)⊥ / (2 * area)
                     vector_type v0v2 = v0 - v2;
                     point_type grad1;
                     grad1 << -v0v2.y(), v0v2.x();
                     grad1 /= (2 * area);
 
+                    // ∇λ2 = (v1 - v0)⊥ / (2 * area)
                     vector_type v1v0 = v1 - v0;
                     point_type grad2;
                     grad2 << -v1v0.y(), v1v0.x();
@@ -293,12 +347,18 @@ namespace delta::geometry {
                     scalar_type vol = v10.dot(v20.cross(v30)) / 6;
                     if (vol == 0) continue;
 
+                    // ∇λ0 = - (v2 - v1) × (v3 - v1) / (6 * vol)
                     vector_type v21 = v2 - v1;
                     vector_type v31 = v3 - v1;
-
                     vector_type grad0_vec = -v21.cross(v31) / (6 * vol);
+
+                    // ∇λ1 = (v2 - v0) × (v3 - v0) / (6 * vol)
                     vector_type grad1_vec = v20.cross(v30) / (6 * vol);
+
+                    // ∇λ2 = (v1 - v0) × (v3 - v0) / (6 * vol)
                     vector_type grad2_vec = v10.cross(v30) / (6 * vol);
+
+                    // ∇λ3 = - (v1 - v0) × (v2 - v0) / (6 * vol)
                     vector_type grad3_vec = -v10.cross(v20) / (6 * vol);
 
                     grad3d_[tet].resize(Dim, 4);
@@ -310,18 +370,27 @@ namespace delta::geometry {
             }
         }
 
+        /**
+         * @brief Compute barycentric coordinates of point p relative to a set of vertices.
+         * @param p Point coordinates.
+         * @param vertices Vertex indices of the simplex (dimension: Dim+1).
+         * @return Vector of barycentric coordinates (size = Dim+1).
+         * @note Uses oriented (signed) areas/volumes for correct sign.
+         */
         std::vector<scalar_type> barycentric_coordinates(const point_type& p, const std::vector<vertex_index>& vertices) const {
             if constexpr (Dim == 2) {
                 const point_type& v0 = mesh_.vertex(vertices[0]);
                 const point_type& v1 = mesh_.vertex(vertices[1]);
                 const point_type& v2 = mesh_.vertex(vertices[2]);
 
+                // Oriented area of triangle (a,b,c) = (b-a) × (c-a) (scalar)
                 auto orient = [](const point_type& a, const point_type& b, const point_type& c) -> scalar_type {
                     return (b.x() - a.x()) * (c.y() - a.y()) - (b.y() - a.y()) * (c.x() - a.x());
                     };
                 scalar_type area_total = orient(v0, v1, v2);
                 if (area_total == 0) return { 0, 0, 0 };
 
+                // Barycentric coordinates as ratios of oriented areas
                 scalar_type area0 = orient(p, v1, v2);
                 scalar_type area1 = orient(v0, p, v2);
                 scalar_type area2 = orient(v0, v1, p);
@@ -333,6 +402,7 @@ namespace delta::geometry {
                 const point_type& v2 = mesh_.vertex(vertices[2]);
                 const point_type& v3 = mesh_.vertex(vertices[3]);
 
+                // Signed volume of tetrahedron (a,b,c,d)
                 auto signed_vol = [](const point_type& a, const point_type& b,
                     const point_type& c, const point_type& d) -> scalar_type {
                         vector_type ab = b - a;
@@ -343,6 +413,7 @@ namespace delta::geometry {
                 scalar_type vol_total = signed_vol(v0, v1, v2, v3);
                 if (vol_total == 0) return { 0, 0, 0, 0 };
 
+                // Barycentric coordinates as ratios of signed volumes
                 scalar_type vol0 = signed_vol(p, v1, v2, v3);
                 scalar_type vol1 = signed_vol(v0, p, v2, v3);
                 scalar_type vol2 = signed_vol(v0, v1, p, v3);

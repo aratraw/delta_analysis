@@ -2,19 +2,69 @@
 // Licensed under PolyForm Small Business License 1.0.0
 
 // include/delta/geometry/product_regulative.h
-#pragma once
+// ============================================================================
+// PRODUCT OF REGULATIVE IDEAS AND DELTA PATHS
+// ============================================================================
+//
+// This header provides tools for constructing higher‑dimensional regulative
+// structures from 1‑D components.  It defines:
+//   - ProductRegulativeIdea   : product of two regulative ideas of the SAME type.
+//   - PowerRegulativeIdea     : N copies of the same regulative idea (for ℝⁿ).
+//   - ProductDeltaPath        : product of several delta paths (all of the same type).
+//
+// ----------------------------------------------------------------------------
+// MATHEMATICAL BACKGROUND
+// ----------------------------------------------------------------------------
+// A regulative idea consists of an address set, a betweenness relation, and a
+// metric.  The product of two such ideas (with identical underlying types) is
+// defined on the Cartesian product of addresses.  Betweenness is required to
+// hold coordinate‑wise, and the metric is the max‑norm (Chebyshev distance).
+//
+// Similarly, a delta path is a refinement sequence over a one‑dimensional
+// grid.  The product path yields a regular product grid in higher dimensions.
+// All component paths must be of the same type – mixing, e.g., matrix‑valued
+// paths with binary‑string paths is mathematically unsound and forbidden.
+//
+// ----------------------------------------------------------------------------
+// ⚠️ CRITICAL REQUIREMENT ⚠️
+//   - ProductRegulativeIdea requires both operand ideas to be of the SAME type.
+//   - ProductDeltaPath requires all component paths to be of the SAME type.
+//   - Mixing different regulative idea types or path types is not allowed.
+//
+// ============================================================================
 
-/**
- * @file product_regulative.h
- * @brief Произведение регулятивных идей и путей.
- *
- * ⚠️ ВАЖНО ⚠️
- * ВСЕ РЕГУЛЯТИВНЫЕ ИДЕИ В ОДНОМ ПРОИЗВЕДЕНИИ ДОЛЖНЫ БЫТЬ ОДНОГО ТИПА!
- * - В ProductRegulativeIdea типы RI1 и RI2 обязаны совпадать.
- * - В ProductDeltaPath все пути обязаны быть одного типа.
- *
- * НЕ ДОПУСКАЕТСЯ комбинирование идей на матрицах и бинарных строках в одном произведении.
- */
+// ============================================================================
+// TODO: REFACTORING WITH PHILOSOPHICAL TURN FOR FIRST-CLASS CITIZENSHIP 
+// OF NON-STANDARD ANALYSES - UNIFY PRODUCT AND POWER, LIFT TYPE RESTRICTIONS
+// ============================================================================
+//
+// 1. EXTEND PRODUCT TO N DIMENSIONS (VARIADIC)
+//    - Generalise `ProductRegulativeIdea` to accept any number of template
+//      arguments (RI1, RI2, ..., RIn).
+//    - Address type becomes a `std::tuple<Addr1, Addr2, ..., Addrn>.
+//    - Betweenness holds iff it holds for every coordinate (pack expansion).
+//    - Metric becomes the max‑norm over all coordinates:
+//        metric(tuple a, tuple b) = max_i( metric_i( get<i>(a), get<i>(b) ) ).
+//    - Remove the `static_assert` that forces all ideas to be of the same type.
+//
+// 2. KEEP `PowerRegulativeIdea` FOR THE HOMOGENEOUS CASE
+//    - When all dimensions share the EXACT SAME regulative idea, use
+//      `PowerRegulativeIdea<RI, N>` as an optimisation (address = std::array).
+//    - This is more efficient (stack‑allocated array, contiguous memory) and
+//      convenient for building ℝⁿ from ℝ.
+//
+// 3. RULES OF USE
+//    - For homogeneous products (identical idea per coordinate):
+//        PowerRegulativeIdea<MyIdea, 3>
+//    - For heterogeneous products (different ideas per coordinate):
+//        ProductRegulativeIdea<IdeaX, IdeaY, IdeaZ>
+//    - Both can be nested:
+//        ProductRegulativeIdea< PowerRegulativeIdea<A,2>, B, PowerRegulativeIdea<C,3> >
+// 4. PRIORITY: MEDIUM / LOW
+// 5. PATCH ALL THE USE-CASES ACCORDINGLY TO REFACTOR IF NEEDED.
+// ============================================================================
+
+#pragma once
 
 #include <tuple>
 #include <array>
@@ -28,23 +78,32 @@
 namespace delta::geometry {
 
     // -------------------------------------------------------------------------
-    // Вспомогательные шаблоны для комбинирования betweenness и metric
+    // Helper templates for combining betweenness and metric
     // -------------------------------------------------------------------------
 
     namespace detail {
 
         /**
-         * @brief Комбинированное отношение "между" для произведения двух идей.
+         * @brief Combined betweenness relation for the product of two regulative ideas.
          *
-         * Точка y находится между x и z тогда и только тогда, когда
-         * это выполняется для каждой координаты по отдельности.
+         * A point y lies between x and z iff on each coordinate separately it lies
+         * between the corresponding coordinates.
+         *
+         * @tparam B1 Betweenness type of the first idea.
+         * @tparam B2 Betweenness type of the second idea.
          */
         template<typename B1, typename B2>
         struct ProductBetweenness {
             ProductBetweenness() = default;
             ProductBetweenness(const B1& b1, const B2& b2) : b1_(b1), b2_(b2) {}
 
-            // Универсальный operator() - принимает ЛЮБЫЕ типы с .first и .second
+            /**
+             * @brief Evaluate betweenness on a pair of addresses.
+             * @tparam T1 First address type (must have .first, .second)
+             * @tparam T2 Second address type
+             * @tparam T3 Third address type
+             * @return true if the middle address lies between the other two in both coordinates.
+             */
             template<typename T1, typename T2, typename T3>
             bool operator()(const T1& x, const T2& y, const T3& z) const {
                 return b1_(x.first, y.first, z.first) &&
@@ -57,17 +116,24 @@ namespace delta::geometry {
         };
 
         /**
-         * @brief Комбинированная метрика для произведения двух идей.
+         * @brief Combined metric for the product of two regulative ideas.
          *
-         * Использует max-метрику: расстояние = max( distance1, distance2 ).
-         * Это естественный выбор для произведения метрических пространств.
+         * Uses the max metric: distance = max(distance1, distance2).
+         *
+         * @tparam M1 Metric type of the first idea.
+         * @tparam M2 Metric type of the second idea.
          */
         template<typename M1, typename M2>
         struct ProductMetric {
             ProductMetric() = default;
             ProductMetric(const M1& m1, const M2& m2) : m1_(m1), m2_(m2) {}
 
-            // Возвращаемый тип выводится автоматически
+            /**
+             * @brief Compute distance between two product addresses.
+             * @tparam T1 First address type (with .first, .second)
+             * @tparam T2 Second address type
+             * @return max( metric1(a1,b1), metric2(a2,b2) )
+             */
             template<typename T1, typename T2>
             auto operator()(const T1& a, const T2& b) const {
                 auto d1 = m1_(a.first, b.first);
@@ -79,8 +145,11 @@ namespace delta::geometry {
             M1 m1_;
             M2 m2_;
         };
+
         /**
-         * @brief Комбинированное отношение "между" для массива идей (n копий).
+         * @brief Combined betweenness relation for N copies of the same regulative idea.
+         * @tparam B Base betweenness type.
+         * @tparam N Number of dimensions.
          */
         template<typename B, std::size_t N>
         struct PowerBetweenness {
@@ -88,9 +157,12 @@ namespace delta::geometry {
             using result_type = bool;
 
             PowerBetweenness() = default;
-
             explicit PowerBetweenness(const B& b) : b_(b) {}
 
+            /**
+             * @brief Evaluate betweenness for arrays of addresses.
+             * @return true iff betweenness holds for every coordinate.
+             */
             bool operator()(const address_type& x,
                 const address_type& y,
                 const address_type& z) const {
@@ -106,9 +178,10 @@ namespace delta::geometry {
         };
 
         /**
-         * @brief Комбинированная метрика для массива идей (n копий).
-         *
-         * Использует max-метрику по всем координатам.
+         * @brief Combined metric for N copies of the same regulative idea.
+         * Uses max metric over all coordinates.
+         * @tparam M Base metric type.
+         * @tparam N Number of dimensions.
          */
         template<typename M, std::size_t N>
         struct PowerMetric {
@@ -116,9 +189,11 @@ namespace delta::geometry {
             using result_type = typename M::result_type;
 
             PowerMetric() = default;
-
             explicit PowerMetric(const M& m) : m_(m) {}
 
+            /**
+             * @brief Compute max distance over all coordinates.
+             */
             result_type operator()(const address_type& a,
                 const address_type& b) const {
                 result_type max_dist = 0;
@@ -137,26 +212,25 @@ namespace delta::geometry {
     } // namespace detail
 
     // -------------------------------------------------------------------------
-    // ProductRegulativeIdea - произведение двух регулятивных идей
+    // ProductRegulativeIdea – product of two regulative ideas
     // -------------------------------------------------------------------------
 
     /**
-     * @brief Произведение двух регулятивных идей.
+     * @class ProductRegulativeIdea
+     * @brief Product (Cartesian product) of two regulative ideas of the same type.
      *
-     * Объединяет две регулятивные идеи в одну, работающую с парами адресов.
-     * Адресом является std::pair<Addr1, Addr2>.
-     * Betweenness выполняется покоординатно.
-     * Метрика - максимум покоординатных расстояний (max-метрика).
+     * The resulting idea works on addresses that are std::pair<Addr1, Addr2>.
+     * Betweenness is evaluated coordinate‑wise; metric is the max metric.
      *
-     * @tparam RI1 Первая регулятивная идея
-     * @tparam RI2 Вторая регулятивная идея
+     * @tparam RI1 First regulative idea type.
+     * @tparam RI2 Second regulative idea type.
+     * @note Both RI1 and RI2 must be the same type.
      */
     template<typename RI1, typename RI2>
     class ProductRegulativeIdea {
         static_assert(std::is_same_v<RI1, RI2>,
-            "ProductRegulativeIdea: обе идеи должны быть одного типа");
+            "ProductRegulativeIdea: both ideas must be of the same type");
     public:
-        // Типы составляющих идей
         using idea1_type = RI1;
         using idea2_type = RI2;
         using address1_type = typename RI1::address_type;
@@ -166,48 +240,32 @@ namespace delta::geometry {
         using metric1_type = typename RI1::metric_type;
         using metric2_type = typename RI2::metric_type;
 
-        // Типы результата
         using address_type = std::pair<address1_type, address2_type>;
         using betweenness_type = detail::ProductBetweenness<betweenness1_type, betweenness2_type>;
         using metric_type = detail::ProductMetric<metric1_type, metric2_type>;
 
         /**
-         * @brief Конструктор от двух идей.
-         * @param ri1 Первая идея
-         * @param ri2 Вторая идея
+         * @brief Construct from two regulative ideas.
+         * @param ri1 First idea (default‑constructed if omitted).
+         * @param ri2 Second idea (default‑constructed if omitted).
          */
         ProductRegulativeIdea(const RI1& ri1 = RI1(), const RI2& ri2 = RI2())
             : ri1_(ri1), ri2_(ri2)
             , betweenness_(betweenness_type(ri1_.betweenness, ri2_.betweenness))
             , metric_(metric_type(ri1_.metric, ri2_.metric)) {
         }
-        /**
-         * @brief Доступ к комбинированному отношению betweenness.
-         */
-        const betweenness_type& betweenness() const {
-            return betweenness_;
-        }
 
-        /**
-         * @brief Доступ к комбинированной метрике.
-         */
-        const metric_type& metric() const {
-            return metric_;
-        }
+        /// @brief Access the combined betweenness relation.
+        const betweenness_type& betweenness() const { return betweenness_; }
 
-        /**
-         * @brief Доступ к первой идее.
-         */
-        const RI1& idea1() const {
-            return ri1_;
-        }
+        /// @brief Access the combined metric.
+        const metric_type& metric() const { return metric_; }
 
-        /**
-         * @brief Доступ ко второй идее.
-         */
-        const RI2& idea2() const {
-            return ri2_;
-        }
+        /// @brief Access the first regulative idea.
+        const RI1& idea1() const { return ri1_; }
+
+        /// @brief Access the second regulative idea.
+        const RI2& idea2() const { return ri2_; }
 
     private:
         RI1 ri1_;
@@ -217,17 +275,19 @@ namespace delta::geometry {
     };
 
     // -------------------------------------------------------------------------
-    // PowerRegulativeIdea - n копий одной регулятивной идеи
+    // PowerRegulativeIdea – N copies of a regulative idea
     // -------------------------------------------------------------------------
 
     /**
-     * @brief Степень регулятивной идеи (n копий).
+     * @class PowerRegulativeIdea
+     * @brief Regular power of a regulative idea (N copies).
      *
-     * Создаёт регулятивную идею для ℝⁿ из одной идеи для ℝ.
-     * Адресом является std::array<Addr, N>.
+     * Builds an idea for ℝⁿ from an idea for ℝ. The address type becomes
+     * std::array<Addr, N>; betweenness and metric extend coordinate‑wise
+     * with the max metric.
      *
-     * @tparam RI Базовая регулятивная идея (для 1D)
-     * @tparam N Количество копий (размерность)
+     * @tparam RI Base regulative idea (for 1D).
+     * @tparam N Number of dimensions (positive, ≤10).
      */
     template<typename RI, int N>
     class PowerRegulativeIdea {
@@ -245,8 +305,8 @@ namespace delta::geometry {
         using metric_type = detail::PowerMetric<base_metric_type, N>;
 
         /**
-         * @brief Конструктор от базовой идеи.
-         * @param ri Базовая идея (по умолчанию сконструированная)
+         * @brief Construct from a base regulative idea.
+         * @param ri Base idea (default‑constructed if omitted).
          */
         explicit PowerRegulativeIdea(const RI& ri = RI())
             : ri_(ri)
@@ -254,26 +314,14 @@ namespace delta::geometry {
             , metric_(ri_.metric()) {
         }
 
-        /**
-         * @brief Доступ к комбинированному отношению betweenness.
-         */
-        const betweenness_type& betweenness() const {
-            return betweenness_;
-        }
+        /// @brief Access the combined betweenness relation.
+        const betweenness_type& betweenness() const { return betweenness_; }
 
-        /**
-         * @brief Доступ к комбинированной метрике.
-         */
-        const metric_type& metric() const {
-            return metric_;
-        }
+        /// @brief Access the combined metric.
+        const metric_type& metric() const { return metric_; }
 
-        /**
-         * @brief Доступ к базовой идее.
-         */
-        const RI& base_idea() const {
-            return ri_;
-        }
+        /// @brief Access the base regulative idea.
+        const RI& base_idea() const { return ri_; }
 
     private:
         RI ri_;
@@ -282,22 +330,25 @@ namespace delta::geometry {
     };
 
     // -------------------------------------------------------------------------
-    // ProductDeltaPath - произведение путей
+    // ProductDeltaPath – product of several delta paths
     // -------------------------------------------------------------------------
 
     /**
-     * @brief Произведение нескольких путей.
+     * @class ProductDeltaPath
+     * @brief Product (Cartesian product) of several delta paths.
      *
-     * Объединяет несколько путей в один, сеткой которого является
-     * декартово произведение сеток составляющих путей.
+     * All component paths must be of the same type. The resulting grid is the
+     * Cartesian product of the individual grids (ProductGrid).  The `advance`
+     * method simultaneously advances each component path using a function that
+     * maps an array of addresses (one from each path) to an array of new values.
      *
-     * @tparam Paths Типы путей (должны быть все одинаковы)
+     * @tparam Paths Types of the component delta paths (all must be identical).
      */
     template<typename... Paths>
     class ProductDeltaPath {
         static_assert(sizeof...(Paths) > 0, "ProductDeltaPath requires at least one path");
 
-        // Проверяем, что все пути одного типа
+        // Ensure all paths are of the same type.
         using FirstPath = std::tuple_element_t<0, std::tuple<Paths...>>;
         static_assert((std::is_same_v<FirstPath, Paths> && ...),
             "All paths in ProductDeltaPath must have the same type");
@@ -306,49 +357,48 @@ namespace delta::geometry {
         using Addr = typename FirstPath::addr_type;
         using Value = typename FirstPath::value_type;
 
-        // Тип функции для произведения путей: принимает массив адресов, возвращает массив значений
+        /// Function type for advancing the product: takes an array of addresses,
+        /// returns an array of corresponding new values.
         using Func = std::function<std::array<Value, sizeof...(Paths)>(const std::array<Addr, sizeof...(Paths)>&)>;
 
-        // Типы составляющих путей
         using path_types = std::tuple<Paths...>;
         static constexpr std::size_t num_paths = sizeof...(Paths);
 
-        // Тип сетки - произведение сеток (все одного типа)
+        /// Grid type is the product of the component grids (all of the same kind).
         using grid_type = delta::ProductGrid<typename FirstPath::grid_type, num_paths>;
 
-        // Тип метрики - берём из первого пути (все метрики одинаковы)
+        /// Metric type is taken from the first path (all metrics identical).
         using metric_type = typename FirstPath::metric_type;
 
         /**
-         * @brief Конструктор от набора путей.
-         * @param paths Кортеж путей
+         * @brief Construct from a list of delta paths.
+         * @param paths The component paths (forwarded).
          */
         explicit ProductDeltaPath(Paths... paths)
             : paths_(std::move(paths)...) {
         }
 
         /**
-         * @brief Конструктор от кортежа путей.
-         * @param paths Кортеж путей
+         * @brief Construct from a tuple of delta paths.
+         * @param paths A tuple containing the component paths.
          */
         explicit ProductDeltaPath(std::tuple<Paths...> paths)
             : paths_(std::move(paths)) {
         }
 
         /**
-         * @brief Выполнить один шаг подразделения для всех путей.
+         * @brief Perform one refinement step for all component paths simultaneously.
          *
-         * @param func Функция, которая принимает массив адресов (по одному из каждого пути)
-         *             и возвращает массив значений (по одному для каждого пути).
+         * The supplied function `func` receives an array of current addresses
+         * (one from each component path) and must produce an array of new values
+         * (one for each path).  Each component path is then advanced using the
+         * respective element as the new value for its next grid point.
+         *
+         * @param func The function that maps addresses to values.
          */
         void advance(const Func& func) {
-            // Получаем текущие адреса из всех путей
             auto current_addrs = current_addresses();
 
-            // Для каждого пути создаём функцию, которая:
-            // - принимает новый адрес для этого пути
-            // - формирует полный массив адресов (фиксируя остальные из current_addrs)
-            // - вызывает func и возвращает соответствующее значение
             std::apply([&](auto&... p) {
                 [&] <std::size_t... Is>(std::index_sequence<Is...>) {
                     (p.advance([&](const Addr& new_addr) -> Value {
@@ -361,7 +411,8 @@ namespace delta::geometry {
         }
 
         /**
-         * @brief Получить текущую сетку (произведение сеток всех путей).
+         * @brief Return the current product grid.
+         * @return A ProductGrid built from the current grids of the component paths.
          */
         grid_type current_grid() const {
             auto grids = std::apply([](const auto&... p) {
@@ -371,7 +422,7 @@ namespace delta::geometry {
         }
 
         /**
-         * @brief Получить текущие адреса из каждого пути (последний элемент сетки).
+         * @brief Return the current addresses (the last grid points of each component path).
          */
         std::array<Addr, num_paths> current_addresses() const {
             return std::apply([](const auto&... p) {
@@ -381,15 +432,17 @@ namespace delta::geometry {
                 }, paths_);
         }
 
-        /**
-         * @brief Получить текущий уровень подразделения.
-         */
+        /// @brief Return the current refinement level (same for all paths).
         std::size_t level() const {
             return std::get<0>(paths_).level();
         }
 
         /**
-         * @brief Вычислить максимальный разрыв в метрике.
+         * @brief Compute the maximum gap between consecutive grid points
+         *        according to the given metric.
+         * @tparam ExtMetric Type of the metric (must be callable on two grid points).
+         * @param metric The metric to use.
+         * @return The maximum distance between neighbours.
          */
         template<typename ExtMetric>
         auto max_gap(const ExtMetric& metric) const {
@@ -408,30 +461,22 @@ namespace delta::geometry {
             return max_d;
         }
 
-        /**
-         * @brief Доступ к кортежу путей.
-         */
-        const std::tuple<Paths...>& paths() const {
-            return paths_;
-        }
+        /// @brief Access the tuple of component paths.
+        const std::tuple<Paths...>& paths() const { return paths_; }
 
-        /**
-         * @brief Доступ к метрике первого пути.
-         */
-        const metric_type& metric() const {
-            return std::get<0>(paths_).metric();
-        }
+        /// @brief Access the metric (from the first component path).
+        const metric_type& metric() const { return std::get<0>(paths_).metric(); }
 
     private:
         std::tuple<Paths...> paths_;
     };
 
     // -------------------------------------------------------------------------
-    // Вспомогательные функции для создания ProductDeltaPath
+    // Helper functions for creating ProductDeltaPath
     // -------------------------------------------------------------------------
 
     /**
-     * @brief Создать ProductDeltaPath из двух путей.
+     * @brief Create a ProductDeltaPath from two delta paths.
      */
     template<typename Path1, typename Path2>
     ProductDeltaPath<Path1, Path2> make_product_path(Path1 p1, Path2 p2) {
@@ -441,7 +486,7 @@ namespace delta::geometry {
     }
 
     /**
-     * @brief Создать ProductDeltaPath из трёх путей.
+     * @brief Create a ProductDeltaPath from three delta paths.
      */
     template<typename Path1, typename Path2, typename Path3>
     ProductDeltaPath<Path1, Path2, Path3> make_product_path(Path1 p1, Path2 p2, Path3 p3) {
@@ -451,11 +496,11 @@ namespace delta::geometry {
     }
 
     // -------------------------------------------------------------------------
-    // Трейты для определения типов
+    // Traits for determining product types
     // -------------------------------------------------------------------------
 
     /**
-     * @brief Трейт для определения типа адреса продукта идей.
+     * @brief Trait to obtain the address type of a product of regulative ideas.
      */
     template<typename... RIs>
     struct product_address_type;
@@ -471,7 +516,7 @@ namespace delta::geometry {
     };
 
     /**
-     * @brief Трейт для определения типа метрики продукта идей.
+     * @brief Trait to obtain the metric type of a product of regulative ideas.
      */
     template<typename... RIs>
     struct product_metric_type;

@@ -2,6 +2,58 @@
 // Licensed under PolyForm Small Business License 1.0.0
 
 // include/delta/numerical/discrete_operators.h
+// ============================================================================
+// DISCRETE OPERATORS: GRADIENT, DIVERGENCE, CURL, LAPLACIAN
+// ============================================================================
+//
+// This file implements finite‑difference approximations of differential
+// operators on arbitrary grids (uniform, list, product) using any metric.
+//
+// ----------------------------------------------------------------------------
+// SUPPORTED GRIDS
+// ----------------------------------------------------------------------------
+//
+// - UniformGrid<Scalar>: regular 1D grid with constant step.
+// - ListGrid<Scalar>: arbitrary sorted 1D grid.
+// - ProductGrid<Grid, N>: Cartesian product of N copies of a 1D grid.
+//   The address type is `std::array<Scalar, N>`.
+//
+// ----------------------------------------------------------------------------
+// OPERATORS
+// ----------------------------------------------------------------------------
+//
+// - discrete_gradient(f)     : scalar field f → vector field ∇f
+// - discrete_divergence(v)   : vector field v → scalar field ∇·v
+// - discrete_curl_2d(v)      : 2D vector field → scalar field (∂v_y/∂x - ∂v_x/∂y)
+// - discrete_curl_3d(v)      : 3D vector field → vector field ∇×v
+// - discrete_laplacian(f)    : scalar field f → Δf (sum of second derivatives)
+//
+// ----------------------------------------------------------------------------
+// DIFFERENCE SCHEMES
+// ----------------------------------------------------------------------------
+//
+// - FORWARD  : (f(x+h) - f(x)) / h
+// - BACKWARD : (f(x) - f(x-h)) / h
+// - CENTRAL  : (f(x+h) - f(x-h)) / (2h)  (default, more accurate)
+//
+// At boundaries, central difference falls back to one‑sided (forward/backward)
+// when the neighbour on one side is missing.
+//
+// ----------------------------------------------------------------------------
+// PARALLELISATION
+// ----------------------------------------------------------------------------
+//
+// OpenMP parallelisation is enabled when the number of points exceeds 1000.
+// Each iteration reads field values at neighbouring points (read‑only) and
+// writes to its own result slot. No data races occur.
+//
+// To disable OpenMP, compile with `-D_OPENMP=0` or remove the pragmas.
+//
+// ============================================================================
+
+// ToDo: Generalize all the boilerplate code for computing derivatives, which will shrink the file in volume by roughly 30%
+// Priority: Medium. Difficulty:Low
+
 #ifndef DELTA_NUMERICAL_DISCRETE_OPERATORS_H
 #define DELTA_NUMERICAL_DISCRETE_OPERATORS_H
 
@@ -43,9 +95,9 @@ namespace delta::numerical {
     // Difference schemes
     // -------------------------------------------------------------------------
     enum class DifferenceScheme {
-        FORWARD,
-        BACKWARD,
-        CENTRAL
+        FORWARD,    ///< (f(x+h) - f(x)) / h
+        BACKWARD,   ///< (f(x) - f(x-h)) / h
+        CENTRAL     ///< (f(x+h) - f(x-h)) / (2h)
     };
 
     // -------------------------------------------------------------------------
