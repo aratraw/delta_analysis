@@ -1,3 +1,6 @@
+// (c) 2026 Timofey Ishimtsev.
+// Licensed under PolyForm Small Business License 1.0.0
+
 //tests/numerical/main_tests_numerical.cpp
 #include <gtest/gtest.h>
 #include <omp.h>

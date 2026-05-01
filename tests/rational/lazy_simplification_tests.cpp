@@ -1,3 +1,6 @@
+// (c) 2026 Timofey Ishimtsev.
+// Licensed under PolyForm Small Business License 1.0.0
+
 // lazy_simplification_tests.cpp
 // Тесты для проверки символьных упрощений:
 // свёртка одинаковых скаляров, свёртка одинаковых узлов,

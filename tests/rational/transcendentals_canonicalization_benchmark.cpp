@@ -1,3 +1,6 @@
+// (c) 2026 Timofey Ishimtsev.
+// Licensed under PolyForm Small Business License 1.0.0
+
 // transcendentals_canonicalization_benchmark.cpp
 // Benchmarks for canonicalization and subexpression interning in LazyRational.
 //

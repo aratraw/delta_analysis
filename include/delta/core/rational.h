@@ -1,3 +1,6 @@
+// (c) 2026 Timofey Ishimtsev.
+// Licensed under PolyForm Small Business License 1.0.0
+
 // include/delta/core/rational.h
 // =========================================================================================================
 //   WHY Rational, not double, is the PRIMARY SCALAR TYPE FOR Δ‑ANALYSIS

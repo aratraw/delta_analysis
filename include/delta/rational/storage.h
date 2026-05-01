@@ -1,3 +1,6 @@
+// (c) 2026 Timofey Ishimtsev.
+// Licensed under PolyForm Small Business License 1.0.0
+
 // storage.h
 
 // ВО ВСЕЙ БИБЛИОТЕКЕ ПРИ КОНСТРУИРОВАНИИ Value (и Rational на его основе) 

@@ -1,3 +1,6 @@
+// (c) 2026 Timofey Ishimtsev.
+// Licensed under PolyForm Small Business License 1.0.0
+
 
 // include/delta/numerical/cotangent_laplacian.h
 #ifndef DELTA_NUMERICAL_COTANGENT_LAPLACIAN_H

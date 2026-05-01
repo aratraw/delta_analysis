@@ -1,3 +1,6 @@
+// (c) 2026 Timofey Ishimtsev.
+// Licensed under PolyForm Small Business License 1.0.0
+
 // evaluate_impl.h
 // Версия 3.1 – единая шаблонная функция evaluate_tree с унифицированными children
 // ----------------------------------------------------------------------------

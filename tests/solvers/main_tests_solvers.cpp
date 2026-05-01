@@ -1,3 +1,6 @@
+// (c) 2026 Timofey Ishimtsev.
+// Licensed under PolyForm Small Business License 1.0.0
+
 //tests/solvers/main_tests_solvers.cpp
 #include <gtest/gtest.h>
 #include <omp.h>

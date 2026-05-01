@@ -1,3 +1,6 @@
+// (c) 2026 Timofey Ishimtsev.
+// Licensed under PolyForm Small Business License 1.0.0
+
 // include/delta/geometry/matrix_field.h
 #ifndef DELTA_GEOMETRY_MATRIX_FIELD_H
 #define DELTA_GEOMETRY_MATRIX_FIELD_H

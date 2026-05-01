@@ -1,3 +1,6 @@
+// (c) 2026 Timofey Ishimtsev.
+// Licensed under PolyForm Small Business License 1.0.0
+
 // tests/numerical/integrals_test.cpp
 // Fully specifies the mathematical contracts for integrals.h (Stage 1, block A8)
 // according to the General Plan.

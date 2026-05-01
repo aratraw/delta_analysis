@@ -1,3 +1,6 @@
+// (c) 2026 Timofey Ishimtsev.
+// Licensed under PolyForm Small Business License 1.0.0
+
 // tests/calculus/test_modulus.cpp
 #include <gtest/gtest.h>
 #include "test_fixtures.h"

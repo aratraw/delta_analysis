@@ -1,3 +1,6 @@
+// (c) 2026 Timofey Ishimtsev.
+// Licensed under PolyForm Small Business License 1.0.0
+
 // transcendentals_correctness.cpp
 // Тесты корректности трансцендентных функций Delta:
 // - базовые eager/lazy, граничные случаи, вложенные выражения,

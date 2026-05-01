@@ -1,3 +1,6 @@
+// (c) 2026 Timofey Ishimtsev.
+// Licensed under PolyForm Small Business License 1.0.0
+
 // tests/rational/rational_test_2.cpp
 // Additional tests for Rational class covering reduction, canonical form invariants,
 // chained operations, cross-cancellation, epsilon interplay, and large powers.

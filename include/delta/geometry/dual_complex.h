@@ -1,3 +1,6 @@
+// (c) 2026 Timofey Ishimtsev.
+// Licensed under PolyForm Small Business License 1.0.0
+
 // include/delta/geometry/dual_complex.h
 #ifndef DELTA_GEOMETRY_DUAL_COMPLEX_H
 #define DELTA_GEOMETRY_DUAL_COMPLEX_H

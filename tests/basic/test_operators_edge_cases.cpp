@@ -1,3 +1,6 @@
+// (c) 2026 Timofey Ishimtsev.
+// Licensed under PolyForm Small Business License 1.0.0
+
 //test_operators_edge_cases.cpp
 #include <gtest/gtest.h>
 #include "../test_fixtures.h"

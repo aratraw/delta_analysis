@@ -1,3 +1,6 @@
+// (c) 2026 Timofey Ishimtsev.
+// Licensed under PolyForm Small Business License 1.0.0
+
 // tests/regulative_ideas/test_padic.cpp
 #include <gtest/gtest.h>
 #include "../test_fixtures.h"

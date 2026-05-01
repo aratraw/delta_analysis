@@ -1,3 +1,6 @@
+// (c) 2026 Timofey Ishimtsev.
+// Licensed under PolyForm Small Business License 1.0.0
+
 // evaluation_core.h
 // ----------------------------------------------------------------------------
 // АДАПТИРОВАН ПОД ЕДИНЫЙ ТИП Value (boost::multiprecision::number<rational_adaptor<...>>)

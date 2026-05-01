@@ -1,3 +1,6 @@
+// (c) 2026 Timofey Ishimtsev.
+// Licensed under PolyForm Small Business License 1.0.0
+
 // lazy_nodes.h
 // Версия 3.2 – удалены поля approx и depth из TempNode; DirtyNode без изменений.
 // ----------------------------------------------------------------------------

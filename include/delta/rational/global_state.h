@@ -1,3 +1,6 @@
+// (c) 2026 Timofey Ishimtsev.
+// Licensed under PolyForm Small Business License 1.0.0
+
 // global_state.h
 // Единая точка управления всем глобальным состоянием библиотеки.
 // НЕ подключает ни evaluation_core.h, ни node_pool.h.

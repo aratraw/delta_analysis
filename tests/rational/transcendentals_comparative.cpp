@@ -1,3 +1,6 @@
+// (c) 2026 Timofey Ishimtsev.
+// Licensed under PolyForm Small Business License 1.0.0
+
 // transcendentals_comparative.cpp
 // Сравнительные тесты производительности: Delta vs наивные (naive) реализации.
 // Оцениваются три режима точности:

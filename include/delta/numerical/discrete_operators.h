@@ -1,3 +1,6 @@
+// (c) 2026 Timofey Ishimtsev.
+// Licensed under PolyForm Small Business License 1.0.0
+
 // include/delta/numerical/discrete_operators.h
 #ifndef DELTA_NUMERICAL_DISCRETE_OPERATORS_H
 #define DELTA_NUMERICAL_DISCRETE_OPERATORS_H
