@@ -96,6 +96,7 @@ namespace delta::geometry {
         static_assert(Dim > 0, "Dimension must be positive");
 
     public:
+        static constexpr int Dimension = Dim;
         // ---------------------------------------------------------------------
         // Type aliases
         // ---------------------------------------------------------------------
@@ -509,7 +510,43 @@ namespace delta::geometry {
                 return scalar_type{ 0 };
             }
         }
-
+                /**
+          * @brief Compute the volume (measure) of a k-simplex.
+          *
+          * For k=0: returns 1 (point measure).
+          * For k=1: returns edge length.
+          * For k=2: returns triangle area.
+          * For k=3: returns tetrahedron volume.
+          *
+          * @tparam Metric Type satisfying Metric concept.
+          * @param dim Dimension of the simplex (0..Dim).
+          * @param idx Index of the simplex.
+          * @param metric Metric object.
+          * @return Volume as scalar_type.
+          * @throws std::invalid_argument if dim is out of range.
+          */
+        template<typename Metric>
+        scalar_type simplex_volume(int simp_dim, std::size_t idx, const Metric& metric) const {
+            if (simp_dim == 0) return scalar_type(1);
+            if (simp_dim == 1) {
+                auto [v0, v1] = edge_at(idx);
+                return metric(vertex(v0), vertex(v1));
+            }
+            if (simp_dim == 2) {
+                auto tri = triangle_at(idx);
+                return triangle_volume(vertex(tri[0]), vertex(tri[1]), vertex(tri[2]), metric);
+            }
+            if (simp_dim == 3) {
+                if constexpr (Dim >= 3) {  // Dim — это Dimension комплекса
+                    auto tet = tetrahedron_at(idx);
+                    return tetrahedron_volume(vertex(tet[0]), vertex(tet[1]), vertex(tet[2]), vertex(tet[3]), metric);
+                }
+                else {
+                    throw std::invalid_argument("simplex_volume: dimension 3 not supported in complex of dimension " + std::to_string(Dim));
+                }
+            }
+            throw std::invalid_argument("simplex_volume: unsupported simplex dimension");
+        }
         /**
          * @brief Compute outward normal for an edge in 2D.
          */

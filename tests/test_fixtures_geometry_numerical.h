@@ -475,6 +475,30 @@ namespace delta::testing {
             const typename Field::value_type& tolerance = delta::default_eps()) {
             return delta::numerical::check_green_second_2d(grid, f, g, metric, tolerance);
         }
+        // -------------------------------------------------------------------------
+    // Utility for Discrete Forms Tests
+    // -------------------------------------------------------------------------
+        Complex<2> make_unit_square_with_interior() {
+            Complex<2> mesh;
+            auto v0 = add_vertex(mesh, Point<2>(0_r, 0_r));
+            auto v1 = add_vertex(mesh, Point<2>(1_r, 0_r));
+            auto v2 = add_vertex(mesh, Point<2>(1_r, 1_r));
+            auto v3 = add_vertex(mesh, Point<2>(0_r, 1_r));
+            auto vc = add_vertex(mesh, Point<2>("1/2"_r, "1/2"_r));
+            add_edge(mesh, v0, v1);
+            add_edge(mesh, v1, v2);
+            add_edge(mesh, v2, v3);
+            add_edge(mesh, v3, v0);
+            add_edge(mesh, v0, vc);
+            add_edge(mesh, v1, vc);
+            add_edge(mesh, v2, vc);
+            add_edge(mesh, v3, vc);
+            add_triangle(mesh, v0, v1, vc);
+            add_triangle(mesh, v1, v2, vc);
+            add_triangle(mesh, v2, v3, vc);
+            add_triangle(mesh, v3, v0, vc);
+            return mesh;
+        }
     private:
         Rational old_precision_;
     };

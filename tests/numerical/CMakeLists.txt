@@ -7,6 +7,7 @@
 add_executable(delta_tests_numerical
     main_tests_numerical.cpp
     integrals_test.cpp
+    cotangent_laplacian_test.cpp
 )
 
 target_include_directories(delta_tests_numerical PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/..)
