@@ -2,6 +2,29 @@
 // Licensed under PolyForm Small Business License 1.0.0
 
 // tests/rational/performance_compare_test.cpp
+// ============================================================================
+// PERFORMANCE COMPARISON BETWEEN DELTA::RATIONAL AND BOOST.MULTIPRECISION
+// ============================================================================
+//
+// This file benchmarks the performance of Delta::Rational (eager and lazy)
+// against Boost.Multiprecision with expression templates both disabled (et_off)
+// and enabled (et_on). The benchmarks measure:
+//   - Immediate (eager) summation using Delta::Rational.
+//   - Lazy summation using LazyRational (build + evaluation).
+//   - Boost et_off (immediate style) summation.
+//   - Boost et_on (lazy expression templates) summation.
+//
+// The test uses three types of input data:
+//   - Random rationals (uniform numerator/denominator).
+//   - Fast rationals (denominators are powers of two, for faster arithmetic).
+//   - Harmonic series (1/i).
+//
+// Before running benchmarks, a correctness check verifies that Delta's sums
+// match Boost's sums for each data type (N = 50 000). All timings are median
+// values over TRIAL_RUNS (excluding the first warm‑up run). The results are
+// printed in a human‑readable table with comparisons (faster/slower).
+// ============================================================================
+
 #pragma once
 #include <gtest/gtest.h>
 #include <vector>
@@ -14,7 +37,7 @@
 #include "delta/core/rational.h"
 #include "test_utils.h"
 
-// Boost с выключенными expression templates (для immediate-стиля)
+// Boost with expression templates disabled (immediate style)
 using BoostRational = boost::multiprecision::number<
     boost::multiprecision::rational_adaptor<
     boost::multiprecision::cpp_int_backend<>
@@ -22,7 +45,7 @@ using BoostRational = boost::multiprecision::number<
     boost::multiprecision::et_off
 >;
 
-// Boost с включёнными expression templates (ленивый стиль)
+// Boost with expression templates enabled (lazy style)
 using BoostRationalEtOn = boost::multiprecision::number<
     boost::multiprecision::rational_adaptor<
     boost::multiprecision::cpp_int_backend<>
@@ -36,7 +59,7 @@ namespace delta::testing {
     constexpr int CORRECTNESS_CHECK_N = 50000;
 
     // -------------------------------------------------------------------------
-    // Структура Pools теперь хранит оба вида Boost
+    // Structure Pools now stores both Boost variants
     // -------------------------------------------------------------------------
     struct Pools {
         std::vector<BoostRational>      boost_et_off_pool;
@@ -49,12 +72,12 @@ namespace delta::testing {
     Pools generate_harmonic_pools(int N);
 
     // -------------------------------------------------------------------------
-    // Класс теста
+    // Test fixture
     // -------------------------------------------------------------------------
     class RationalPerformanceCompareTest : public RationalTest {
     public:
         static void SetUpTestSuite() {
-            // Проверка корректности арифметики перед бенчмарками
+            // Perform correctness check before benchmarking
             PerformCorrectnessCheck();
             std::cout << "\n=== Performance benchmark with " << TRIAL_RUNS
                 << " trial runs per N (first run excluded) ===\n";
@@ -82,22 +105,22 @@ namespace delta::testing {
         }
 
         static void CheckSumsEqual(const Pools& pools, const std::string& scenario) {
-            // Immediate
+            // Immediate (eager) Delta sum
             Rational sum_imm = 0_r;
             for (const auto& t : pools.delta_pool) sum_imm += t;
 
-            // Lazy
+            // Lazy Delta sum
             internal::reset_pool();
             LazyRational sum_lazy;
             for (const auto& t : pools.delta_pool) sum_lazy += t;
             sum_lazy.eval_inplace(true);
             Rational sum_lazy_eval = sum_lazy.eval();
 
-            // Boost et_off (для проверки корректности)
+            // Boost et_off sum (for correctness verification)
             BoostRational sum_boost_off = 0;
             for (const auto& t : pools.boost_et_off_pool) sum_boost_off += t;
 
-            // Boost et_on (для проверки корректности)
+            // Boost et_on sum (for correctness verification)
             BoostRationalEtOn sum_boost_on = 0;
             for (const auto& t : pools.boost_et_on_pool) sum_boost_on += t;
 
@@ -124,7 +147,7 @@ namespace delta::testing {
     };
 
     // -------------------------------------------------------------------------
-    // Генерация данных
+    // Data generation
     // -------------------------------------------------------------------------
     Pools generate_random_pools(size_t N) {
         Pools pools;
@@ -181,7 +204,7 @@ namespace delta::testing {
     }
 
     // -------------------------------------------------------------------------
-    // Замеры времени
+    // Time measurement functions
     // -------------------------------------------------------------------------
     template<typename TimeUnit = std::chrono::milliseconds>
     long long measure_delta_immediate_sum(const std::vector<Rational>& terms) {
@@ -226,13 +249,13 @@ namespace delta::testing {
     }
 
     // -------------------------------------------------------------------------
-    // Бенчмарк
+    // Benchmark runner
     // -------------------------------------------------------------------------
     void run_benchmark_extended(const std::string& test_name,
         const std::vector<int>& sizes,
         std::function<Pools(int)> generator) {
         std::cout << "\n=== " << test_name << " ===\n";
-        // Увеличена ширина колонок для разделения
+        // Column width increased for clearer separation
         std::cout << std::left << std::setw(8) << "N"
             << std::setw(30) << "Delta mode (ms)"
             << std::setw(18) << "Boost ref (ms)"
@@ -251,7 +274,7 @@ namespace delta::testing {
                 long long boost_on = measure_boost_sum<BoostRationalEtOn>(pools.boost_et_on_pool);
                 auto [build, eval, total] = measure_delta_lazy_sum(pools.delta_pool);
 
-                if (rep == 0) continue;
+                if (rep == 0) continue; // warm‑up
                 imm_times.push_back(imm);
                 boost_off_times.push_back(boost_off);
                 boost_on_times.push_back(boost_on);
@@ -306,7 +329,7 @@ namespace delta::testing {
                 return oss.str();
                 };
 
-            // Immediate vs Boost et_off
+            // Immediate (eager) vs Boost et_off
             std::cout << std::left << std::setw(8) << N
                 << std::setw(30) << ("immediate: " + std::to_string(med_imm))
                 << std::setw(18) << med_boost_off
@@ -321,16 +344,34 @@ namespace delta::testing {
                 << format_comparison(med_lazy_total, med_boost_on) << "\n";
         }
     }
+
+    // -------------------------------------------------------------------------
+    // Test cases
+    // -------------------------------------------------------------------------
+
+    /**
+     * @test RandomRationalsCompare
+     * @brief Benchmarks summation of random rationals (uniform distribution).
+     */
     TEST_F(RationalPerformanceCompareTest, RandomRationalsCompare) {
         std::vector<int> sizes = { 100, 500, 1000, 5000, 10000, 20000, 50000, 250000, 500000 };
         run_benchmark_extended("Random rationals (uniform)", sizes, generate_random_pools);
     }
 
+    /**
+     * @test FastRationalsCompare
+     * @brief Benchmarks summation of rationals where denominators are powers of two
+     *        (leading to faster arithmetic).
+     */
     TEST_F(RationalPerformanceCompareTest, FastRationalsCompare) {
         std::vector<int> sizes = { 100, 500, 1000, 5000, 10000, 20000, 50000 };
         run_benchmark_extended("Fast rationals (denominators powers of two)", sizes, generate_fast_pools);
     }
 
+    /**
+     * @test HarmonicSeriesCompare
+     * @brief Benchmarks summation of the harmonic series (1 + 1/2 + ... + 1/N).
+     */
     TEST_F(RationalPerformanceCompareTest, HarmonicSeriesCompare) {
         std::vector<int> sizes = { 100, 500, 1000, 5000, 10000, 20000, 50000 };
         run_benchmark_extended("Harmonic series (1 + 1/2 + ... + 1/N)", sizes, generate_harmonic_pools);

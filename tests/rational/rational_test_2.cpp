@@ -2,8 +2,24 @@
 // Licensed under PolyForm Small Business License 1.0.0
 
 // tests/rational/rational_test_2.cpp
-// Additional tests for Rational class covering reduction, canonical form invariants,
-// chained operations, cross-cancellation, epsilon interplay, and large powers.
+// ============================================================================
+// ADDITIONAL TESTS FOR RATIONAL – REDUCTION, CANONICAL FORM, LARGE OPERATIONS
+// ============================================================================
+//
+// This file extends the tests for the Rational class with a focus on:
+//   - Automatic reduction after arithmetic operations.
+//   - Cross‑cancellation in multiplication (including huge numbers).
+//   - Epsilon interplay (comparisons with default epsilon are exact).
+//   - Canonical form invariants (positive denominator, gcd = 1).
+//   - Denominator growth behaviour (does not explode).
+//   - Accurate chained sums (harmonic‑like sequences).
+//   - Large integer exponentiation.
+//   - Simulation of rational series terms (Taylor series, Padé).
+//   - String round‑trip for big integers.
+//
+// All tests are deterministic and use rational exact comparisons.
+// ============================================================================
+
 #pragma once
 #include <gtest/gtest.h>
 #include <chrono>
@@ -15,9 +31,8 @@ namespace delta::testing {
 
     class RationalTest2 : public DeltaTest {
     protected:
-        // Helper to get string representation for inspection
         static std::string to_string_impl(const Rational& r) {
-            return r.to_string();  // changed from delta::to_string(r)
+            return r.to_string();
         }
 
         static std::string numerator_str(const Rational& r) {
@@ -51,6 +66,11 @@ namespace delta::testing {
     // -------------------------------------------------------------------------
     // 1. Automatic reduction after arithmetic operations
     // -------------------------------------------------------------------------
+    /**
+     * @test AutomaticReductionAfterOperations
+     * @brief Verifies that every arithmetic operation produces a result in
+     *        reduced form (gcd = 1, denominator positive).
+     */
     TEST_F(RationalTest2, AutomaticReductionAfterOperations) {
         Rational sum = 0_r;
         std::vector<std::pair<Rational, Rational>> operations = {
@@ -92,8 +112,14 @@ namespace delta::testing {
     }
 
     // -------------------------------------------------------------------------
-    // 2. Cross-cancellation: multiply huge fractions with common factors
+    // 2. Cross‑cancellation: multiply huge fractions with common factors
     // -------------------------------------------------------------------------
+    /**
+     * @test CrossCancellation
+     * @brief Multiplies a 1000‑digit integer by its reciprocal; the product
+     *        should be exactly 1, and reduction must happen early to avoid
+     *        massive intermediate numbers. The test also checks performance.
+     */
     TEST_F(RationalTest2, CrossCancellation) {
         // Create a 1000-digit number: 999...9
         std::string num_str(1000, '9');
@@ -112,6 +138,13 @@ namespace delta::testing {
     // -------------------------------------------------------------------------
     // 3. Epsilon interplay: comparison with default_eps
     // -------------------------------------------------------------------------
+    /**
+     * @test EpsilonInterplay
+     * @brief Rational comparisons are exact, not epsilon‑based.
+     *        This test merely illustrates that default_eps does not affect
+     *        exact equality checks. Irrational (approximate) values are never
+     *        equal to rationals.
+     */
     TEST_F(RationalTest2, EpsilonInterplay) {
         Rational eps = delta::default_eps();
         Rational small = Rational(1, 1000000);      // 1e-6
@@ -135,6 +168,11 @@ namespace delta::testing {
     // -------------------------------------------------------------------------
     // 4. Canonical form invariants
     // -------------------------------------------------------------------------
+    /**
+     * @test CanonicalFormInvariants
+     * @brief Checks that denominators are always positive, fractions are reduced,
+     *        and zero is represented correctly.
+     */
     TEST_F(RationalTest2, CanonicalFormInvariants) {
         // Denominator should always be positive
         Rational pos(1, 2);
@@ -169,6 +207,12 @@ namespace delta::testing {
     // -------------------------------------------------------------------------
     // 5. Denominator does not explode after chain operations
     // -------------------------------------------------------------------------
+    /**
+     * @test DenominatorDoesNotExplode
+     * @brief After a series of rational operations (addition, multiplication,
+     *        etc.) the denominator should not grow unnecessarily; the result
+     *        is always reduced.
+     */
     TEST_F(RationalTest2, DenominatorDoesNotExplode) {
         Rational a(1, 2);
         Rational b(1, 3);
@@ -190,6 +234,11 @@ namespace delta::testing {
     // -------------------------------------------------------------------------
     // 6. Accurate chained sum
     // -------------------------------------------------------------------------
+    /**
+     * @test AccurateChainedSum
+     * @brief Sums several small fractions and compares with the expected
+     *        reduced rational.
+     */
     TEST_F(RationalTest2, AccurateChainedSum) {
         Rational a(1, 2);
         Rational b(1, 3);
@@ -208,6 +257,10 @@ namespace delta::testing {
     // -------------------------------------------------------------------------
     // 7. Large powers with reduction
     // -------------------------------------------------------------------------
+    /**
+     * @test LargePowers
+     * @brief Raises fractions to large integer exponents and checks numerator/denominator.
+     */
     TEST_F(RationalTest2, LargePowers) {
         Rational base(2, 3);
         Rational pow10 = delta::pow(base, 10);
@@ -230,6 +283,11 @@ namespace delta::testing {
     // -------------------------------------------------------------------------
     // 8. Rational series term simulation (Taylor series pattern)
     // -------------------------------------------------------------------------
+    /**
+     * @test RationalSeriesTerm
+     * @brief Simulates the computation of successive terms in a Taylor series
+     *        (e.g., exp(x)): term = term * x / n.
+     */
     TEST_F(RationalTest2, RationalSeriesTerm) {
         Rational term = 1_r;
         Rational X = Rational(1, 2);
@@ -258,6 +316,11 @@ namespace delta::testing {
     // -------------------------------------------------------------------------
     // 9. Matrix exponential simulation (Padé approximation pattern)
     // -------------------------------------------------------------------------
+    /**
+     * @test RationalInMatrixExpSimulation
+     * @brief Simulates the rational expression (I + A)/(I - A) for a small scalar A,
+     *        which appears in Padé approximations of matrix exponentials.
+     */
     TEST_F(RationalTest2, RationalInMatrixExpSimulation) {
         // Simulate (I + A) / (I - A) for small A
         Rational a = Rational(1, 2);   // small matrix element
@@ -280,6 +343,12 @@ namespace delta::testing {
     // -------------------------------------------------------------------------
     // 10. Chain of operations with no overflow
     // -------------------------------------------------------------------------
+    /**
+     * @test NoOverflowAfterManyOps
+     * @brief Multiplies a chain of fractions i/(i+1) for i=1..100.
+     *        The telescoping product yields 1/101, demonstrating that
+     *        numerators and denominators stay small and no overflow occurs.
+     */
     TEST_F(RationalTest2, NoOverflowAfterManyOps) {
         Rational x = 1_r;
         for (int i = 1; i <= 100; ++i) {
@@ -294,6 +363,11 @@ namespace delta::testing {
     // -------------------------------------------------------------------------
     // 11. String roundtrip for large numbers
     // -------------------------------------------------------------------------
+    /**
+     * @test StringRoundtrip
+     * @brief Creates a rational from large numerator and denominator strings,
+     *        converts it to string, and reconstructs; the two must be equal.
+     */
     TEST_F(RationalTest2, StringRoundtrip) {
         // Create a rational with large numerator and denominator
         std::string num = "123456789012345678901234567890";

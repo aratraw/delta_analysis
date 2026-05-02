@@ -1,13 +1,21 @@
 // (c) 2026 Timofey Ishimtsev.
 // Licensed under PolyForm Small Business License 1.0.0
 
-// transcendentals_comparative.cpp
-// Сравнительные тесты производительности: Delta vs наивные (naive) реализации.
-// Оцениваются три режима точности:
-//   - HIGH_PRECISION_EPS = 1e-21 (в Delta используются float-пути для sin/cos/exp/pi)
-//   - ULTRA_HIGH_PRECISION_EPS = 1e-40 (в Delta везде используются series-пути)
-//   - EXTREME_PRECISION_EPS = 1e-80 (в Delta везде series-пути, проверка масштабирования)
-// Вывод оформлен в виде компактной таблицы с медианными временами и сравнением.
+// tests/rational/transcendentals_comparative.cpp
+// ============================================================================
+// COMPARATIVE PERFORMANCE TESTS: Delta vs. NAIVE (SERIES) IMPLEMENTATIONS
+// ============================================================================
+//
+// This file benchmarks the transcendental functions of Delta::Rational against
+// naive (reference) series implementations (sin, cos, exp, log, sqrt, pi, e).
+// Three precision regimes are tested:
+//   - HIGH_PRECISION_EPS    = 1e-21   (Delta uses float‑path for sin/cos/exp/pi)
+//   - ULTRA_HIGH_PRECISION_EPS = 1e-40 (Delta uses series‑path for all functions)
+//   - EXTREME_PRECISION_EPS  = 1e-80   (Delta uses series‑path, tests scaling)
+//
+// The output is a compact table with median times (microseconds) and a
+// comparison (faster / slower) against the naive implementation.
+// ============================================================================
 
 #include <gtest/gtest.h>
 #include <chrono>
@@ -25,10 +33,13 @@
 namespace delta::testing {
 
     // -----------------------------------------------------------------------------
-    // Наивные (baseline) реализации через последовательные ряды / итерации.
+    // Naive (baseline) implementations using iterative series / Newton method.
     // -----------------------------------------------------------------------------
     namespace {
 
+        /**
+         * @brief Naive series for ln(2) using arctanh(1/3).
+         */
         Rational naive_series_ln2(const Rational& eps) {
             Rational one(1);
             Rational three(3);
@@ -44,6 +55,9 @@ namespace delta::testing {
             return two * sum;
         }
 
+        /**
+         * @brief Naive series for π using Machin's formula: π/4 = 4*atan(1/5) - atan(1/239).
+         */
         Rational naive_series_pi(const Rational& eps) {
             Rational one(1), five(5), two39(239);
             Rational sixteen(16), four(4), two(2);
@@ -68,6 +82,9 @@ namespace delta::testing {
             return sixteen * sum_atan5 - four * sum_atan239;
         }
 
+        /**
+         * @brief Naive series for sin(x).
+         */
         Rational naive_series_sin(const Rational& x, const Rational& eps) {
             Rational one(1), two(2);
             Rational pi_val = naive_series_pi(eps), twopi = pi_val * two;
@@ -88,6 +105,9 @@ namespace delta::testing {
             return sum;
         }
 
+        /**
+         * @brief Naive series for cos(x).
+         */
         Rational naive_series_cos(const Rational& x, const Rational& eps) {
             Rational one(1), two(2);
             Rational pi_val = naive_series_pi(eps), twopi = pi_val * two;
@@ -108,6 +128,9 @@ namespace delta::testing {
             return sum;
         }
 
+        /**
+         * @brief Naive series for exp(x) (scaling‑and‑squaring).
+         */
         Rational naive_series_exp(const Rational& x, const Rational& eps) {
             Rational one(1), two(2);
             int k = 0;
@@ -128,6 +151,9 @@ namespace delta::testing {
             return result;
         }
 
+        /**
+         * @brief Naive series for log(x) (argument reduction + arctanh series).
+         */
         Rational naive_series_log(const Rational& x, const Rational& eps) {
             Rational one(1), two(2), half = one / two;
             int k = 0;
@@ -148,6 +174,9 @@ namespace delta::testing {
             return ln_m + Rational(k) * ln2;
         }
 
+        /**
+         * @brief Naive sqrt using Newton's method.
+         */
         Rational naive_series_sqrt(const Rational& x, const Rational& eps) {
             if (x == 0_r) return 0_r;
             if (x < 0_r) throw std::domain_error("sqrt of negative number");
@@ -165,6 +194,9 @@ namespace delta::testing {
             return guess;
         }
 
+        /**
+         * @brief Naive series for e (base of natural logarithm).
+         */
         Rational naive_series_e(const Rational& eps) {
             Rational one(1);
             Rational sum = one, term = one, n = one;
@@ -178,23 +210,24 @@ namespace delta::testing {
         }
 
         // -------------------------------------------------------------------------
-        // Определение того, какой путь использует Delta для заданной точности
+        // Determine which path Delta uses for a given epsilon
         // -------------------------------------------------------------------------
         constexpr double HYBRID_THRESHOLD = 1e-35;
 
         std::string delta_path_for_eps(const std::string& func_name, const Rational& eps) {
             double eps_d = eps.to_double();
+            // These functions always use series (float path removed)
             if (func_name == "log" || func_name == "sqrt" || func_name == "e") {
-                return "series";   // всегда series
+                return "series";
             }
-            // sin, cos, exp, pi, acos
+            // For sin, cos, exp, pi, acos: float path is used when eps >= threshold
             return (eps_d >= HYBRID_THRESHOLD) ? "float" : "series";
         }
 
     } // namespace
 
     // -----------------------------------------------------------------------------
-    // Фикстура для сравнительных тестов производительности
+    // Test fixture for comparative performance tests
     // -----------------------------------------------------------------------------
     class TranscendentalPerformanceTest : public LazyRationalTestFixture {
     protected:
@@ -203,7 +236,10 @@ namespace delta::testing {
         const Rational EXTREME_PRECISION_EPS = "1/10000000000000000000000000000000000000000000000000000000000000000000000000000000"_r; // 1e-80
         const int RUNS = 15;
 
-        // Вспомогательная функция для медианного бенчмарка
+        /**
+         * @brief Runs a function many times and returns the median execution time in microseconds.
+         * @tparam F Callable (lambda) with no arguments.
+         */
         template<typename F>
         long long benchmark_median(F&& func) {
             std::vector<long long> times;
@@ -218,15 +254,19 @@ namespace delta::testing {
             return times[times.size() / 2];
         }
 
-        // Структура для описания тестируемой функции
+        /**
+         * @brief Configuration for a single function to be tested.
+         */
         struct FuncConfig {
-            std::string name;
-            std::function<Rational(const Rational&)> arg_gen;   // возвращает аргумент (для pi/e - фиктивный)
-            std::function<Rational(const Rational&, const Rational&)> delta_func;
-            std::function<Rational(const Rational&, const Rational&)> naive_func;
+            std::string name;                                                     // function name (sin, cos, ...)
+            std::function<Rational(const Rational&)> arg_gen;                    // generates the argument (ignored for pi/e)
+            std::function<Rational(const Rational&, const Rational&)> delta_func; // Delta implementation
+            std::function<Rational(const Rational&, const Rational&)> naive_func; // Naive (baseline) implementation
         };
 
-        // Форматирование сравнения: "Delta X.xx times faster/slower (diff us)"
+        /**
+         * @brief Format a comparison string: "X.xx times faster/slower (diff us)".
+         */
         std::string format_comparison(long long delta_us, long long ref_us) {
             std::ostringstream oss;
             if (delta_us < ref_us) {
@@ -245,7 +285,9 @@ namespace delta::testing {
             return oss.str();
         }
 
-        // Выполнить замеры для одной функции и одного eps, вернуть медианные времена и путь
+        /**
+         * @brief Measure execution times for a single function and epsilon.
+         */
         struct Measurement {
             long long delta_us;
             long long naive_us;
@@ -253,9 +295,9 @@ namespace delta::testing {
         };
 
         Measurement measure(const FuncConfig& cfg, const Rational& eps) {
-            // Прогрев
+            // Warm‑up (3 runs)
             for (int i = 0; i < 3; ++i) {
-                Rational arg = cfg.arg_gen(eps);  // для pi/e arg игнорируется
+                Rational arg = cfg.arg_gen(eps);  // for pi/e, arg is ignored
                 cfg.delta_func(arg, eps);
                 cfg.naive_func(arg, eps);
             }
@@ -280,10 +322,10 @@ namespace delta::testing {
     };
 
     // -----------------------------------------------------------------------------
-    // Единый тест, собирающий все сравнения и выводящий таблицу
+    // Single test that produces the full comparison table
     // -----------------------------------------------------------------------------
     TEST_F(TranscendentalPerformanceTest, FullComparisonTable) {
-        // Конфигурации всех функций
+        // List of functions to test
         std::vector<FuncConfig> configs = {
             {"sin",
              [](const Rational&) { return "1.23456789"_r; },
@@ -306,7 +348,7 @@ namespace delta::testing {
              [](const Rational& x, const Rational& eps) { return delta::sqrt(x, eps); },
              [](const Rational& x, const Rational& eps) { return naive_series_sqrt(x, eps); }},
             {"pi",
-             [](const Rational&) { return 0_r; }, // аргумент не используется
+             [](const Rational&) { return 0_r; }, // argument not used
              [](const Rational&, const Rational& eps) { return delta::pi(eps); },
              [](const Rational&, const Rational& eps) { return naive_series_pi(eps); }},
             {"e",
@@ -315,7 +357,7 @@ namespace delta::testing {
              [](const Rational&, const Rational& eps) { return naive_series_e(eps); }}
         };
 
-        // Заголовок таблицы
+        // Table header
         std::cout << "\n=== Transcendental Performance Comparison (median of " << RUNS << " runs) ===\n";
         std::cout << std::left
             << std::setw(8) << "Func"
@@ -326,7 +368,6 @@ namespace delta::testing {
             << "Comparison\n";
         std::cout << std::string(85, '-') << "\n";
 
-        // Для каждого eps собираем и выводим строки
         std::vector<Rational> epsilons = {
             HIGH_PRECISION_EPS,        // 1e-21
             ULTRA_HIGH_PRECISION_EPS,  // 1e-40
@@ -341,7 +382,7 @@ namespace delta::testing {
             for (const auto& cfg : configs) {
                 Measurement m = measure(cfg, eps);
 
-                // Проверка корректности (последний вызов)
+                // Correctness check (one extra run)
                 Rational arg = cfg.arg_gen(eps);
                 Rational res_delta = cfg.delta_func(arg, eps);
                 Rational res_naive = cfg.naive_func(arg, eps);
@@ -355,7 +396,7 @@ namespace delta::testing {
                     << std::setw(12) << m.naive_us
                     << format_comparison(m.delta_us, m.naive_us) << "\n";
             }
-            // Разделитель между блоками eps (кроме последнего)
+            // Separator between epsilon blocks (except last)
             if (i < epsilons.size() - 1) {
                 std::cout << std::string(85, '-') << "\n";
             }

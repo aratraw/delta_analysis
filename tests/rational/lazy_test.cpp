@@ -2,8 +2,24 @@
 // Licensed under PolyForm Small Business License 1.0.0
 
 // tests/rational/lazy_test.cpp
-// Дополнительные тесты для LazyRational (мутации, COW, сложные сценарии)
-// Адаптированы под новую архитектуру (гетерогенное хранение SUM/PRODUCT)
+// ============================================================================
+// ADDITIONAL TESTS FOR LAZYRATIONAL – MUTATIONS, COW, COMPLEX SCENARIOS
+// ============================================================================
+//
+// This file contains extra tests for LazyRational that go beyond the basic
+// contract tests. It verifies:
+//   - Copy‑on‑write behaviour (multiple references).
+//   - Chained mutations (sums, products, mixed operations).
+//   - Correctness of lazy summation for many terms, comparing with eager
+//     addition and with a manual pyramidal reduction implementation.
+//   - Large‑scale summation with randomly generated powers‑of‑two fractions.
+//   - Comparison with Boost.Multiprecision for validation.
+//   - Normalisation in Rational constructors.
+//   - Cloning and independent mutation.
+//
+// All tests are deterministic (random seeds are fixed).
+// ============================================================================
+
 #include "lazy_rational_test_fixture.h"
 #include "delta/core/rational.h"
 #include "test_utils.h"
@@ -15,8 +31,14 @@ namespace delta::testing {
     class LazyRationalExtraTest : public LazyRationalTestFixture {};
 
     // -------------------------------------------------------------------------
-    // Базовые тесты на мутации и COW
+    // Basic mutation and copy‑on‑write (COW) tests
     // -------------------------------------------------------------------------
+
+    /**
+     * @test SumCowOnMultipleReferences
+     * @brief Checks that cloning creates an independent copy that does not
+     *        change when the original is mutated further.
+     */
     TEST_F(LazyRationalExtraTest, SumCowOnMultipleReferences) {
         LazyRational x = LazyRational(Rational(1, 2));
         LazyRational y = LazyRational(Rational(1, 3));
@@ -28,8 +50,12 @@ namespace delta::testing {
         EXPECT_EQ(sum.eval(), Rational(11, 6));
     }
 
+    /**
+     * @test PlusEqualOnImmediate
+     * @brief Verifies that operator+= works correctly on a dirty CONST node.
+     */
     TEST_F(LazyRationalExtraTest, PlusEqualOnImmediate) {
-        LazyRational a = LazyRational(1_r); // грязный CONST(1)
+        LazyRational a = LazyRational(1_r); // dirty CONST(1)
         LazyRational b = LazyRational(Rational(1, 2));
         a += b;
         EXPECT_TRUE(is_dirty(a));
@@ -38,6 +64,11 @@ namespace delta::testing {
         EXPECT_EQ(a.eval(), Rational(3, 2));
     }
 
+    /**
+     * @test SumOfTwoSums
+     * @brief Adding two already‑built SUM nodes should flatten the result
+     *        into a single SUM node with all terms.
+     */
     TEST_F(LazyRationalExtraTest, SumOfTwoSums) {
         LazyRational a = LazyRational(Rational(1, 2));
         LazyRational b = LazyRational(Rational(1, 3));
@@ -49,22 +80,31 @@ namespace delta::testing {
         LazyRational sum2 = c.clone();
         sum2 += d;
         LazyRational total = sum1.clone();
-        total += sum2;   // теперь total = sum1 + sum2 (плоский SUM)
+        total += sum2;   // total = sum1 + sum2 (flattened SUM)
         EXPECT_EQ(dirty_root_op(total), internal::LazyOp::SUM);
         EXPECT_EQ(total_operands(total), 4);
     }
 
+    /**
+     * @test ChainedMultiplication
+     * @brief Chained multiplication a * 3 * 4 should create a PRODUCT node
+     *        with three factors.
+     */
     TEST_F(LazyRationalExtraTest, ChainedMultiplication) {
         LazyRational a = LazyRational(Rational(2));
-        a* Rational(3)* Rational(4);   // мутируем a, без присваивания
+        a* Rational(3)* Rational(4);   // mutates a in place, no assignment
         EXPECT_EQ(dirty_root_op(a), internal::LazyOp::PRODUCT);
         EXPECT_EQ(total_operands(a), 3);
         EXPECT_EQ(a.eval(), Rational(24));
     }
 
+    /**
+     * @test MixedOperations
+     * @brief a * 3 + 5 should first create a PRODUCT, then a SUM node.
+     */
     TEST_F(LazyRationalExtraTest, MixedOperations) {
         LazyRational a = LazyRational(Rational(2));
-        a * 3_r + 5_r;   // мутируем a: сначала умножение, затем сложение
+        a * 3_r + 5_r;   // mutates a: first multiplication, then addition
         EXPECT_EQ(dirty_root_op(a), internal::LazyOp::SUM);
         EXPECT_EQ(total_operands(a), 2);
         int root = dirty_root_index(a);
@@ -77,8 +117,15 @@ namespace delta::testing {
     }
 
     // -------------------------------------------------------------------------
-    // Вспомогательные функции для генерации данных и суммирования
+    // Helper functions for generating test data and summing
     // -------------------------------------------------------------------------
+    /**
+     * @brief Generate a vector of random rationals with denominator a power of two.
+     * @param N Number of terms.
+     * @param seed Random seed (deterministic).
+     * @param max_exp Maximum exponent for denominator (2^max_exp).
+     * @return Vector of Rationals.
+     */
     static std::vector<Rational> generate_powers_of_two_terms(int N, int seed = 12345, int max_exp = 20) {
         std::mt19937 rng(seed);
         std::uniform_int_distribution<int> num_dist(-1000, 1000);
@@ -94,12 +141,21 @@ namespace delta::testing {
         return terms;
     }
 
+    /**
+     * @brief Eager summation using Rational::operator+.
+     */
     static Rational eager_sum(const std::vector<Rational>& terms) {
         Rational s = 0_r;
         for (const auto& t : terms) s += t;
         return s;
     }
 
+    /**
+     * @brief Lazy summation using LazyRational.
+     * @param terms Vector of rationals.
+     * @param skip_simplify If true, eval_inplace(skip_simplify=true) is used.
+     * @return The sum as Rational.
+     */
     static Rational lazy_sum(const std::vector<Rational>& terms, bool skip_simplify = true) {
         internal::reset_pool();
         LazyRational s;
@@ -108,6 +164,12 @@ namespace delta::testing {
         return s.eval();
     }
 
+    /**
+     * @brief Manual pyramidal reduction (PCR) of a vector of Values.
+     * @param input Vector of Values.
+     * @param verbose Print level information if true.
+     * @return The reduced Value.
+     */
     static internal::Value manual_pyramidal_reduce(const std::vector<internal::Value>& input,
         bool verbose = false) {
         std::vector<internal::Value> vals = input;
@@ -134,8 +196,13 @@ namespace delta::testing {
     }
 
     // -------------------------------------------------------------------------
-    // Тесты корректности для небольших N
+    // Correctness tests for small N
     // -------------------------------------------------------------------------
+
+    /**
+     * @test SumMixedDenominators
+     * @brief Simple sum of small fractions, eager vs lazy.
+     */
     TEST_F(LazyRationalExtraTest, SumMixedDenominators) {
         std::vector<Rational> terms = {
             Rational(1, 2), Rational(1, 3), Rational(1, 4),
@@ -146,6 +213,10 @@ namespace delta::testing {
         EXPECT_EQ(eager, lazy);
     }
 
+    /**
+     * @test SumManyPowersOfTwo
+     * @brief Sum of 1000 random powers‑of‑two terms, eager vs lazy.
+     */
     TEST_F(LazyRationalExtraTest, SumManyPowersOfTwo) {
         const int N = 1000;
         std::vector<Rational> terms = generate_powers_of_two_terms(N);
@@ -154,10 +225,14 @@ namespace delta::testing {
         EXPECT_EQ(eager, lazy);
     }
 
+    /**
+     * @test SumManyPowersOfTwoNormalized
+     * @brief Same as above but each term is normalised by reconstructing from string.
+     */
     TEST_F(LazyRationalExtraTest, SumManyPowersOfTwoNormalized) {
         const int N = 1000;
         std::vector<Rational> terms = generate_powers_of_two_terms(N);
-        // Принудительно нормализуем каждый элемент
+        // Force normalisation of each term
         for (auto& r : terms) {
             r = Rational(r.to_string());
         }
@@ -166,6 +241,10 @@ namespace delta::testing {
         EXPECT_EQ(eager, lazy);
     }
 
+    /**
+     * @test RationalConstructorNormalizes
+     * @brief Checks that numerator and denominator are reduced.
+     */
     TEST_F(LazyRationalExtraTest, RationalConstructorNormalizes) {
         Rational r(2, 4);
         EXPECT_EQ(r, Rational(1, 2));
@@ -174,6 +253,10 @@ namespace delta::testing {
         EXPECT_EQ(r2, Rational(3, 4));
     }
 
+    /**
+     * @test CloneAndMutatePreservesValues
+     * @brief After cloning, mutations of the original do not affect the clone.
+     */
     TEST_F(LazyRationalExtraTest, CloneAndMutatePreservesValues) {
         LazyRational a = LazyRational(Rational(1, 2));
         LazyRational b = a.clone();
@@ -182,6 +265,10 @@ namespace delta::testing {
         EXPECT_EQ(a.eval(), Rational(3, 4));
     }
 
+    /**
+     * @test RepeatedAdditionOfPowerOfTwo
+     * @brief Sum of 10000 copies of 1/8, eager vs lazy.
+     */
     TEST_F(LazyRationalExtraTest, RepeatedAdditionOfPowerOfTwo) {
         const int N = 10000;
         Rational term(1, 8);
@@ -192,6 +279,10 @@ namespace delta::testing {
         EXPECT_EQ(eager, Rational(N, 8));
     }
 
+    /**
+     * @test MixedEagerLazyMutation
+     * @brief Mixing eager and lazy operations.
+     */
     TEST_F(LazyRationalExtraTest, MixedEagerLazyMutation) {
         LazyRational a = LazyRational(Rational(1, 3));
         Rational b(1, 6);
@@ -204,8 +295,14 @@ namespace delta::testing {
     }
 
     // -------------------------------------------------------------------------
-    // Тесты для больших N с диагностикой
+    // Large‑scale tests with diagnostics and comparison against Boost
     // -------------------------------------------------------------------------
+
+    /**
+     * @test ImmediateVsBoostLargeScale
+     * @brief Compares Delta's immediate (eager) summation with Boost.Multiprecision
+     *        for various dataset sizes (10k to 50k). All results must match.
+     */
     TEST_F(LazyRationalExtraTest, ImmediateVsBoostLargeScale) {
         using BoostRational = boost::multiprecision::number<
             boost::multiprecision::rational_adaptor<
@@ -218,11 +315,11 @@ namespace delta::testing {
         for (int N : sizes) {
             std::vector<Rational> terms = generate_powers_of_two_terms(N);
 
-            // Immediate сумма Delta
+            // Immediate sum using Delta
             Rational delta_sum = 0_r;
             for (const auto& t : terms) delta_sum += t;
 
-            // Boost сумма
+            // Boost sum
             BoostRational boost_sum = 0;
             for (const auto& t : terms) {
                 internal::dumb_int num = t.numerator().convert_to<internal::dumb_int>();
@@ -230,7 +327,7 @@ namespace delta::testing {
                 boost_sum += BoostRational(num, den);
             }
 
-            // Сравнение через строки
+            // Compare by string (exact equality)
             std::ostringstream oss_delta, oss_boost;
             oss_delta << delta_sum;
             oss_boost << boost_sum;
@@ -238,6 +335,12 @@ namespace delta::testing {
         }
     }
 
+    /**
+     * @test SumManyPowersOfTwoLargeScale
+     * @brief Very large‑scale test (up to 50k terms) that also checks the internal
+     *        dirty tree structure and performs manual pyramidal reduction on leaf_values
+     *        to detect corruption.
+     */
     TEST_F(LazyRationalExtraTest, SumManyPowersOfTwoLargeScale) {
         const std::vector<int> sizes = { 10000, 20000, 30000, 40000, 50000 };
 
@@ -245,7 +348,7 @@ namespace delta::testing {
             std::vector<Rational> terms = generate_powers_of_two_terms(N);
             Rational eager = eager_sum(terms);
 
-            // Строим ленивую сумму
+            // Build a lazy sum
             internal::reset_pool();
             LazyRational lr;
             for (const auto& t : terms) lr += t;
@@ -254,7 +357,7 @@ namespace delta::testing {
             size_t leaf_cnt = dirty_node_leaf_count(lr, root);
             size_t complex_cnt = dirty_node_complex_count(lr, root);
 
-            // Проверка суммы leaf_values вручную
+            // Manually sum leaf_values using pyramidal reduction
             std::vector<internal::Value> leaf_copy;
             leaf_copy.reserve(leaf_cnt);
             for (size_t i = 0; i < leaf_cnt; ++i) {
@@ -274,7 +377,7 @@ namespace delta::testing {
                 std::cerr << "Difference:          " << eager - manual_from_leaf << "\n";
             }
 
-            // Вычисляем ленивую сумму
+            // Compute lazy sum
             Rational lazy = lazy_sum(terms, /*skip_simplify=*/true);
 
             if (eager != lazy) {
@@ -287,7 +390,7 @@ namespace delta::testing {
                 std::cerr << "Manual leaf sum:    " << manual_from_leaf << "\n";
                 std::cerr << "Difference:         " << eager - lazy << "\n";
 
-                // Ручное PCR для диагностики
+                // Manual PCR on raw terms for diagnosis
                 std::vector<internal::Value> raw_vals;
                 raw_vals.reserve(terms.size());
                 for (const auto& t : terms) raw_vals.push_back(t.value());
@@ -304,10 +407,10 @@ namespace delta::testing {
                 FAIL() << "Sums differ at N=" << N;
             }
             else if (leaf_corrupted) {
-                // leaf_values повреждены, но lazy каким-то образом дал правильный результат
+                // leaf_values corrupted but lazy sum happened to be correct
                 FAIL() << "Leaf values corrupted but lazy sum correct at N=" << N;
             }
-            // Если всё хорошо — ничего не выводим
+            // If everything is fine, no output.
         }
     }
 } // namespace delta::testing

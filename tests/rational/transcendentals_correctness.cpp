@@ -1,12 +1,33 @@
 // (c) 2026 Timofey Ishimtsev.
 // Licensed under PolyForm Small Business License 1.0.0
 
-// transcendentals_correctness.cpp
-// Тесты корректности трансцендентных функций Delta:
-// - базовые eager/lazy, граничные случаи, вложенные выражения,
-// - варьирование точности, редукция аргументов, консистентность путей,
-// - стресс-тест Lazy дерева,
-// - проверка на очень малых eps с использованием наивных реализаций как эталона.
+// tests/rational/transcendentals_correctness.cpp
+// ============================================================================
+// CORRECTNESS TESTS FOR TRANSCENDENTAL FUNCTIONS (EAGER AND LAZY)
+// ============================================================================
+//
+// This file verifies the correctness of delta::Rational transcendental
+// functions (sqrt, exp, log, sin, cos, pi, e, acos, asin, pow) by comparing
+// against naive series implementations and checking fundamental identities.
+// The tests cover:
+//   - Basic eager computations (sqrt, exp, log, sin, cos, pi, e).
+//   - Lazy expression construction and evaluation.
+//   - Edge cases (zero, one, negative, very large/small arguments).
+//   - Deeply nested compositions (eager and lazy).
+//   - Varying precision (from 1e-2 down to 1e-100).
+//   - Argument reduction (large angles, large exponents).
+//   - Consistency between float and series paths for sin, cos, exp.
+//   - Stress test: large lazy tree with many transcendental nodes.
+//   - High‑precision accuracy benchmarks for π and √2 (up to 100 digits).
+//   - Identities: sin(π)=0, cos(π/2)=0, sin²+cos²=1, exp(log(x))=x,
+//     sqrt(x)²=x, cos(acos(x))=x, acos(x)+asin(x)=π/2.
+//   - acos specifics: special values, monotonicity, derivative approximation.
+//   - pow with rational exponents (e.g., 2^(1/2) ≡ √2).
+//   - Lazy canonicalisation (Exp(Log(z)) → z).
+//
+// All tests use the global default epsilon where appropriate; for high‑precision
+// tests explicit epsilon values are supplied.
+// ============================================================================
 
 #include <gtest/gtest.h>
 #include <chrono>
@@ -25,8 +46,8 @@
 namespace delta::testing {
 
     // -------------------------------------------------------------------------
-    // Наивные (эталонные) реализации через последовательные ряды / итерации.
-    // Используются для проверки корректности Delta при любых точностях.
+    // Naive (reference) implementations using series / iteration.
+    // Used to verify Delta's correctness at any precision.
     // -------------------------------------------------------------------------
     namespace {
 
@@ -208,7 +229,7 @@ namespace delta::testing {
             if (base == 1_r) return 1_r;
             if (exp == 0_r) return 1_r;
 
-            // Проверка целого показателя
+            // Check if exponent is an integer
             auto is_integer = [](const Rational& r) {
                 return r.denominator() == 1_r;
                 };
@@ -236,17 +257,17 @@ namespace delta::testing {
     } // namespace
 
     // -----------------------------------------------------------------------------
-    // Фикстура для тестов корректности
+    // Fixture for correctness tests
     // -----------------------------------------------------------------------------
     class TranscendentalCorrectnessTest : public LazyRationalTestFixture {
     protected:
-        // Часто используемые точности
+        // Commonly used epsilons
         const Rational EPS_STD = "1/1000000000000"_r;           // 1e-12
         const Rational EPS_HIGH = "1/1000000000000000000000"_r; // 1e-21
         const Rational EPS_ULTRA = "1/10000000000000000000000000000000000000000"_r; // 1e-40
         const Rational EPS_EXTREME = "1/10000000000000000000000000000000000000000000000000000000000000000000000000000000"_r; // 1e-80
 
-        // Проверка, что результат Delta близок к наивному эталону с заданным eps
+        // Check that Delta's result is close to the naive reference with given eps
         void expect_near_naive(const Rational& delta_val,
             const Rational& naive_val,
             const Rational& eps,
@@ -262,15 +283,20 @@ namespace delta::testing {
             const std::string& func_name) {
             Rational delta_res = delta_func(arg, eps);
             Rational naive_res = naive_func(arg, eps);
-            Rational tolerance = eps * 10; // небольшой запас из-за разных стратегий
+            Rational tolerance = eps * 10; // small safety margin due to different strategies
             EXPECT_RATIONAL_NEAR(delta_res, naive_res, tolerance)
                 << func_name << "(" << arg << ") with eps=" << eps;
         }
     };
 
     // =============================================================================
-    // 1. БАЗОВЫЕ EAGER ТЕСТЫ: точность на стандартных значениях
+    // 1. BASIC EAGER TESTS: accuracy at standard values
     // =============================================================================
+
+    /**
+     * @test EagerSqrt
+     * @brief Checks sqrt(4)=2 exactly and sqrt(2) to 1e‑12.
+     */
     TEST_F(TranscendentalCorrectnessTest, EagerSqrt) {
         Rational s4 = delta::sqrt(4_r);
         EXPECT_EQ(s4, 2_r);
@@ -283,6 +309,10 @@ namespace delta::testing {
         }
     }
 
+    /**
+     * @test EagerExp
+     * @brief Checks exp(0)=1 and exp(1) approximates e.
+     */
     TEST_F(TranscendentalCorrectnessTest, EagerExp) {
         Rational e0 = delta::exp(0_r);
         EXPECT_EQ(e0, 1_r);
@@ -295,6 +325,10 @@ namespace delta::testing {
         }
     }
 
+    /**
+     * @test EagerLog
+     * @brief Checks log(1)=0 and log(2) to 1e‑12.
+     */
     TEST_F(TranscendentalCorrectnessTest, EagerLog) {
         Rational l1 = delta::log(1_r);
         EXPECT_EQ(l1, 0_r);
@@ -307,6 +341,10 @@ namespace delta::testing {
         }
     }
 
+    /**
+     * @test EagerSinCos
+     * @brief Checks sin(0)=0, cos(0)=1.
+     */
     TEST_F(TranscendentalCorrectnessTest, EagerSinCos) {
         Rational s0 = delta::sin(0_r);
         EXPECT_EQ(s0, 0_r);
@@ -318,6 +356,10 @@ namespace delta::testing {
         }
     }
 
+    /**
+     * @test EagerPiE
+     * @brief Verifies pi() and e() approximations.
+     */
     TEST_F(TranscendentalCorrectnessTest, EagerPiE) {
         Rational p = delta::pi();
         Rational expected_pi = Rational("31415926535897932384626433832795028841971693993751/10000000000000000000000000000000000000000000000000");
@@ -332,8 +374,13 @@ namespace delta::testing {
     }
 
     // =============================================================================
-    // 2. LAZY ТЕСТЫ: проверка построения и вычисления отложенных выражений
+    // 2. LAZY TESTS: construction and evaluation of delayed expressions
     // =============================================================================
+
+    /**
+     * @test LazySqrt
+     * @brief Lazy sqrt creates a SQRT node and evaluates correctly.
+     */
     TEST_F(TranscendentalCorrectnessTest, LazySqrt) {
         auto s = delta::lazy_sqrt(2_r);
         static_assert(std::is_same_v<decltype(s), LazyRational>);
@@ -344,6 +391,10 @@ namespace delta::testing {
         }
     }
 
+    /**
+     * @test LazyExp
+     * @brief Lazy exp creates an EXP node and evaluates correctly.
+     */
     TEST_F(TranscendentalCorrectnessTest, LazyExp) {
         auto e = delta::lazy_exp(1_r);
         static_assert(std::is_same_v<decltype(e), LazyRational>);
@@ -354,6 +405,10 @@ namespace delta::testing {
         }
     }
 
+    /**
+     * @test LazyPi
+     * @brief Lazy pi creates a PI node and evaluates correctly.
+     */
     TEST_F(TranscendentalCorrectnessTest, LazyPi) {
         auto p = delta::lazy_pi();
         static_assert(std::is_same_v<decltype(p), LazyRational>);
@@ -365,8 +420,13 @@ namespace delta::testing {
     }
 
     // =============================================================================
-    // 3. ГРАНИЧНЫЕ СЛУЧАИ: проверка особых значений и крайних ситуаций
+    // 3. EDGE CASES: special values and extreme situations
     // =============================================================================
+
+    /**
+     * @test SqrtEdgeCases
+     * @brief Handles 0, 1, negative (throws), and large arguments.
+     */
     TEST_F(TranscendentalCorrectnessTest, SqrtEdgeCases) {
         EXPECT_EQ(delta::sqrt(0_r), 0_r);
         EXPECT_EQ(delta::sqrt(1_r), 1_r);
@@ -380,6 +440,10 @@ namespace delta::testing {
         }
     }
 
+    /**
+     * @test ExpEdgeCases
+     * @brief Checks exp(0)=1, large positive/negative arguments.
+     */
     TEST_F(TranscendentalCorrectnessTest, ExpEdgeCases) {
         EXPECT_EQ(delta::exp(0_r), 1_r);
         Rational large = 100_r;
@@ -392,6 +456,10 @@ namespace delta::testing {
         }
     }
 
+    /**
+     * @test LogEdgeCases
+     * @brief Checks log(1)=0, rejects ≤0, and inverts exp.
+     */
     TEST_F(TranscendentalCorrectnessTest, LogEdgeCases) {
         EXPECT_EQ(delta::log(1_r), 0_r);
         EXPECT_THROW(delta::log(0_r), std::domain_error);
@@ -404,6 +472,10 @@ namespace delta::testing {
         }
     }
 
+    /**
+     * @test SinCosEdgeCases
+     * @brief Checks parity, periodicity at π, and odd/even properties.
+     */
     TEST_F(TranscendentalCorrectnessTest, SinCosEdgeCases) {
         EXPECT_EQ(delta::sin(0_r), 0_r);
         EXPECT_EQ(delta::cos(0_r), 1_r);
@@ -418,6 +490,10 @@ namespace delta::testing {
         }
     }
 
+    /**
+     * @test PowEdgeCases
+     * @brief Checks integer and zero exponents, and the additive property.
+     */
     TEST_F(TranscendentalCorrectnessTest, PowEdgeCases) {
         EXPECT_EQ(delta::pow(2_r, 0_r), 1_r);
         EXPECT_EQ(delta::pow(0_r, 5_r), 0_r);
@@ -435,8 +511,13 @@ namespace delta::testing {
     }
 
     // =============================================================================
-    // 4. ГЛУБОКО ВЛОЖЕННЫЕ ВЫРАЖЕНИЯ: проверка композиции функций
+    // 4. DEEPLY NESTED EXPRESSIONS: composition of functions
     // =============================================================================
+
+    /**
+     * @test DeeplyNestedEager
+     * @brief Eager composition sin(cos(exp(log(1+x)))) for x=0.5.
+     */
     TEST_F(TranscendentalCorrectnessTest, DeeplyNestedEager) {
         auto f = [](const Rational& x) -> Rational {
             return delta::sin(delta::cos(delta::exp(delta::log(1_r + x))));
@@ -449,6 +530,10 @@ namespace delta::testing {
         }
     }
 
+    /**
+     * @test DeeplyNestedLazy
+     * @brief Lazy composition Sin(Cos(Exp(Log(1+x)))) builds correct nodes.
+     */
     TEST_F(TranscendentalCorrectnessTest, DeeplyNestedLazy) {
         using namespace delta;
         LazyRational x = LazyRational("0.5"_r);
@@ -464,6 +549,10 @@ namespace delta::testing {
         }
     }
 
+    /**
+     * @test MixedEagerLazyDeep
+     * @brief Combines eager constants with lazy expressions.
+     */
     TEST_F(TranscendentalCorrectnessTest, MixedEagerLazyDeep) {
         Rational a = 2_r;
         LazyRational b = LazyRational(3_r);
@@ -477,8 +566,13 @@ namespace delta::testing {
     }
 
     // =============================================================================
-    // 5. ВАРЬИРОВАНИЕ ТОЧНОСТИ: проверка сходимости с разными eps
+    // 5. VARYING PRECISION: convergence with decreasing eps
     // =============================================================================
+
+    /**
+     * @test VaryingPrecisionSin
+     * @brief Checks that sin(1) converges as epsilon decreases.
+     */
     TEST_F(TranscendentalCorrectnessTest, VaryingPrecisionSin) {
         const Rational x = 1_r;
         std::vector<Rational> epsilons = {
@@ -504,8 +598,13 @@ namespace delta::testing {
     }
 
     // =============================================================================
-    // 6. LAZY КОРОТКИЕ ИМЕНА: проверка синтаксического сахара
+    // 6. LAZY SHORT NAMES: syntactic sugar correctness
     // =============================================================================
+
+    /**
+     * @test LazyShortNamesCreateCorrectNodes
+     * @brief Verifies that Sin, Cos, Pi, Exp create the expected node types.
+     */
     TEST_F(TranscendentalCorrectnessTest, LazyShortNamesCreateCorrectNodes) {
         using namespace delta;
         LazyRational a = LazyRational(2_r);
@@ -526,8 +625,13 @@ namespace delta::testing {
     }
 
     // =============================================================================
-    // 7. РЕДУКЦИЯ АРГУМЕНТОВ: проверка периодичности и свойств при больших x
+    // 7. ARGUMENT REDUCTION: periodicity and properties for large x
     // =============================================================================
+
+    /**
+     * @test SinCosLargeAngles
+     * @brief Checks that sin(100π)=0, cos(50π)=1, cos(51π)=-1.
+     */
     TEST_F(TranscendentalCorrectnessTest, SinCosLargeAngles) {
         const Rational pi_val = delta::pi();
         Rational s = delta::sin(100_r * pi_val);
@@ -541,13 +645,16 @@ namespace delta::testing {
         }
     }
 
+    /**
+     * @test ExpLargeArgumentScaling
+     * @brief Checks exp(x)^2 ≈ exp(2x) for x=100.
+     */
     TEST_F(TranscendentalCorrectnessTest, ExpLargeArgumentScaling) {
         const Rational big = 100_r;
         const Rational eps = EPS_STD;
         Rational e_big = delta::exp(big, eps);
         Rational e_big_squared = delta::exp(2_r * big, eps);
         Rational product = e_big * e_big;
-        // Для огромных чисел допустима только относительная близость
         Rational rel_diff = delta::abs(product - e_big_squared) / delta::abs(e_big_squared);
         EXPECT_LT(rel_diff.to_double(), 1e-10);
         if (!HasFailure()) {
@@ -555,6 +662,10 @@ namespace delta::testing {
         }
     }
 
+    /**
+     * @test LogLargeArgumentScaling
+     * @brief Checks log(x²)=2log(x) for x=100000.
+     */
     TEST_F(TranscendentalCorrectnessTest, LogLargeArgumentScaling) {
         const Rational big = 100000_r;
         const Rational eps = EPS_STD;
@@ -567,13 +678,17 @@ namespace delta::testing {
     }
 
     // =============================================================================
-    // 8. КОНСИСТЕНТНОСТЬ FLOAT/SERIES ПУТЕЙ: оба пути дают близкие результаты
+    // 8. FLOAT vs SERIES PATH CONSISTENCY
     // =============================================================================
+
+    /**
+     * @test FloatVsSeriesConsistencySin
+     * @brief Compares float‑path (eps=1e-21) and series‑path (eps=1e-40) for sin(2).
+     */
     TEST_F(TranscendentalCorrectnessTest, FloatVsSeriesConsistencySin) {
         Rational x = 2_r;
-        Rational float_sin = delta::sin(x, EPS_HIGH);   // eps=1e-21 -> float путь
-        Rational series_sin = delta::sin(x, EPS_ULTRA); // eps=1e-40 -> series путь
-        // Они должны быть близки с точностью не хуже 1e-18
+        Rational float_sin = delta::sin(x, EPS_HIGH);   // eps=1e-21 -> float path
+        Rational series_sin = delta::sin(x, EPS_ULTRA); // eps=1e-40 -> series path
         Rational diff = delta::abs(float_sin - series_sin);
         EXPECT_LT(diff.to_double(), 1e-18);
         if (!HasFailure()) {
@@ -581,6 +696,10 @@ namespace delta::testing {
         }
     }
 
+    /**
+     * @test FloatVsSeriesConsistencyExp
+     * @brief Compares float‑path and series‑path for exp(1.5).
+     */
     TEST_F(TranscendentalCorrectnessTest, FloatVsSeriesConsistencyExp) {
         Rational x = "1.5"_r;
         Rational float_exp = delta::exp(x, EPS_HIGH);
@@ -593,8 +712,13 @@ namespace delta::testing {
     }
 
     // =============================================================================
-    // 9. СТРЕСС-ТЕСТ LAZY: создание и вычисление большого дерева выражений
+    // 9. LAZY STRESS TEST: large tree with many transcendental nodes
     // =============================================================================
+
+    /**
+     * @test LazyTreeWithManyNodes
+     * @brief Builds 3000 nodes (Sin, Cos, Exp) and evaluates.
+     */
     TEST_F(TranscendentalCorrectnessTest, LazyTreeWithManyNodes) {
         internal::reset_pool();
         LazyRational acc = LazyRational();
@@ -612,10 +736,15 @@ namespace delta::testing {
     }
 
     // =============================================================================
-    // 10. ТОЧНОСТЬ ПРИ ВЫСОКИХ ЗНАЧЕНИЯХ: бенчмарки точности для pi и sqrt
+    // 10. HIGH‑PRECISION BENCHMARKS: pi and sqrt(2)
     // =============================================================================
+
+    /**
+     * @test PiPrecisionBenchmark
+     * @brief Computes π with eps from 1e-20 to 1e-100 and checks error bound.
+     */
     TEST_F(TranscendentalCorrectnessTest, PiPrecisionBenchmark) {
-        // Эталон π (первые 100 цифр) как Rational
+        // Reference π (first 100 digits) as Rational
         const Rational pi_ref(
             "31415926535897932384626433832795028841971693993751"
             "05820974944592307816406286208998628034825342117068"
@@ -645,7 +774,7 @@ namespace delta::testing {
             Rational pi_computed = delta::pi(tc.eps);
             Rational error = delta::abs(pi_computed - pi_ref);
 
-            // Ошибка должна быть меньше запрошенной точности с запасом
+            // Error should be less than requested eps with safety margin
             EXPECT_TRUE(error < tc.eps * 10)
                 << "Failed for eps=" << tc.name
                 << " (expected " << tc.expected_digits << " digits)"
@@ -657,8 +786,12 @@ namespace delta::testing {
         }
     }
 
+    /**
+     * @test Sqrt2PrecisionBenchmark
+     * @brief Computes √2 with eps from 1e-20 to 1e-100.
+     */
     TEST_F(TranscendentalCorrectnessTest, Sqrt2PrecisionBenchmark) {
-        // Эталон √2 (первые 100 цифр) как Rational
+        // Reference √2 (first 100 digits) as Rational
         const Rational sqrt2_ref(
             "1.4142135623730950488016887242096980785696718753769480731766797379907324784621070388503875343276415727"
         );
@@ -685,7 +818,6 @@ namespace delta::testing {
             Rational sqrt2_computed = delta::sqrt(Rational(2), tc.eps);
             Rational error = delta::abs(sqrt2_computed - sqrt2_ref);
 
-            // Ошибка должна быть меньше запрошенной точности с запасом
             EXPECT_TRUE(error < tc.eps * 10)
                 << "Failed for eps=" << tc.name
                 << " (expected " << tc.expected_digits << " digits)"
@@ -698,8 +830,12 @@ namespace delta::testing {
     }
 
     // -----------------------------------------------------------------------------
-    // Проверка тождества: sin(π) = 0 для высоких точностей
+    // Identity check: sin(π) = 0 for high precisions
     // -----------------------------------------------------------------------------
+    /**
+     * @test PiSinConsistency
+     * @brief Checks that sin(π) < 1000*eps for various eps.
+     */
     TEST_F(TranscendentalCorrectnessTest, PiSinConsistency) {
         std::vector<Rational> epsilons = {
             "1/1000000000000000000000000000000"_r,        // 1e-30
@@ -716,7 +852,7 @@ namespace delta::testing {
             std::cout << "eps=" << std::setw(5) << -std::log10(eps.to_double())
                 << ": sin(pi) = " << sin_pi.to_double() << "\n";
 
-            // sin(π) должен быть очень близок к 0
+            // sin(π) should be very close to 0
             EXPECT_RATIONAL_NEAR(sin_pi, 0_r, eps * 1000)
                 << "sin(pi) should be close to 0 for eps=" << eps;
         }
@@ -726,8 +862,12 @@ namespace delta::testing {
     }
 
     // -----------------------------------------------------------------------------
-    // Проверка тождества: cos(π/2) = 0 для высоких точностей
+    // Identity check: cos(π/2) = 0 for high precisions
     // -----------------------------------------------------------------------------
+    /**
+     * @test PiCosConsistency
+     * @brief Checks that cos(π/2) < 1000*eps for various eps.
+     */
     TEST_F(TranscendentalCorrectnessTest, PiCosConsistency) {
         std::vector<Rational> epsilons = {
             "1/1000000000000000000000000000000"_r,        // 1e-30
@@ -744,7 +884,7 @@ namespace delta::testing {
             std::cout << "eps=" << std::setw(5) << -std::log10(eps.to_double())
                 << ": cos(pi/2) = " << cos_half_pi.to_double() << "\n";
 
-            // cos(π/2) должен быть очень близок к 0
+            // cos(π/2) should be very close to 0
             EXPECT_RATIONAL_NEAR(cos_half_pi, 0_r, eps * 1000)
                 << "cos(pi/2) should be close to 0 for eps=" << eps;
         }
@@ -753,10 +893,15 @@ namespace delta::testing {
         }
     }
 
-    // ВЫЧИСЛЕНИЕ КОРНЯ ЧЕРЕЗ МЕТОД НЬЮТОНА СХОДИТСЯ КВАДРАТИЧНО, 
-    // ТАК ЧТО ОДИН И ТОТ ЖЕ КОРЕНЬ ЗАПРОШЕННЫЙ С ВЫСОКОЙ И НИЗКОЙ ТОЧНОСТЬЮ 
-    // - ВСЁ РАВНО МОЖЕТ ПОСЧИТАТЬСЯ С ВЫСОКОЙ ТОЧНОСТЬЮ
-    // Это особенность метода Ньютона, а не баг. Поэтому мы тестируем квадраты корней чтобы увидеть разбег погрешности
+    // -----------------------------------------------------------------------------
+    // Special note: Newton's method for sqrt converges quadratically,
+    // so a low‑precision request may still give high accuracy.
+    // Hence we test the actual squared error.
+    // -----------------------------------------------------------------------------
+    /**
+     * @test SQRTPrecisionParameter
+     * @brief Verifies that requested eps is respected for sqrt(2).
+     */
     TEST_F(TranscendentalCorrectnessTest, SQRTPrecisionParameter) {
         Rational x = 2_r;
         Rational eps_low = "1/10"_r;
@@ -765,7 +910,7 @@ namespace delta::testing {
         Rational low = delta::sqrt(x, eps_low);
         Rational high = delta::sqrt(x, eps_high);
 
-        // Проверяем, что |sqrt(x)² - x| < eps для каждого случая
+        // Check |sqrt(x)² - x| < eps for each case
         Rational diff_low = delta::abs(low * low - x);
         Rational diff_high = delta::abs(high * high - x);
 
@@ -774,7 +919,7 @@ namespace delta::testing {
         EXPECT_TRUE(diff_high < eps_high)
             << "diff_high=" << diff_high.to_double() << " >= eps_high=" << eps_high.to_double();
 
-        // Дополнительно: более строгий eps даёт меньшую погрешность
+        // Tighter eps gives smaller error
         EXPECT_TRUE(diff_high < diff_low);
         if (!HasFailure()) {
             std::cout << "SQRT PRECISION PARAMETER: Both low (1e-1) and high (1e-30) eps produce sqrt satisfying requested tolerances, tighter eps yields better result." << std::endl;
@@ -782,8 +927,13 @@ namespace delta::testing {
     }
 
     // =============================================================================
-    // 11. ФУНКЦИЯ ACOS: базовая проверка и точность
+    // 11. FUNCTION ACOS: basic checks and precision
     // =============================================================================
+
+    /**
+     * @test AcosBasic
+     * @brief Checks acos at 0, ±1, and out‑of‑range.
+     */
     TEST_F(TranscendentalCorrectnessTest, AcosBasic) {
         EXPECT_RATIONAL_NEAR(delta::acos(0_r), delta::pi() / 2_r, EPS_STD);
         EXPECT_EQ(delta::acos(1_r), 0_r);
@@ -795,6 +945,10 @@ namespace delta::testing {
         }
     }
 
+    /**
+     * @test AcosPrecision
+     * @brief Checks cos(acos(x)) = x.
+     */
     TEST_F(TranscendentalCorrectnessTest, AcosPrecision) {
         const Rational x = "0.5"_r;
         const Rational eps = EPS_ULTRA;
@@ -802,13 +956,16 @@ namespace delta::testing {
         Rational acos_x = delta::acos(x, eps);
         Rational cos_acos = delta::cos(acos_x, eps);
 
-        // cos(acos(x)) должно быть равно x
         EXPECT_RATIONAL_NEAR(cos_acos, x, eps * 10);
         if (!HasFailure()) {
             std::cout << "ACOS PRECISION: cos(acos(0.5)) recovers 0.5 to 10*eps at 1e-40 precision." << std::endl;
         }
     }
 
+    /**
+     * @test AcosVsAsin
+     * @brief Checks acos(x) + asin(x) = π/2.
+     */
     TEST_F(TranscendentalCorrectnessTest, AcosVsAsin) {
         const Rational x = "0.5"_r;
         const Rational eps = EPS_ULTRA;
@@ -817,27 +974,24 @@ namespace delta::testing {
         Rational asin_x = delta::asin(x, eps);
         Rational pi_half = delta::pi(eps) / 2;
 
-        // acos(x) + asin(x) = π/2
         EXPECT_RATIONAL_NEAR(acos_x + asin_x, pi_half, eps * 10);
         if (!HasFailure()) {
             std::cout << "ACOS VS ASIN: acos(0.5) + asin(0.5) = pi/2 identity holds to 10*eps at 1e-40 precision." << std::endl;
         }
     }
 
+    /**
+     * @test AcosSpecialValues
+     * @brief Tests acos(0)=π/2, acos(1)=0, acos(-1)=π, acos(√2/2)=π/4.
+     */
     TEST_F(TranscendentalCorrectnessTest, AcosSpecialValues) {
         const Rational eps = EPS_ULTRA;
         Rational pi_val = delta::pi(eps);
 
-        // acos(0) = π/2
         EXPECT_RATIONAL_NEAR(delta::acos(0_r, eps), pi_val / 2, eps);
-
-        // acos(1) = 0
         EXPECT_RATIONAL_NEAR(delta::acos(1_r, eps), 0_r, eps);
-
-        // acos(-1) = π
         EXPECT_RATIONAL_NEAR(delta::acos(-1_r, eps), pi_val, eps);
 
-        // acos(√2/2) = π/4
         Rational sqrt2 = delta::sqrt(2_r, eps);
         Rational arg = sqrt2 / 2;
         EXPECT_RATIONAL_NEAR(delta::acos(arg, eps), pi_val / 4, eps);
@@ -846,6 +1000,10 @@ namespace delta::testing {
         }
     }
 
+    /**
+     * @test AcosMonotonic
+     * @brief Verifies that acos is strictly decreasing.
+     */
     TEST_F(TranscendentalCorrectnessTest, AcosMonotonic) {
         const Rational eps = EPS_ULTRA;
         std::vector<Rational> args = { -"9/10"_r, -"1/2"_r, 0_r, "1/2"_r, "9/10"_r };
@@ -854,7 +1012,6 @@ namespace delta::testing {
             Rational val1 = delta::acos(args[i - 1], eps);
             Rational val2 = delta::acos(args[i], eps);
 
-            // acos убывает на [-1, 1]
             EXPECT_TRUE(val1 > val2)
                 << "acos(" << args[i - 1] << ") = " << val1
                 << " should be > acos(" << args[i] << ") = " << val2;
@@ -864,6 +1021,10 @@ namespace delta::testing {
         }
     }
 
+    /**
+     * @test AcosDerivative
+     * @brief Checks numerical derivative matches -1/√(1-x²).
+     */
     TEST_F(TranscendentalCorrectnessTest, AcosDerivative) {
         const Rational x = "0.5"_r;
         const Rational eps = EPS_ULTRA;
@@ -873,7 +1034,6 @@ namespace delta::testing {
         Rational acos_x_plus = delta::acos(x + dx, eps);
         Rational derivative_numeric = (acos_x_plus - acos_x) / dx;
 
-        // Аналитическая производная: d/dx acos(x) = -1/√(1-x²)
         Rational derivative_analytic = -1_r / delta::sqrt(1_r - x * x, eps);
 
         EXPECT_RATIONAL_NEAR(derivative_numeric, derivative_analytic, eps * 1000);
@@ -883,12 +1043,17 @@ namespace delta::testing {
     }
 
     // =============================================================================
-    // 12. ЭКСТРЕМАЛЬНАЯ ТОЧНОСТЬ: проверка работоспособности на 1e-80
+    // 12. EXTREME PRECISION: no hanging at 1e-80
     // =============================================================================
+
+    /**
+     * @test ExtremePrecisionDoesNotHang
+     * @brief Ensures all functions complete at epsilon=1e-80.
+     */
     TEST_F(TranscendentalCorrectnessTest, ExtremePrecisionDoesNotHang) {
         const Rational eps = EPS_EXTREME;
         Rational x = 2_r;
-        // Все вызовы должны завершиться за разумное время
+        // All calls should finish in reasonable time
         Rational s = delta::sqrt(x, eps);
         Rational e = delta::exp(1_r, eps);
         Rational p = delta::pi(eps);
@@ -905,8 +1070,13 @@ namespace delta::testing {
     }
 
     // =============================================================================
-    // 13. ВЫСОКИЕ ТОЧНОСТИ: проверка тождеств и наивных эталонов
+    // 13. HIGH PRECISION: identities and naive reference
     // =============================================================================
+
+    /**
+     * @test SeriesPathHighPrecision
+     * @brief Checks sin²+cos²=1, exp(log(x))=x, and matches naive implementations.
+     */
     TEST_F(TranscendentalCorrectnessTest, SeriesPathHighPrecision) {
         std::vector<Rational> epsilons = { EPS_ULTRA, EPS_EXTREME };
         Rational x = "1.23456789"_r;
@@ -916,14 +1086,14 @@ namespace delta::testing {
             Rational e = delta::exp(x, eps);
             Rational p = delta::pi(eps);
 
-            // Тождество sin²+cos²=1
+            // sin²+cos²=1
             EXPECT_RATIONAL_NEAR(s * s + c * c, 1_r, eps * 10) << "eps=" << eps;
 
-            // exp и log взаимно обратны
+            // exp and log are inverses
             Rational log_e = delta::log(e, eps);
             EXPECT_RATIONAL_NEAR(log_e, x, eps * 1000) << "eps=" << eps;
 
-            // Сравнение с наивными реализациями для полной уверенности
+            // Compare with naive implementations
             test_function_against_naive(
                 [](const Rational& arg, const Rational& e) { return delta::sin(arg, e); },
                 naive_series_sin, x, eps, "sin");
@@ -951,15 +1121,20 @@ namespace delta::testing {
     }
 
     // =============================================================================
-    // 14. POW С ДРОБНЫМИ ПОКАЗАТЕЛЯМИ: проверка a^(p/q)
+    // 14. POW WITH RATIONAL EXPONENTS: a^(p/q)
     // =============================================================================
+
+    /**
+     * @test PowRationalExponent
+     * @brief Verifies pow(2,1/2)=√2, pow(16,3/4)=8, and matches naive series.
+     */
     TEST_F(TranscendentalCorrectnessTest, PowRationalExponent) {
         const Rational eps = EPS_STD;
-        // Квадратный корень через pow
+        // Square root via pow
         EXPECT_RATIONAL_NEAR(delta::pow(2_r, Rational(1, 2)), delta::sqrt(2_r), eps);
         // 16^(3/4) = 8
         EXPECT_RATIONAL_NEAR(delta::pow(16_r, Rational(3, 4)), 8_r, eps);
-        // Сравнение с наивной реализацией для дробного показателя
+        // Compare with naive implementation for a fractional exponent
         Rational base = "3.5"_r;
         Rational exp = Rational(2, 3);
         Rational delta_pow = delta::pow(base, exp, eps);
@@ -971,8 +1146,13 @@ namespace delta::testing {
     }
 
     // =============================================================================
-    // 15. ФУНДАМЕНТАЛЬНЫЕ ТОЖДЕСТВА: sin²+cos², exp(log), sqrt², cos(acos)
+    // 15. FUNDAMENTAL IDENTITIES: sin²+cos², exp(log), sqrt², cos(acos)
     // =============================================================================
+
+    /**
+     * @test FundamentalIdentities
+     * @brief Checks four identities for multiple x and two epsilons.
+     */
     TEST_F(TranscendentalCorrectnessTest, FundamentalIdentities) {
         std::vector<Rational> values = { 0_r, "0.5"_r, 1_r, "1.5"_r, 2_r };
         std::vector<Rational> epsilons = { EPS_STD, EPS_ULTRA };
@@ -997,7 +1177,6 @@ namespace delta::testing {
                         << "sqrt(x)^2 for x=" << x << ", eps=" << eps;
                 }
 
-                // acos(cos(x)) должно быть близко к |x mod pi|, но для простоты проверим cos(acos(x))
                 if (x >= -1_r && x <= 1_r) {
                     Rational acos_x = delta::acos(x, eps);
                     Rational cos_acos = delta::cos(acos_x, eps);
@@ -1010,34 +1189,35 @@ namespace delta::testing {
             std::cout << "FUNDAMENTAL IDENTITIES: All 4 identities hold across 5 arguments at both standard (1e-12) and ultra (1e-40) precision." << std::endl;
         }
     }
+
+    // -----------------------------------------------------------------------------
+    // Debug tests (disabled by default)
+    // -----------------------------------------------------------------------------
     TEST_F(TranscendentalCorrectnessTest, LazyEpsDebug) {
         using namespace delta;
         LazyRational x = LazyRational("1.23456789"_r);
 
-        // Вычислим sin напрямую с разными eps
+        // Compute sin directly with different eps
         Rational sin_std = sin("1.23456789"_r, EPS_STD);
         Rational sin_ultra = sin("1.23456789"_r, EPS_ULTRA);
 
-        // А теперь через Lazy
+        // Through lazy
         LazyRational lazy_sin = Sin(x);
         Rational lazy_sin_val = lazy_sin.eval();
 
         std::cout << "Direct sin (std):  " << sin_std.to_double() << std::endl;
         std::cout << "Direct sin (ultra): " << sin_ultra.to_double() << std::endl;
         std::cout << "Lazy sin:          " << lazy_sin_val.to_double() << std::endl;
-
-        // Если Lazy sin отличается от direct sin — проблема в eval().
     }
+
     TEST_F(TranscendentalCorrectnessTest, LazyExpLogDebug) {
         using namespace delta;
 
-        // Проверим, что Exp(Log(z)) вычисляется правильно напрямую
         Rational z = "2.23456789"_r;
         Rational direct = exp(log(z, EPS_STD), EPS_STD);
         std::cout << "Direct exp(log(z)): " << direct.to_double() << std::endl;
         std::cout << "Exact z:            " << z.to_double() << std::endl;
 
-        // Теперь через Lazy
         LazyRational lz = LazyRational(z);
         LazyRational lexpr = Exp(Log(lz));
         Rational lazy_val = lexpr.eval();
@@ -1045,9 +1225,7 @@ namespace delta::testing {
 
         EXPECT_RATIONAL_NEAR(direct, z, EPS_STD);
 
-        // Скорее всего, Lazy схлопывает Exp(Log(z)) в z, и это ПРАВИЛЬНО.
-        // Но если lazy_val == z (а не exp(log(z))), то проблема в тесте, который
-        // ожидает exp(log(z)), а получает z.
+        // Lazy canonicalisation Exp(Log(z)) -> z is correct
         if (lazy_val == z) {
             std::cout << "Lazy CANONICALIZED Exp(Log(z)) -> z (expected)" << std::endl;
         }
@@ -1055,41 +1233,44 @@ namespace delta::testing {
             std::cout << "Lazy returned: " << lazy_val.to_double() << std::endl;
         }
     }
+
     // =============================================================================
-    // 16. LAZY ВЫРАЖЕНИЯ С ВЫСОКОЙ ТОЧНОСТЬЮ: проверка канонизации
+    // 16. LAZY HIGH‑PRECISION EXPRESSIONS: canonicalisation test
     // =============================================================================
+
+    /**
+     * @test LazyWithHighPrecision
+     * @brief Builds Sin(x) + Cos(2x) + (x+1) using lazy and checks exact result.
+     */
     TEST_F(TranscendentalCorrectnessTest, LazyWithHighPrecision) {
         using namespace delta;
 
-        // ВАЖНО: LazyRational — мутабельный тип. Операторы +, *, Log с левым lvalue
-        // аргументом изменяют его на месте для эффективности. Поэтому КАЖДОЕ подвыражение,
-        // использующее x в мутабельной позиции, должно работать с отдельной копией.
+        // IMPORTANT: LazyRational is mutable. Operators +, *, Log with an lvalue
+        // argument modify it in place for efficiency. Therefore each sub‑expression
+        // that uses x in a mutable position must work on a separate copy.
         //
-        // Sin и Cos принимают const&, копируют объект и не мутируют его — для них
-        // можно безопасно использовать общий x.
-        // А вот x * 2_r и x + 1_r (с Rational) мутируют левый LazyRational,
-        // поэтому для каждого из них создаём временную копию.
+        // Sin and Cos take const&, copy the object and do not mutate it – safe to use common x.
+        // However x * 2 and x + 1 (with Rational) mutate the left LazyRational,
+        // so we create a temporary copy for each of them.
 
-        // Один x для немут‑ирующих операций (Sin)
+        // One x for non‑mutating operations (Sin)
         LazyRational x = LazyRational("1.23456789"_r);
 
-        // Выражение: Sin(x) + Cos(x * 2_r) + Exp(Log(x + 1_r))
-        LazyRational expr = Sin(x)                       // x не мутируется
-            + Cos(x.clone() * 2_r)   // временная копия для умножения
-            + Exp(Log(x.clone() + 1_r)); // временная копия для сложения
+        // Expression: Sin(x) + Cos(x * 2) + Exp(Log(x + 1))
+        LazyRational expr = Sin(x)                       // x not mutated
+            + Cos(x.clone() * 2_r)   // temporary copy for multiplication
+            + Exp(Log(x.clone() + 1_r)); // temporary copy for addition
 
-        // eager считает exp(log(z)) численно
+        // eager computes exp(log(z)) numerically
         Rational eager_res = sin("1.23456789"_r) + cos("2.46913578"_r) + exp(log("2.23456789"_r));
         Rational lazy_res_std = expr.eval();
 
-        // При канонизации Exp(Log(z)) → z (точно), поэтому допуск должен быть
-        // не точностью exp(log(z)), а расстоянием между z и exp(log(z)).
-        // exp(log(z)) ≈ z с точностью EPS_STD, поэтому:
+        // With canonicalisation Exp(Log(z)) → z (exactly), tolerance is the error of exp(log(z))
+        // exp(log(z)) ≈ z to EPS_STD, so:
         EXPECT_RATIONAL_NEAR(lazy_res_std, eager_res, EPS_STD * 3)
             << "Lazy (with Exp-Log cancellation) vs eager";
 
-        // Теперь ультра-точность: создаём НОВОЕ выражение (старое expr уже вычислялось
-        // и может кешировать результат, поэтому не переиспользуем его)
+        // Ultra‑precision: create a new expression (old expr may have cached result)
         LazyRational x2 = LazyRational("1.23456789"_r);
         LazyRational expr2 = Sin(x2)
             + Cos(x2.clone() * 2_r)
@@ -1097,7 +1278,7 @@ namespace delta::testing {
 
         Rational lazy_res_ultra = expr2.eval(false);
 
-        // Точный эквивалент после канонизации: sin(x) + cos(2x) + (x+1)
+        // Exact equivalent after canonicalisation: sin(x) + cos(2x) + (x+1)
         Rational exact_res = sin("1.23456789"_r) + cos("2.46913578"_r) + ("2.23456789"_r);
 
         EXPECT_RATIONAL_NEAR(lazy_res_ultra, exact_res, EPS_ULTRA * 10)

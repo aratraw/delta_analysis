@@ -2,6 +2,21 @@
 // Licensed under PolyForm Small Business License 1.0.0
 
 // tests/rational/pow_test.cpp
+// ============================================================================
+// TESTS FOR POWER FUNCTION (EAGER AND LAZY)
+// ============================================================================
+//
+// This file tests the power (exponentiation) functionality:
+//   - Eager pow with integer exponent (including negative and zero).
+//   - Eager pow with rational exponent (e.g., square root, cube root).
+//   - Lazy pow (returns LazyRational) with integer and rational exponents.
+//   - Simplification of lazy pow expressions (x^1 → x, x^0 → 1, 1^y → 1).
+//   - Structural equality (hash‑consing) of lazy pow nodes.
+//
+// All tests use the global default epsilon for transcendental computations
+// (sqrt, exp, log) that may be required for rational exponents.
+// ============================================================================
+
 #pragma once
 #include <gtest/gtest.h>
 #include "delta/core/rational.h"
@@ -22,8 +37,13 @@ namespace delta::testing {
     };
 
     // -------------------------------------------------------------------------
-    // 1. Eager pow с целым показателем (возвращает Rational)
+    // 1. Eager pow with integer exponent (returns Rational)
     // -------------------------------------------------------------------------
+    /**
+     * @test EagerPowIntegerExponent
+     * @brief Checks integer exponentiation: positive, zero, negative,
+     *        including error cases (0 raised to negative power).
+     */
     TEST_F(RationalPowTest, EagerPowIntegerExponent) {
         EXPECT_EQ(delta::pow(2_r, 3), 8_r);
         EXPECT_EQ(delta::pow("2/3"_r, 2), "4/9"_r);
@@ -32,6 +52,12 @@ namespace delta::testing {
         EXPECT_EQ(delta::pow(2_r, -2), "1/4"_r);
         EXPECT_THROW(delta::pow(0_r, -1), std::domain_error);
     }
+
+    /**
+     * @test DISABLED_EagerPowRationalExponent_Debug
+     * @brief Debug version of rational exponentiation (disabled by default).
+     *        Outputs timing information; kept for manual debugging.
+     */
     TEST_F(RationalPowTest, DISABLED_EagerPowRationalExponent_Debug) {
         Rational eps = default_eps();
         internal::reset_pool();
@@ -69,12 +95,15 @@ namespace delta::testing {
 
         log("Test finished");
     }
+
     // -------------------------------------------------------------------------
-    // 2. Eager pow с рациональным показателем (возвращает Rational)
+    // 2. Eager pow with rational exponent (returns Rational)
     // -------------------------------------------------------------------------
-    // Если прогонять этот тест в общей тест-сюите из пары сотен тестов - 
-    // то именно этот конкретный тест может зависнуть без видимой причины.
-    // Если прогонять текущий тестовый файл в отдельном экзешнике - тест проходит за милисекунды. Баг известен, приоритет низкий.
+    /**
+     * @test EagerPowRationalExponent
+     * @brief Tests exponentiation with rational exponents (1/2, 1/3, etc.)
+     *        using the general formula `exp(log(base) * exp)`.
+     */
     TEST_F(RationalPowTest, EagerPowRationalExponent) {
         Rational eps = default_eps();
         Rational p = delta::pow(4_r, "1/2"_r, eps);
@@ -92,8 +121,12 @@ namespace delta::testing {
     }
 
     // -------------------------------------------------------------------------
-    // 3. Lazy pow с целым показателем (возвращает LazyRational)
+    // 3. Lazy pow with integer exponent (returns LazyRational)
     // -------------------------------------------------------------------------
+    /**
+     * @test LazyPowIntegerExponent
+     * @brief Checks lazy power with integer exponents (positive and negative).
+     */
     TEST_F(RationalPowTest, LazyPowIntegerExponent) {
         LazyRational base = Rational(2).as_lazy();
         auto res = delta::lazy_pow(base, 3);
@@ -105,8 +138,12 @@ namespace delta::testing {
     }
 
     // -------------------------------------------------------------------------
-    // 4. Lazy pow с рациональным показателем (возвращает LazyRational)
+    // 4. Lazy pow with rational exponent (returns LazyRational)
     // -------------------------------------------------------------------------
+    /**
+     * @test LazyPowRationalExponent
+     * @brief Checks lazy power with a rational exponent (e.g., 1/2).
+     */
     TEST_F(RationalPowTest, LazyPowRationalExponent) {
         LazyRational base = Rational(2).as_lazy();
         LazyRational exp = Rational(1, 2).as_lazy();
@@ -117,8 +154,15 @@ namespace delta::testing {
     }
 
     // -------------------------------------------------------------------------
-    // 5. Упрощение lazy pow
+    // 5. Simplification of lazy pow
     // -------------------------------------------------------------------------
+    /**
+     * @test LazyPowSimplify
+     * @brief Verifies algebraic simplification rules for power nodes:
+     *        - x^1 → x
+     *        - x^0 → 1
+     *        - 1^y → 1
+     */
     TEST_F(RationalPowTest, LazyPowSimplify) {
         LazyRational base = Rational(2).as_lazy();
 
@@ -140,9 +184,14 @@ namespace delta::testing {
     }
 
     // -------------------------------------------------------------------------
-    // 6. Структурное равенство для lazy pow
+    // 6. Structural equality for lazy pow
     // -------------------------------------------------------------------------
-    TEST_F(RationalPowTest,LazyPowStructuralEquality) {
+    /**
+     * @test LazyPowStructuralEquality
+     * @brief Checks that identical lazy pow expressions share the same
+     *        clean node after simplification (hash‑consing).
+     */
+    TEST_F(RationalPowTest, LazyPowStructuralEquality) {
         LazyRational a = delta::lazy_pow(Rational(2).as_lazy(), Rational(1, 2).as_lazy());
         LazyRational b = delta::lazy_pow(Rational(2).as_lazy(), Rational(1, 2).as_lazy());
         EXPECT_TRUE(a == b);

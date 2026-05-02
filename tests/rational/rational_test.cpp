@@ -2,16 +2,41 @@
 // Licensed under PolyForm Small Business License 1.0.0
 
 // tests/rational/rational_test.cpp
-#pragma once
+// ============================================================================
+// BASIC TESTS FOR RATIONAL (EAGER, IMMUTABLE RATIONAL NUMBERS)
+// ============================================================================
+//
+// This file tests the core functionality of the Rational class:
+//   - Constructors (default, integer, string, numerator/denominator).
+//   - String parsing (integers, decimals, fractions).
+//   - Arithmetic operators (+, -, *, /) and compound assignments.
+//   - Negation and absolute value.
+//   - Comparison operators.
+//   - to_string round‑trip and canonical form (gcd reduction, positive denominator).
+//   - Denominator growth behaviour (does not explode unnecessarily).
+//   - Cross‑cancellation in multiplication.
+//   - Large integer exponentiation (positive and negative exponents).
+//   - Division by zero (exception handling).
+//   - Zero representation.
+//
+// All tests are eager (immediate) and use rational comparisons.
+// ============================================================================
+
 #include <gtest/gtest.h>
 #include "delta/core/rational.h"
 #include "test_utils.h"
 
 namespace delta::testing {
     class RationalBasicTest : public RationalTest {};
+
     // -------------------------------------------------------------------------
     // 1. Constructors
     // -------------------------------------------------------------------------
+
+    /**
+     * @test Constructors
+     * @brief Tests default, integer, and string constructors.
+     */
     TEST_F(RationalBasicTest, Constructors) {
         // Default constructor
         Rational a;
@@ -37,17 +62,23 @@ namespace delta::testing {
     // -------------------------------------------------------------------------
     // 2. String parsing
     // -------------------------------------------------------------------------
+
+    /**
+     * @test StringParsing
+     * @brief Verifies that strings are correctly parsed into rationals
+     *        (integers, decimal fractions, common fractions).
+     */
     TEST_F(RationalBasicTest, StringParsing) {
-        // Целые числа
+        // Integers
         EXPECT_EQ("123"_r.to_string(), "123");
         EXPECT_EQ("-456"_r.to_string(), "-456");
 
-        // Десятичные дроби
+        // Decimal fractions
         EXPECT_EQ("0.75"_r.to_string(), "3/4");
         EXPECT_EQ("-0.125"_r.to_string(), "-1/8");
         EXPECT_EQ("0.0"_r.to_string(), "0");
 
-        // Обыкновенные дроби
+        // Common fractions
         EXPECT_EQ("5/8"_r.to_string(), "5/8");
         EXPECT_EQ("-7/9"_r.to_string(), "-7/9");
         EXPECT_EQ("0/1"_r.to_string(), "0");
@@ -56,6 +87,11 @@ namespace delta::testing {
     // -------------------------------------------------------------------------
     // 3. Arithmetic
     // -------------------------------------------------------------------------
+
+    /**
+     * @test Arithmetic
+     * @brief Checks addition, subtraction, multiplication, and division.
+     */
     TEST_F(RationalBasicTest, Arithmetic) {
         std::cerr << "Arithmetic test: start" << std::endl;
         // Addition
@@ -78,6 +114,11 @@ namespace delta::testing {
     // -------------------------------------------------------------------------
     // 4. Compound assignments
     // -------------------------------------------------------------------------
+
+    /**
+     * @test CompoundAssignments
+     * @brief Tests +=, -=, *=, /= operators.
+     */
     TEST_F(RationalBasicTest, CompoundAssignments) {
         Rational a = "1/2"_r;
         a += "1/3"_r;
@@ -99,6 +140,11 @@ namespace delta::testing {
     // -------------------------------------------------------------------------
     // 5. Negation
     // -------------------------------------------------------------------------
+
+    /**
+     * @test Negation
+     * @brief Verifies unary minus.
+     */
     TEST_F(RationalBasicTest, Negation) {
         Rational a = -"1/2"_r;
         EXPECT_EQ(a.to_string(), "-1/2");
@@ -107,6 +153,11 @@ namespace delta::testing {
     // -------------------------------------------------------------------------
     // 6. Abs
     // -------------------------------------------------------------------------
+
+    /**
+     * @test Abs
+     * @brief Checks absolute value function.
+     */
     TEST_F(RationalBasicTest, Abs) {
         Rational a = delta::abs("-1/2"_r);
         EXPECT_EQ(a.to_string(), "1/2");
@@ -115,6 +166,11 @@ namespace delta::testing {
     // -------------------------------------------------------------------------
     // 7. Comparison operators
     // -------------------------------------------------------------------------
+
+    /**
+     * @test Comparison
+     * @brief Tests <, >, ==, !=, <=, >=.
+     */
     TEST_F(RationalBasicTest, Comparison) {
         EXPECT_TRUE(("1/2"_r < "3/4"_r));
         EXPECT_FALSE(("1/2"_r > "3/4"_r));
@@ -127,6 +183,11 @@ namespace delta::testing {
     // -------------------------------------------------------------------------
     // 8. to_string roundtrip
     // -------------------------------------------------------------------------
+
+    /**
+     * @test ToFromString
+     * @brief Converts a rational to a string and back; should yield the same value.
+     */
     TEST_F(RationalBasicTest, ToFromString) {
         Rational r = "123/456"_r;
         std::string s = r.to_string();
@@ -137,8 +198,12 @@ namespace delta::testing {
     // -------------------------------------------------------------------------
     // 9. Canonical form (denominator positive, gcd == 1)
     // -------------------------------------------------------------------------
-    TEST_F(RationalBasicTest, CanonicalForm) {
 
+    /**
+     * @test CanonicalForm
+     * @brief After arithmetic, the result is reduced (gcd = 1, denominator positive).
+     */
+    TEST_F(RationalBasicTest, CanonicalForm) {
         Rational sum = "2/6"_r + "1/6"_r;
         EXPECT_TRUE(is_reduced(sum));
         EXPECT_EQ(sum.to_string(), "1/2");
@@ -147,8 +212,13 @@ namespace delta::testing {
     // -------------------------------------------------------------------------
     // 10. Denominator does not explode on chain of additions
     // -------------------------------------------------------------------------
-    TEST_F(RationalBasicTest, DenominatorDoesNotExplode) {
 
+    /**
+     * @test DenominatorDoesNotExplode
+     * @brief Sum of 1 + 1/2 + ... + 1/10 yields denominator 2520 (least common multiple),
+     *        not an astronomically large number.
+     */
+    TEST_F(RationalBasicTest, DenominatorDoesNotExplode) {
         Rational sum = 0_r;
         for (int i = 1; i <= 10; ++i) {
             sum += Rational(1, i);
@@ -164,6 +234,11 @@ namespace delta::testing {
     // -------------------------------------------------------------------------
     // 11. Cross‑cancellation (large numbers)
     // -------------------------------------------------------------------------
+
+    /**
+     * @test CrossCancellation
+     * @brief Multiplication of a very large numerator by its reciprocal yields 1.
+     */
     TEST_F(RationalBasicTest, CrossCancellation) {
         Rational a = "99999999999999999999/1"_r;
         Rational b = "1/99999999999999999999"_r;
@@ -174,6 +249,11 @@ namespace delta::testing {
     // -------------------------------------------------------------------------
     // 12. Large powers (integer exponent)
     // -------------------------------------------------------------------------
+
+    /**
+     * @test LargePowers
+     * @brief Raises (2/3) to the 10th and to the -10th power.
+     */
     TEST_F(RationalBasicTest, LargePowers) {
         Rational base = "2/3"_r;
         Rational pow10 = delta::pow(base, 10);
@@ -186,6 +266,11 @@ namespace delta::testing {
     // -------------------------------------------------------------------------
     // 13. Division by zero throws
     // -------------------------------------------------------------------------
+
+    /**
+     * @test DivisionByZero
+     * @brief Division by zero (both runtime and construction) should throw an exception.
+     */
     TEST_F(RationalBasicTest, DivisionByZero) {
         EXPECT_THROW("1/2"_r / 0_r, std::exception);
         EXPECT_THROW(Rational(1, 0), std::exception);
@@ -194,6 +279,11 @@ namespace delta::testing {
     // -------------------------------------------------------------------------
     // 14. Zero representation
     // -------------------------------------------------------------------------
+
+    /**
+     * @test ZeroRepresentation
+     * @brief Zero is represented as "0".
+     */
     TEST_F(RationalBasicTest, ZeroRepresentation) {
         Rational zero = 0_r;
         EXPECT_EQ(zero.to_string(), "0");

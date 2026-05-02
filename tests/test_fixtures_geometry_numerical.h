@@ -425,7 +425,7 @@ namespace delta::testing {
             }
         };
         // -------------------------------------------------------------------------
-        // Integrals API proxies (Stage 1) – исправлено: tol имеет тип Rational
+        // Integrals API proxies (Stage 1) –
         // -------------------------------------------------------------------------
         template<typename Grid, typename Metric>
         static auto grid_cell_volume(const Grid& grid, std::size_t idx, const Metric& metric) {
