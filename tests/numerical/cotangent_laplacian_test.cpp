@@ -3,115 +3,113 @@
 
 // tests/numerical/cotangent_laplacian_test.cpp
 // ============================================================================
-// МАТЕМАТИЧЕСКОЕ ОБОСНОВАНИЕ ТЕСТОВ КОТАНГЕНСНОГО ЛАПЛАСИАНА
-// Дата актуализации: 30.04.2026
+// MATHEMATICAL JUSTIFICATION FOR COTANGENT LAPLACIAN TESTS
+// Last updated: 2026-04-30
 // ============================================================================
 //
-// 1. КОТАНГЕНСНЫЙ ЛАПЛАСИАН: ОПРЕДЕЛЕНИЕ
+// 1. COTANGENT LAPLACIAN: DEFINITION
 // ============================================================================
 //
-// Для 2D симплициального комплекса (триангуляции) дискретный лапласиан 
-// в вершине i определяется как:
+// For a 2D simplicial complex (triangulation), the discrete Laplacian at vertex i is:
 //   (L u)_i = Σ_{j∈N(i)} w_{ij} (u_i - u_j)
 //
-// где веса на ребре (i,j):
+// where the weight on edge (i,j):
 //   w_{ij} = (cot α_{ij} + cot β_{ij}) / 2
-// α_{ij} — угол в одном прилегающем треугольнике, противолежащий ребру (i,j),
-// β_{ij} — во втором треугольнике (для граничного ребра β = 0).
+// α_{ij} is the angle in one adjacent triangle opposite edge (i,j),
+// β_{ij} is the angle in the other triangle (for boundary edges, β = 0).
 //
-// Матрица L собирается как:
+// The matrix L is assembled as:
 //   L_{ii} = Σ_{j∈N(i)} w_{ij}
-//   L_{ij} = -w_{ij}   для i≠j
+//   L_{ij} = -w_{ij}   for i≠j
 //
 // ============================================================================
-// 2. МАТРИЧНЫЕ СВОЙСТВА (НЕ ЗАВИСЯТ ОТ СЕТКИ)
+// 2. MATRIX PROPERTIES (INDEPENDENT OF THE MESH)
 // ============================================================================
 //
-// 2.1. Симметричность: L^T = L
-//      Следует из w_{ij} = w_{ji} и симметричной сборки.
-//      Проверяется тестом Symmetry для любой сетки.
+// 2.1. Symmetry: L^T = L
+//      Follows from w_{ij} = w_{ji} and symmetric assembly.
+//      Tested by Symmetry for any mesh.
 //
-// 2.2. Сумма строк: Σ_j L_{ij} = 0
-//      Следует из L_{ii} = Σ_{j≠i} w_{ij} и L_{ij} = -w_{ij}.
-//      Проверяется тестом RowSumZero.
+// 2.2. Row sum: Σ_j L_{ij} = 0
+//      Follows from L_{ii} = Σ_{j≠i} w_{ij} and L_{ij} = -w_{ij}.
+//      Tested by RowSumZero.
 //
-// 2.3. Константная функция в ядре: L * 1 = 0
-//      Следствие суммы строк. Проверяется тестом ConstantFunctionKernel.
-//
-// ============================================================================
-// 3. ДЕЙСТВИЕ НА ФУНКЦИЯХ (ЗАВИСИТ ОТ НАЛИЧИЯ ВНУТРЕННИХ ВЕРШИН)
-// ============================================================================
-//
-// Пусть Ω — область, для которой построена триангуляция. Вершина называется
-// внутренней, если все прилегающие к ней треугольники полностью лежат внутри Ω.
-//
-// 3.1. Линейная функция u(x,y) = ax + by + c
-//      Для ВНУТРЕННЕЙ вершины: (L u)_i = 0.
-//      Это точное свойство котангенсного лапласиана на замкнутом веере
-//      треугольников: для любой линейной функции сумма взвешенных разностей
-//      с соседями равна нулю. Проверено тестом LinearFunctionZeroForInteriorVertex.
-//
-// 3.2. Квадратичная функция u(x,y) = x² + y²
-//      На ВНУТРЕННЕЙ вершине точное значение (L u)_i НЕ равно непрерывному
-//      лапласиану Δu = 4. Дискретный оператор L без нормировки на массу
-//      выдаёт величину, зависящую от локальной геометрии сетки.
-//      Для конкретной сетки (квадрат, разбитый на 4 равных прямоугольных
-//      треугольника вокруг центра) аналитически получается:
-//        веса рёбер от центра к углам равны 1,
-//        u_center = 0.5, u_углов = 0,1,2,1,
-//        (L u)_center = Σ 1·(0.5 - u_угол) = -2.
-//      Именно это значение ожидается тестом QuadraticFunctionConstantLaplacianForInterior.
-//      При измельчении сетки L u будет сходиться к Δu, умноженному на локальную
-//      площадь дуальной ячейки, и в пределе (M^{-1} L u) → 4.
-//
-// 3.3. Используемая сетка
-//      Сетка make_square_with_center_mesh: квадрат [0,1]×[0,1], вершины (0,0),
-//      (1,0), (1,1), (0,1) и центр (0.5,0.5), 4 треугольника. Центральная
-//      вершина — внутренняя. Все котангенсы вычисляются точно (углы 45° и 90°).
+// 2.3. Constant function in the kernel: L * 1 = 0
+//      Consequence of the row sum property. Tested by ConstantFunctionKernel.
 //
 // ============================================================================
-// 4. ПОЧЕМУ ТЕСТЫ НА СТАРОЙ СЕТКЕ (КВАДРАТ ИЗ ДВУХ ТРЕУГОЛЬНИКОВ) БЫЛИ НЕВЕРНЫ
+// 3. ACTION ON FUNCTIONS (DEPENDS ON THE PRESENCE OF INTERIOR VERTICES)
 // ============================================================================
 //
-// В квадрате, разбитом одной диагональю, ВСЕ 4 вершины лежат на границе.
-// Для граничной вершины:
-//   - Линейная функция НЕ обязана давать 0.
-//   - Матрица L имеет диагональные элементы = 1, внедиагональные = -0.5,
-//     а не 2 и -1, как ожидал исходный тест.
-//   - Ожидания теста противоречили математике.
+// Let Ω be the domain of the triangulation. A vertex is called interior if all
+// incident triangles lie entirely inside Ω.
+//
+// 3.1. Linear function u(x,y) = ax + by + c
+//      For an INTERIOR vertex: (L u)_i = 0.
+//      This is an exact property of the cotangent Laplacian on a closed fan of
+//      triangles: for any linear function, the sum of weighted differences with
+//      neighbours is zero. Verified by LinearFunctionZeroForInteriorVertex.
+//
+// 3.2. Quadratic function u(x,y) = x² + y²
+//      At an INTERIOR vertex the exact value (L u)_i is NOT the continuous
+//      Laplacian Δu = 4. The discrete operator L without mass normalisation
+//      yields a value that depends on the local geometry of the mesh.
+//      For the specific mesh (a square subdivided into four equal right triangles
+//      around a central vertex) the analytic result is:
+//        – edge weights from centre to corners are 1,
+//        – u_center = 0.5, u_corners = 0,1,2,1,
+//        – (L u)_center = Σ 1·(0.5 - u_corner) = -2.
+//      This is exactly what QuadraticFunctionConstantLaplacianForInterior checks.
+//      Under mesh refinement, L u converges to Δu multiplied by the local dual
+//      cell area, and in the limit (M^{-1} L u) → 4.
+//
+// 3.3. The used mesh
+//      make_square_with_center_mesh: square [0,1]×[0,1] with vertices (0,0),
+//      (1,0), (1,1), (0,1) and centre (0.5,0.5), 4 triangles. The centre vertex
+//      is interior. All cotangents are computed exactly (angles 45° and 90°).
 //
 // ============================================================================
-// 5. МАТРИЦА МАСС (Lumped Mass Matrix)
+// 4. WHY TESTS ON THE OLD SQUARE (TWO TRIANGLES) WERE INCORRECT
 // ============================================================================
 //
-// Диагональная матрица M с M_{ii} = площадь дуальной ячейки вершины i (объём
-// барицентрической дуальной клетки). Для любой невырожденной сетки M_{ii} > 0.
-// Проверяется тестом LumpedMassMatrixPositive.
+// In a square split by one diagonal, ALL 4 vertices lie on the boundary.
+// For a boundary vertex:
+//   - Linear functions are NOT required to give zero.
+//   - The matrix L has diagonal entries 1, off‑diagonals -0.5, not 2 and -1.
+//   - The expectations of the original test contradicted the mathematics.
 //
 // ============================================================================
-// 6. ЧТО НЕ ТЕСТИРУЕТСЯ (И ПОЧЕМУ)
+// 5. LUMPED MASS MATRIX
 // ============================================================================
 //
-// - Явные значения матрицы для произвольной сетки — бессмысленно, так как они
-//   зависят от геометрии. Достаточно проверять структурные свойства.
-// - Сходимость к непрерывному лапласиану при измельчении — требует отдельного
-//   теста с последовательностью сеток (convergence test).
-// - Учёт метрики: текущая реализация использует метрику через edge_length;
-//   корректность для неевклидовых метрик не проверяется, но предполагается.
+// Diagonal mass matrix M with M_{ii} = area of the dual cell of vertex i
+// (barycentric dual cell volume). For any non‑degenerate mesh, M_{ii} > 0.
+// Tested by LumpedMassMatrixPositive.
 //
 // ============================================================================
-// 7. ЗАКЛЮЧЕНИЕ
+// 6. WHAT IS NOT TESTED (AND WHY)
 // ============================================================================
 //
-// Набор тестов покрывает:
-//   ✅ Алгебраические инварианты (симметрия, сумма строк = 0).
-//   ✅ Спектральное свойство (константа в ядре).
-//   ✅ Точное поведение на внутренних вершинах для линейных и квадратичных
-//      функций, с аналитически вычисленными ожидаемыми значениями.
-//   ✅ Положительность матрицы масс.
+// - Exact matrix values for an arbitrary mesh – meaningless, as they depend on
+//   geometry. Structural properties are sufficient.
+// - Convergence to the continuous Laplacian under refinement – requires a
+//   separate test with a sequence of meshes (convergence test).
+// - Metric awareness: the current implementation uses the metric via edge_length;
+//   correctness for non‑Euclidean metrics is not verified but assumed.
 //
-// Все тесты строго следуют математическому определению котангенсного лапласиана
-// и не зависят от конкретной реализации приближённых вычислений.
+// ============================================================================
+// 7. CONCLUSION
+// ============================================================================
+//
+// The test suite covers:
+//   ✅ Algebraic invariants (symmetry, row sum = 0).
+//   ✅ Spectral property (constant in the kernel).
+//   ✅ Exact behaviour on interior vertices for linear and quadratic functions,
+//      with analytically computed expected values.
+//   ✅ Positivity of the mass matrix.
+//
+// All tests strictly follow the mathematical definition of the cotangent
+// Laplacian and do not depend on particular approximate implementations.
 //
 // ============================================================================
 
@@ -128,7 +126,7 @@ namespace delta::testing {
         using Point2D = Point<2>;
         using Complex2D = Complex<2>;
 
-        // Сетка квадрата, разбитого на 4 треугольника (с центральной вершиной)
+        // Mesh of a square subdivided into 4 triangles (with a central vertex)
         Complex2D make_square_with_center_mesh() {
             Complex2D mesh;
             auto v0 = add_vertex(mesh, Point2D(0_r, 0_r));
@@ -149,7 +147,7 @@ namespace delta::testing {
             return mesh;
         }
 
-        // Старая сетка (только для тестов, не требующих внутренних вершин)
+        // Old square mesh (only for tests that do not require interior vertices)
         Complex2D make_unit_square_triangulation() {
             Complex2D mesh;
             auto v0 = add_vertex(mesh, Point2D(0_r, 0_r));
@@ -178,7 +176,10 @@ namespace delta::testing {
         }
     };
 
-    // L должна быть симметричной (для любой сетки)
+    /**
+     * @test Symmetry
+     * @brief Checks that the cotangent Laplacian matrix is symmetric.
+     */
     TEST_F(CotangentLaplacianTest, Symmetry) {
         auto mesh = make_unit_square_triangulation();
         EuclideanMetric metric;
@@ -192,8 +193,10 @@ namespace delta::testing {
             }
         }
     }
-
-    // Сумма элементов каждой строки = 0 (для любой сетки)
+    /**
+     * @test RowSumZero
+     * @brief Verifies that the sum of entries in each row of L is zero.
+     */
     TEST_F(CotangentLaplacianTest, RowSumZero) {
         auto mesh = make_unit_square_triangulation();
         EuclideanMetric metric;
@@ -207,8 +210,10 @@ namespace delta::testing {
             EXPECT_RATIONAL_NEAR(row_sum, 0_r, eps);
         }
     }
-
-    // Константная функция в ядре (для любой сетки)
+    /**
+     * @test ConstantFunctionKernel
+     * @brief Checks that L * 1 = 0.
+     */
     TEST_F(CotangentLaplacianTest, ConstantFunctionKernel) {
         auto mesh = make_unit_square_triangulation();
         EuclideanMetric metric;
@@ -222,16 +227,17 @@ namespace delta::testing {
             EXPECT_RATIONAL_NEAR(L_ones(i), 0_r, eps);
         }
     }
-
-    // Линейная функция – ноль только для внутренних вершин.
-    // Используем сетку с центральной вершиной (внутренняя) и проверяем, что (L x)_center = 0.
-    // Точное свойство для данной сетки: сумма весовых разностей с соседями равна 0.
+    /**
+     * @test LinearFunctionZeroForInteriorVertex
+     * @brief For the interior vertex of a symmetric square mesh,
+     *        (L x)_center = 0 exactly.
+     */
     TEST_F(CotangentLaplacianTest, LinearFunctionZeroForInteriorVertex) {
         auto mesh = make_square_with_center_mesh();
         EuclideanMetric metric;
         auto L = build_cotangent_laplacian(mesh, metric);
         std::size_t n = mesh.num_vertices();      // n = 5
-        std::size_t interior = 4;                 // индекс центральной вершины
+        std::size_t interior = 4;                 // index of the centre vertex
         Eigen::Matrix<Scalar, Eigen::Dynamic, 1> f(n);
         for (std::size_t i = 0; i < n; ++i) f(i) = mesh.vertex(i).x(); // f(x,y)=x
         auto Lf = L * f;
@@ -239,10 +245,16 @@ namespace delta::testing {
         EXPECT_RATIONAL_NEAR(Lf(interior), 0_r, eps);
     }
 
-    // Квадратичная функция x²+y² на внутренней вершине.
-    // Для данной сетки с четырьмя симметричными треугольниками точное значение L(x²+y²) в центре = -2,
-    // потому что веса рёбер центр-угол равны 1, u_center = 0.5, u_углов = 0,1,2,1 и сумма = -2.
-    // Это не непрерывный лапласиан (Δ=4); дискретный оператор даёт величину, зависящую от размера ячейки.
+    /**
+     * @test QuadraticFunctionConstantLaplacianForInterior
+     * @brief For the interior vertex of the symmetric square mesh,
+     *        (L (x²+y²))_center = -2.
+     *
+     * This is not the continuous Laplacian (Δ=4); the discrete operator gives
+     * a value that depends on the mesh size. The result -2 is analytically
+     * derived for this specific mesh (weights from centre to corners are 1,
+     * u_center = 0.5, u_corners = 0,1,2,1, sum = -2).
+     */
     TEST_F(CotangentLaplacianTest, QuadraticFunctionConstantLaplacianForInterior) {
         auto mesh = make_square_with_center_mesh();
         EuclideanMetric metric;
@@ -258,8 +270,10 @@ namespace delta::testing {
         Scalar eps = Rational(1, 1000000);
         EXPECT_RATIONAL_NEAR(Lf(interior), -2_r, eps);
     }
-
-    // Lumped mass matrix – диагональные элементы положительны.
+    /**
+     * @test LumpedMassMatrixPositive
+     * @brief Verifies that all diagonal entries of the lumped mass matrix are positive.
+     */
     TEST_F(CotangentLaplacianTest, LumpedMassMatrixPositive) {
         auto mesh = make_unit_square_triangulation();
         auto M = build_lumped_mass_matrix(mesh);

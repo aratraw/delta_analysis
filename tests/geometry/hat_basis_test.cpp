@@ -2,6 +2,21 @@
 // Licensed under PolyForm Small Business License 1.0.0
 
 // tests/geometry/hat_basis_test.cpp
+// ============================================================================
+// TESTS FOR HAT (LAGRANGE) BASIS FUNCTIONS ON SIMPLICIAL MESHES
+// ============================================================================
+//
+// This file tests the HatBasis class on 2D triangle meshes. Verified properties:
+//   - Interpolation of a linear function (exact up to rational arithmetic).
+//   - Partition of unity and evaluation at vertices (φ_v(v)=1, φ_v(other)=0).
+//   - Gradient of hat functions is constant on each triangle (analytic value).
+//   - locate_point() correctly identifies the containing simplex.
+//   - Barycentric coordinates match the values returned by evaluate().
+//
+// All tests use Euclidean geometry; the mesh is either a single triangle or
+// a unit square split by a diagonal.
+// ============================================================================
+
 #include <gtest/gtest.h>
 #include "delta/geometry/hat_basis.h"
 #include "../test_fixtures_geometry_numerical.h"
@@ -13,6 +28,7 @@ namespace delta::testing {
         using Scalar = Rational;
         using Point2D = Point<2>;
 
+        // Helper: create a single right triangle (0,0)-(1,0)-(0,1)
         Complex<2> make_triangle_mesh() {
             Complex<2> mesh;
             auto v0 = add_vertex(mesh, Point2D(0_r, 0_r));
@@ -25,6 +41,7 @@ namespace delta::testing {
             return mesh;
         }
 
+        // Helper: create a unit square split into two triangles along diagonal (0,2)
         Complex<2> make_unit_square_mesh() {
             Complex<2> mesh;
             auto v0 = add_vertex(mesh, Point2D(0_r, 0_r));
@@ -42,6 +59,17 @@ namespace delta::testing {
         }
     };
 
+    // -------------------------------------------------------------------------
+    // Test: InterpolateLinearFunction
+    // -------------------------------------------------------------------------
+    /**
+     * @test InterpolateLinearFunction
+     * @brief Checks that linear functions are reproduced exactly (up to rational).
+     *
+     * For f(x,y) = x + y, interpolation at any point inside the triangle should
+     * give the exact value. This verifies that the hat basis forms a partition of
+     * unity and that barycentric coordinates are correct.
+     */
     TEST_F(HatBasisTest, InterpolateLinearFunction) {
         auto mesh = make_triangle_mesh();
         HatBasis<Complex<2>> basis(mesh);
@@ -53,11 +81,11 @@ namespace delta::testing {
             vertex_values[i] = p.x() + p.y();
         }
 
-        // Test points inside the triangle
+        // Test points inside and on edge
         Point2D p1("0.25"_r, "0.25"_r);
         Point2D p2("0.5"_r, "0.25"_r);
         Point2D p3("0.25"_r, "0.5"_r);
-        Point2D p4("0.75"_r, 0_r);  // on edge
+        Point2D p4("0.75"_r, 0_r);   // on the edge (v0,v1)
 
         Scalar val1 = basis.interpolate(p1, vertex_values);
         Scalar val2 = basis.interpolate(p2, vertex_values);
@@ -71,14 +99,20 @@ namespace delta::testing {
         EXPECT_RATIONAL_NEAR(val4, p4.x() + p4.y(), eps);
     }
 
+    // -------------------------------------------------------------------------
+    // Test: EvaluateHatFunctions
+    // -------------------------------------------------------------------------
+    /**
+     * @test EvaluateHatFunctions
+     * @brief Verifies φ_v(v)=1, φ_v(other vertices)=0, and matching barycentric coordinates.
+     */
     TEST_F(HatBasisTest, EvaluateHatFunctions) {
         auto mesh = make_triangle_mesh();
         HatBasis<Complex<2>> basis(mesh);
 
-        // Vertex indices
         const std::size_t v0 = 0, v1 = 1, v2 = 2;
 
-        // At vertices: φ_v = 1 for its own vertex, 0 for others
+        // At vertices
         EXPECT_RATIONAL_NEAR(basis.evaluate(v0, mesh.vertex(v0)), 1_r, 0_r);
         EXPECT_RATIONAL_NEAR(basis.evaluate(v1, mesh.vertex(v0)), 0_r, 0_r);
         EXPECT_RATIONAL_NEAR(basis.evaluate(v2, mesh.vertex(v0)), 0_r, 0_r);
@@ -91,7 +125,7 @@ namespace delta::testing {
         EXPECT_RATIONAL_NEAR(basis.evaluate(v1, mesh.vertex(v2)), 0_r, 0_r);
         EXPECT_RATIONAL_NEAR(basis.evaluate(v2, mesh.vertex(v2)), 1_r, 0_r);
 
-        // Inside point: should match barycentric coordinates
+        // Inside point – compare evaluate() with barycentric coordinates
         Point2D p("0.2"_r, "0.3"_r);
         auto loc = basis.locate_point(p);
         ASSERT_TRUE(loc.has_value());
@@ -103,15 +137,26 @@ namespace delta::testing {
         EXPECT_RATIONAL_NEAR(basis.evaluate(v2, p), bary[2], eps);
     }
 
+    // -------------------------------------------------------------------------
+    // Test: GradientOfHatFunctionsConstantOnTriangle
+    // -------------------------------------------------------------------------
+    /**
+     * @test GradientOfHatFunctionsConstantOnTriangle
+     * @brief Checks that gradients are constant on each triangle and match the
+     *        analytically known values for the reference triangle (0,0)-(1,0)-(0,1).
+     *
+     * The hat functions are:
+     *   φ0 = 1 - x - y  → ∇φ0 = (-1, -1)
+     *   φ1 = x          → ∇φ1 = (1, 0)
+     *   φ2 = y          → ∇φ2 = (0, 1)
+     *
+     * The test evaluates gradients at an interior point and on an edge.
+     */
     TEST_F(HatBasisTest, GradientOfHatFunctionsConstantOnTriangle) {
         auto mesh = make_triangle_mesh();
         HatBasis<Complex<2>> basis(mesh);
 
-        // For triangle (0,0)-(1,0)-(0,1):
-        // φ0 = 1 - x - y  → ∇φ0 = (-1, -1)
-        // φ1 = x          → ∇φ1 = (1, 0)
-        // φ2 = y          → ∇φ2 = (0, 1)
-
+        // Triangle (0,0)-(1,0)-(0,1)
         Point2D p_inside("0.2"_r, "0.3"_r);
         Point2D p_edge("0.5"_r, 0_r);
 
@@ -133,7 +178,7 @@ namespace delta::testing {
         EXPECT_RATIONAL_NEAR(grad2_inside.x(), 0_r, eps);
         EXPECT_RATIONAL_NEAR(grad2_inside.y(), 1_r, eps);
 
-        // On edge (should be same triangle, so gradients identical)
+        // On edge (should belong to the same triangle, so gradients unchanged)
         EXPECT_RATIONAL_NEAR(grad0_edge.x(), -1_r, eps);
         EXPECT_RATIONAL_NEAR(grad0_edge.y(), -1_r, eps);
         EXPECT_RATIONAL_NEAR(grad1_edge.x(), 1_r, eps);
@@ -142,33 +187,39 @@ namespace delta::testing {
         EXPECT_RATIONAL_NEAR(grad2_edge.y(), 1_r, eps);
     }
 
+    // -------------------------------------------------------------------------
+    // Test: LocatePoint
+    // -------------------------------------------------------------------------
+    /**
+     * @test LocatePoint
+     * @brief Verifies that locate_point correctly identifies the triangle containing a point.
+     */
     TEST_F(HatBasisTest, LocatePoint) {
         auto mesh = make_unit_square_mesh();
         HatBasis<Complex<2>> basis(mesh);
 
-        // Point in lower-left triangle (diagonal from (0,0) to (1,1))
+        // Point in the lower‑left triangle (diagonal from (0,0) to (1,1))
         Point2D p_lower("0.3"_r, "0.3"_r);
         auto loc_lower = basis.locate_point(p_lower);
         ASSERT_TRUE(loc_lower.has_value());
-        EXPECT_EQ(loc_lower->first.first, 2);   // dimension 2
-        // Which triangle? Lower-left is triangle (v0,v1,v2) = (0,0)-(1,0)-(1,1)
-        // Its index should be 0 in our construction (since we added triangles in order)
+        EXPECT_EQ(loc_lower->first.first, 2);   // dimension 2 (triangle)
+        // Lower‑left triangle is (v0,v1,v2) : index 0 in construction order
         EXPECT_EQ(loc_lower->first.second, 0);
 
-        // Point in upper-left triangle (diagonal (0,0)-(1,1) splits square)
+        // Point in the upper‑right triangle
         Point2D p_upper("0.3"_r, "0.7"_r);
         auto loc_upper = basis.locate_point(p_upper);
         ASSERT_TRUE(loc_upper.has_value());
-        EXPECT_EQ(loc_upper->first.second, 1);   // triangle (v0,v2,v3)
+        // Upper‑right triangle is (v0,v2,v3) : index 1
+        EXPECT_EQ(loc_upper->first.second, 1);
 
-        // Point exactly on diagonal
+        // Point exactly on the diagonal – both triangles possible, so only check dimension
         Point2D p_diag("0.5"_r, "0.5"_r);
         auto loc_diag = basis.locate_point(p_diag);
         ASSERT_TRUE(loc_diag.has_value());
-        // May belong to either triangle; both are acceptable. Just check it's a triangle.
         EXPECT_EQ(loc_diag->first.first, 2);
 
-        // Point outside the square
+        // Point outside the square should not be located
         Point2D p_out("2.0"_r, "2.0"_r);
         auto loc_out = basis.locate_point(p_out);
         EXPECT_FALSE(loc_out.has_value());

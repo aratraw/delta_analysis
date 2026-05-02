@@ -2,91 +2,90 @@
 // Licensed under PolyForm Small Business License 1.0.0
 
 // tests/numerical/integrals_test.cpp
-// Fully specifies the mathematical contracts for integrals.h (Stage 1, block A8)
-// according to the General Plan.
+// ============================================================================
+// TESTS FOR INTEGRATION UTILITIES AND GREEN'S IDENTITIES (STAGE 1, BLOCK A8)
+// ============================================================================
 //
-// Contracts verified:
-// 1. grid_cell_volume() returns the correct measure (length/area) associated with a grid point,
-//    with proper handling of boundaries (half cells at edges/corners) and product grids.
-// 2. grid_integral() computes the weighted sum f(x_i) * volume_i and is exact for linear functions
-//    on any grid, and converges for higher-order functions with grid refinement.
-// 3. summation_by_parts_1d holds algebraically for discrete functions.
-// 4. Green's first and second identities hold in 1D and 2D for arbitrary discrete functions,
-//    including zero boundary conditions.
+// This file tests the basic integration facilities:
+//   - cell_volume() for uniform, list, and product grids (1D and 2D)
+//   - integral() – weighted sum of field values
+//   - Summation‑by‑parts and Green's first identity in 1D
+//   - Green's first and second identities in 2D (using FEM stiffness matrix)
+//
+// The 2D tests currently rely on check_green_first_2d() and check_green_second_2d()
+// which, at the time of writing, do NOT independently compute the boundary integral.
+// Instead they derive the boundary term from the identity itself, making the test
+// trivial. See the large TODO below for the necessary corrections.
+//
+// ============================================================================
+// TODO: CORRECT GREEN'S IDENTITY TESTS IN 2D (30.04.2026)
+// ============================================================================
+//
+// CURRENT STATE
+// -------------
+// The tests GreenFirstIdentity, GreenFirstZeroBoundary, GreenSecondIdentity,
+// GreenSecondZeroBoundary in the Integrals2DTest class DO NOT PERFORM A REAL
+// VERIFICATION of Green's identities.
+//
+// Reason:
+//   The functions check_green_first_2d() and check_green_second_2d() in
+//   integrals.h do not compute the boundary term independently. Instead they
+//   define it as the difference between the left and volume terms, ensuring
+//   a trivial equality. This makes the tests useless for detecting discretisation
+//   errors.
+//
+//   In the first identity, the boundary term ∫ f ∇g·n ds is adjusted to fit the
+//   already computed quantities. In the second identity, the check degenerates
+//   into a verification of stiffness matrix symmetry (K^T = K).
+//
+// NECESSARY CORRECTIONS
+// ---------------------
+// 1. Implement an independent computation of the boundary integral:
+//    - For a rectangular grid (ProductGrid<UniformGrid,2>) obtain the list of
+//      boundary edges (edges belonging to only one cell, i.e. lying on ∂Ω).
+//    - On each boundary edge, compute ∇g·n using adjacent node values and
+//      possibly interpolation, and f at the edge midpoint (or integrate f along
+//      the edge).
+//    - Sum the contributions with proper orientation.
+//
+// 2. Ensure consistency with the metric:
+//    - All geometric quantities (edge length, normal) must be computed through
+//      the supplied Metric object, not under the Euclidean assumption.
+//
+// 3. Add convergence tests:
+//    - For a sequence of refined grids (e.g. 4×4, 8×8, 16×16) compute the
+//      residual of Green's identity.
+//    - The expected convergence order for bilinear elements should be ~ O(h²)
+//      for the first identity (provided the boundary term is computed accurately).
+//
+// 4. Unify with the 1D implementation:
+//    - check_green_first_1d() already performs an independent boundary term
+//      calculation. Generalise that approach to 2D, possibly through a common
+//      template code using ProductGrid or simplicial complexes.
+//
+// 5. (Optional) For the second Green identity:
+//    - Beyond symmetry, a proper test should compute ∫ (f Δg - g Δf) dV and the
+//      corresponding boundary term ∫ (f ∇g·n - g ∇f·n) dS and verify their equality.
+//    - On a uniform grid both the volume and boundary parts are zero, but they
+//      must be computed independently.
+//
+// ACTION PLAN (priorities)
+// -------------------------
+// - [ ] Create compute_boundary_integral_first_2d(...) in integrals.h that
+//       computes ∫_∂Ω f (∇g·n) ds over boundary edges.
+// - [ ] Modify check_green_first_2d to use that function and verify the equality
+//       left = volume + boundary within a given tolerance.
+// - [ ] Similarly for check_green_second_2d.
+// - [ ] Write a convergence test for the first Green identity (ConvergenceGreenFirst2D)
+//       and add it to Integrals2DTest.
+// - [ ] Test on non‑uniform and product‑mixed grids if relevant.
+//
+// IMPORTANT:
+//   Until these points are addressed, the 2D Green identity tests should be
+//   considered STUBS and not be used to validate numerical schemes.
+//
+// ============================================================================
 
-// ============================================================================
-// TODO: Корректная проверка тождеств Грина в 2D (30.04.2026)
-// ============================================================================
-//
-// ТЕКУЩЕЕ СОСТОЯНИЕ
-// -----------------
-// Тесты GreenFirstIdentity, GreenFirstZeroBoundary, GreenSecondIdentity,
-// GreenSecondZeroBoundary в классе Integrals2DTest НЕ ВЫПОЛНЯЮТ РЕАЛЬНУЮ
-// ПРОВЕРКУ тождеств Грина.
-//
-// Причина:
-//   Функции check_green_first_2d() и check_green_second_2d() в
-//   integrals.h не вычисляют граничный член независимо, а определяют
-//   его как разность левой и объёмной частей, гарантируя тривиальное
-//   равенство. Это делает тесты бесполезными для обнаружения ошибок
-//   дискретизации.
-//
-//   В первом тождестве граничный член (∫ f ∇g·n ds) подгоняется под
-//   уже вычисленные величины. Во втором тождестве проверка вырождается
-//   в проверку симметрии матрицы жёсткости (K^T = K).
-//
-// НЕОБХОДИМЫЕ ИСПРАВЛЕНИЯ
-// -----------------------
-// 1. Реализовать независимое вычисление граничного интеграла:
-//    - Для прямоугольной сетки (ProductGrid<UniformGrid,2>) получить
-//      список граничных рёбер (все рёбра, принадлежащие только одной
-//      ячейке, т.е. лежащие на ∂Ω).
-//    - На каждом граничном ребре вычислить ∇g·n (используя значения g
-//      в прилегающих узлах и, возможно, интерполяцию) и f в середине
-//      ребра (или интеграл от f вдоль ребра).
-//    - Просуммировать вклады с учётом ориентации.
-//
-// 2. Обеспечить согласованность с метрикой:
-//    - Все геометрические величины (длина ребра, нормаль) должны
-//      вычисляться через переданный объект Metric, а не в предположении
-//      евклидовой метрики.
-//
-// 3. Добавить тесты сходимости:
-//    - Для последовательности измельчающихся сеток (например,
-//      4×4, 8×8, 16×16) вычислять невязку тождества Грина.
-//    - Ожидаемый порядок сходимости для билинейных элементов должен
-//      быть ~ O(h^2) для первого тождества (при условии точного
-//      вычисления граничного члена).
-//
-// 4. Унифицировать с 1D‑реализацией:
-//    - check_green_first_1d() уже делает независимый расчёт граничного
-//      члена. Обобщить подход на 2D, возможно, через общий шаблонный
-//      код с использованием ProductGrid или симплициальных комплексов.
-//
-// 5. (Опционально) Для второго тождества Грина:
-//    - Кроме проверки симметрии, настоящий тест должен вычислить
-//      ∫ (f Δg - g Δf) dV и соответствующий граничный член
-//      ∫ (f ∇g·n - g ∇f·n) dS и убедиться в их равенстве.
-//    - На равномерной сетке ожидаемое значение равно 0 и для
-//      объёмной, и для граничной частей, но они должны быть вычислены
-//      независимо.
-//
-// ПЛАН ДЕЙСТВИЙ (приоритеты)
-// ---------------------------
-// - [ ] Создать функцию compute_boundary_integral_first_2d(...) в integrals.h,
-//       вычисляющую ∫_∂Ω f (∇g·n) ds по граничным рёбрам.
-// - [ ] Изменить check_green_first_2d, чтобы она использовала эту функцию
-//       и проверяла равенство левой части, объёмной правой части и
-//       граничного члена с заданным допуском (tolerance).
-// - [ ] Аналогично для check_green_second_2d.
-// - [ ] Написать тест сходимости для первого тождества Грина (ConvergenceGreenFirst2D)
-//       и добавить его в Integrals2DTest.
-// - [ ] Проверить работу на неравномерных и product‑mixed сетках (если актуально).
-//
-// ВАЖНО:
-//   До выполнения этих пунктов тесты тождеств Грина в 2D следует считать
-//   ЗАГЛУШКАМИ и не использовать для верификации численных схем.
-// ============================================================================
 #include <gtest/gtest.h>
 #include <vector>
 #include <array>
@@ -122,6 +121,10 @@ namespace delta::testing {
         }
     };
 
+    /**
+     * @test CellVolumeUniform (1D)
+     * @brief Verifies cell volumes on a uniform 1D grid (half cells at boundaries).
+     */
     TEST_F(Integrals1DTest, CellVolumeUniform) {
         auto grid = make_uniform_grid(5);
         Rational h = 1_r / 4_r;
@@ -136,6 +139,10 @@ namespace delta::testing {
         EXPECT_EQ(total, 1_r);
     }
 
+    /**
+     * @test CellVolumeNonUniform (1D)
+     * @brief Checks cell volumes on a non‑uniform 1D grid.
+     */
     TEST_F(Integrals1DTest, CellVolumeNonUniform) {
         std::vector<Rational> points = { 0_r, "2/10"_r, "5/10"_r, 1_r };
         auto grid = make_nonuniform_grid(points);
@@ -148,6 +155,10 @@ namespace delta::testing {
         EXPECT_EQ(total, 1_r);
     }
 
+    /**
+     * @test IntegralLinearExact (1D)
+     * @brief Integrates a linear function exactly on a uniform grid.
+     */
     TEST_F(Integrals1DTest, IntegralLinearExact) {
         auto grid = make_uniform_grid(5);
         ScalarField1D f(grid);
@@ -159,6 +170,10 @@ namespace delta::testing {
         EXPECT_RATIONAL_NEAR(I, "1/2"_r, delta::default_eps());
     }
 
+    /**
+     * @test IntegralQuadraticConvergence (1D)
+     * @brief Checks that the trapezoidal rule for x² converges with second order.
+     */
     TEST_F(Integrals1DTest, IntegralQuadraticConvergence) {
         std::vector<std::size_t> ns = { 5, 9, 17, 33 };
         std::vector<Rational> errors;
@@ -182,6 +197,10 @@ namespace delta::testing {
         }
     }
 
+    /**
+     * @test SummationByParts (1D)
+     * @brief Verifies the discrete summation‑by‑parts identity.
+     */
     TEST_F(Integrals1DTest, SummationByParts) {
         auto grid = make_uniform_grid(5);
         ScalarField1D f(grid), g(grid);
@@ -195,6 +214,10 @@ namespace delta::testing {
         EXPECT_TRUE(ok);
     }
 
+    /**
+     * @test SummationByPartsZeroBoundary (1D)
+     * @brief Checks summation‑by‑parts with zero boundary condition on the right.
+     */
     TEST_F(Integrals1DTest, SummationByPartsZeroBoundary) {
         auto grid = make_uniform_grid(5);
         ScalarField1D f(grid), g(grid);
@@ -208,6 +231,10 @@ namespace delta::testing {
         EXPECT_TRUE(ok);
     }
 
+    /**
+     * @test GreenFirstIdentity (1D)
+     * @brief Validates Green's first identity in 1D.
+     */
     TEST_F(Integrals1DTest, GreenFirstIdentity) {
         auto grid = make_uniform_grid(9);
         ScalarField1D f(grid), g(grid);
@@ -263,6 +290,10 @@ namespace delta::testing {
         EuclideanMetric metric;
     };
 
+    /**
+     * @test CellVolumeUniform (2D)
+     * @brief Checks cell volumes on a uniform 2D grid (inner cell vs. corner cell).
+     */
     TEST_F(Integrals2DTest, CellVolumeUniform) {
         auto grid = make_uniform_grid_2d(4, 4);
         Rational hx = 1_r / 3_r, hy = 1_r / 3_r;
@@ -281,6 +312,10 @@ namespace delta::testing {
         EXPECT_EQ(grid_cell_volume(grid, corner_idx, metric), (hx / 2_r) * (hy / 2_r));
     }
 
+    /**
+     * @test CellVolumeNonUniformProduct (2D)
+     * @brief Verifies product grid cell volumes on a non‑uniform mesh.
+     */
     TEST_F(Integrals2DTest, CellVolumeNonUniformProduct) {
         auto grid = make_uniform_grid_2d(5, 3, 0_r, 1_r, 0_r, 1_r);
         Rational hx = "1/4"_r, hy = "1/2"_r;
@@ -295,6 +330,10 @@ namespace delta::testing {
         EXPECT_EQ(total, 1_r);
     }
 
+    /**
+     * @test IntegralLinearExact (2D)
+     * @brief Integrates f(x,y)=x+y exactly over the unit square.
+     */
     TEST_F(Integrals2DTest, IntegralLinearExact) {
         auto grid = make_uniform_grid_2d(5, 5);
         ScalarField2D f(grid);
@@ -306,6 +345,11 @@ namespace delta::testing {
         EXPECT_RATIONAL_NEAR(I, 1_r, delta::default_eps());
     }
 
+    /**
+     * @test GreenFirstIdentity (2D)
+     * @brief Invokes the 2D Green's first identity check.
+     * @note Currently a stub – see the large TODO above.
+     */
     TEST_F(Integrals2DTest, GreenFirstIdentity) {
         auto grid = make_uniform_grid_2d(9, 9);
         ScalarField2D f(grid), g(grid);
@@ -318,6 +362,11 @@ namespace delta::testing {
         EXPECT_TRUE(ok);
     }
 
+    /**
+     * @test GreenFirstZeroBoundary (2D)
+     * @brief Tests the first identity with a function vanishing on the boundary.
+     * @note Stub – see TODO.
+     */
     TEST_F(Integrals2DTest, GreenFirstZeroBoundary) {
         auto grid = make_uniform_grid_2d(9, 9);
         ScalarField2D f(grid), g(grid);
@@ -331,6 +380,11 @@ namespace delta::testing {
         EXPECT_TRUE(ok);
     }
 
+    /**
+     * @test GreenSecondIdentity (2D)
+     * @brief Invokes the 2D Green's second identity check.
+     * @note Stub – see TODO.
+     */
     TEST_F(Integrals2DTest, GreenSecondIdentity) {
         auto grid = make_uniform_grid_2d(9, 9);
         ScalarField2D f(grid), g(grid);
@@ -343,6 +397,11 @@ namespace delta::testing {
         EXPECT_TRUE(ok);
     }
 
+    /**
+     * @test GreenSecondZeroBoundary (2D)
+     * @brief Tests the second identity with a function vanishing on the boundary.
+     * @note Stub – see TODO.
+     */
     TEST_F(Integrals2DTest, GreenSecondZeroBoundary) {
         auto grid = make_uniform_grid_2d(9, 9);
         ScalarField2D f(grid), g(grid);
@@ -385,6 +444,10 @@ namespace delta::testing {
         EuclideanMetric metric;
     };
 
+    /**
+     * @test CellVolumeProduct (mixed grid)
+     * @brief Cell volume in a product of two non‑uniform 1D grids.
+     */
     TEST_F(Integrals2DProductMixedTest, CellVolumeProduct) {
         auto grid = make_mixed_grid();
         Addr2D p = { "2/10"_r, "3/10"_r };
@@ -399,6 +462,11 @@ namespace delta::testing {
         EXPECT_EQ(total, 1_r);
     }
 
+    /**
+     * @test IntegralQuadraticConvergence (mixed grid)
+     * @brief Checks convergence of the integral of x²+y² on a sequence of refined
+     *        product grids built from non‑uniform points.
+     */
     TEST_F(Integrals2DProductMixedTest, IntegralQuadraticConvergence) {
         Rational exact = 2_r / 3_r;
         std::vector<std::size_t> ns = { 4, 8, 16 };

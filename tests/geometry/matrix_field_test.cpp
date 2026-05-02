@@ -2,6 +2,24 @@
 // Licensed under PolyForm Small Business License 1.0.0
 
 // tests/geometry/matrix_field_test.cpp
+// ============================================================================
+// TESTS FOR MATRIXFIELD (MATRIX‑VALUED FIELDS ON SPARSE ADDRESS SETS)
+// ============================================================================
+//
+// This file tests the MatrixField class and its operations:
+//   - Basic arithmetic: multiplication, determinant, commutator, in‑place multiplication.
+//   - Matrix exponential and logarithm (Padé + scaling‑and‑squaring, Gregory series).
+//   - Behaviour with diagonal, symmetric, near‑identity, and large‑norm matrices.
+//   - Singular matrix handling (log throws domain_error).
+//   - Square root via exp(0.5 * log(M)).
+//   - Precision management: checking that changing the global epsilon actually
+//     affects transcendental results.
+//
+// All tests use 2×2 matrices with delta::Rational elements. The tests are
+// deterministic; the global epsilon is temporarily adjusted for performance
+// in certain tests and restored afterwards.
+// ============================================================================
+
 #include <gtest/gtest.h>
 #include "delta/geometry/matrix_field.h"
 #include "../test_fixtures_geometry_numerical.h"
@@ -28,8 +46,13 @@ namespace delta::testing {
     // -------------------------------------------------------------------------
     // Utility Tests to double-check actual precision management
     // -------------------------------------------------------------------------
+
+    /**
+     * @test PrecisionManagementWorks
+     * @brief Verifies that set_precision() correctly changes the global default epsilon.
+     */
     TEST_F(MatrixFieldTest, PrecisionManagementWorks) {
-        // Проверяем, что set_precision действительно изменяет глобальную переменную
+        // Verify that set_precision actually changes the global variable
         Rational original_eps = delta::default_eps();
 
         set_precision(Rational(1, 1000));
@@ -38,10 +61,16 @@ namespace delta::testing {
         set_precision(Rational(1, 1000000));
         EXPECT_EQ(delta::default_eps(), Rational(1, 1000000));
 
-        // Восстанавливаем исходное значение
+        // Restore original value
         set_precision(original_eps);
         EXPECT_EQ(delta::default_eps(), original_eps);
     }
+
+    /**
+     * @test DefaultEpsilonAffectsResult
+     * @brief Checks that transcendental functions produce different results when the
+     *        global default epsilon is changed.
+     */
     TEST_F(MatrixFieldTest, DefaultEpsilonAffectsResult) {
 
         Rational original_eps = delta::default_eps();
@@ -86,7 +115,8 @@ namespace delta::testing {
             pow_results.push_back(delta::pow(arg_pow_base, arg_pow_exp));
         }
 
-        // Проверяем, что для каждой функции результаты не все одинаковы
+        // Verify that for each function the results are not all identical
+        // (i.e., epsilon influenced computation)
         auto has_variation = [](const auto& vec) {
             if (vec.empty()) return false;
             return std::adjacent_find(vec.begin(), vec.end(), std::not_equal_to<>()) != vec.end();
@@ -108,6 +138,11 @@ namespace delta::testing {
     // -------------------------------------------------------------------------
     // Basic operations
     // -------------------------------------------------------------------------
+
+    /**
+     * @test MatrixMultiplication
+     * @brief Pointwise matrix multiplication (this * other).
+     */
     TEST_F(MatrixFieldTest, MatrixMultiplication) {
         Grid grid = make_test_grid();
         MatrixField2 A(grid), B(grid), C(grid);
@@ -127,6 +162,10 @@ namespace delta::testing {
         EXPECT_TRUE(matrix_near(C.at(grid[1]), (a2 * b2).eval()));
     }
 
+    /**
+     * @test Determinant
+     * @brief Pointwise determinant as a scalar field.
+     */
     TEST_F(MatrixFieldTest, Determinant) {
         Grid grid = make_test_grid();
         MatrixField2 A(grid);
@@ -141,6 +180,10 @@ namespace delta::testing {
         EXPECT_EQ(det.at(grid[1]), a2.determinant());
     }
 
+    /**
+     * @test Commutator
+     * @brief Pointwise commutator [A,B] = A*B - B*A.
+     */
     TEST_F(MatrixFieldTest, Commutator) {
         Grid grid = make_test_grid();
         MatrixField2 A(grid), B(grid);
@@ -161,8 +204,13 @@ namespace delta::testing {
     }
 
     // -------------------------------------------------------------------------
-    // In-place multiplication
+    // In‑place multiplication
     // -------------------------------------------------------------------------
+
+    /**
+     * @test MultiplicationAssign
+     * @brief Checks that operator*= works correctly (in‑place multiplication).
+     */
     TEST_F(MatrixFieldTest, MultiplicationAssign) {
         Grid grid = make_test_grid();
         MatrixField2 A(grid), B(grid);
@@ -188,6 +236,12 @@ namespace delta::testing {
     // -------------------------------------------------------------------------
     // Exponential and logarithm
     // -------------------------------------------------------------------------
+
+    /**
+     * @test ExponentialAndLogarithm
+     * @brief For a simple nilpotent matrix N = [[0,0.1],[0,0]],
+     *        checks that log(I+N) ≈ N and exp(N) ≈ I+N.
+     */
     TEST_F(MatrixFieldTest, ExponentialAndLogarithm) {
 
         set_precision(Rational(1, 1000000));
@@ -220,12 +274,15 @@ namespace delta::testing {
         EXPECT_TRUE(matrix_near(log_expN.at(grid[0]), N, delta::default_eps()));
     }
 
+    /**
+     * @test ExponentialLogarithmDiagonal
+     * @brief Diagonal matrix: exp and log should be component‑wise.
+     */
     TEST_F(MatrixFieldTest, ExponentialLogarithmDiagonal) {
-        // Устанавливаем более низкую точность для ускорения вычислений.
-        // При дефолтной точности (1e-30) тест выполняется недопустимо долго из-за
-        // сложных вычислений с рациональными числами.
+        // Set a lower precision to speed up computations.
+        // With the default precision (1e-30) the test runs prohibitively slowly
+        // due to complex rational arithmetic.
         set_precision(Rational(1, 1000000)); // 1e-6
-
 
         Grid grid = make_test_grid();
         MatrixField2 A(grid);
@@ -235,14 +292,14 @@ namespace delta::testing {
         auto expD = A.exp();
         auto logExpD = expD.log();
 
-        // При точности 1e-6 результат должен быть близок к исходной матрице.
-        // Проверяем с тем же допуском.
+        // At precision 1e-6, the result should be close to the original matrix.
         EXPECT_TRUE(matrix_near(logExpD.at(grid[0]), D, delta::default_eps()));
     }
 
-    // -------------------------------------------------------------------------
-    // Symmetric positive definite matrix (near identity)
-    // -------------------------------------------------------------------------
+    /**
+     * @test ExponentialLogarithmSymmetric
+     * @brief Symmetric positive definite matrix near identity.
+     */
     TEST_F(MatrixFieldTest, ExponentialLogarithmSymmetric) {
 
         set_precision(Rational(1, 1000000));
@@ -254,24 +311,24 @@ namespace delta::testing {
         auto logM = A.log();
         auto exp_logM = logM.exp();
 
-        // Ожидаемое поведение: композиция приближённых функций exp и log
-        // даёт результат, близкий к исходной матрице, но с бóльшей погрешностью,
-        // чем заданный eps (здесь eps = 1e-6). Накопление ошибок из-за
-        // масштабирования и аппроксимации рядов — математически корректно.
-        // Устанавливаем допуск в 1e-4 (в 100 раз больше eps).
+        // Expected behaviour: composition of approximate exp and log returns a result
+        // close to the original matrix, but with larger error than the requested eps.
+        // The accumulation of errors from scaling and series approximations is mathematically correct.
+        // Set tolerance to 1e-4 (100 times larger than eps).
         Rational tolerance = Rational(1, 10000);  // 1e-4
         EXPECT_TRUE(matrix_near(exp_logM.at(grid[0]), M, tolerance));
     }
 
-    // -------------------------------------------------------------------------
-    // Large norm matrix (scaling required)
-    // -------------------------------------------------------------------------
+    /**
+     * @test ExponentialLogarithmLargeNorm
+     * @brief Matrix with norm just above 0.5 (forces scaling step).
+     */
     TEST_F(MatrixFieldTest, ExponentialLogarithmLargeNorm) {
 
         set_precision(Rational(1, 1000000));
         Grid grid = make_test_grid();
         MatrixField2 A(grid);
-        // Use B = I + N where N has entry 0.5, so norm(B-I)=0.5 – borderline, will trigger scaling
+        // Use B = I + N where N has entry 0.5, so norm(B-I)=0.5 – borderline, triggers scaling
         Matrix2 N; N << 0_r, "0.5"_r, 0_r, 0_r;
         Matrix2 B = Matrix2::Identity() + N;
         A.set(grid[0], B);
@@ -291,6 +348,11 @@ namespace delta::testing {
     // -------------------------------------------------------------------------
     // Singular matrix should throw domain_error
     // -------------------------------------------------------------------------
+
+    /**
+     * @test LogarithmSingularMatrix
+     * @brief Attempting to take the logarithm of a singular matrix throws domain_error.
+     */
     TEST_F(MatrixFieldTest, LogarithmSingularMatrix) {
         Grid grid = make_test_grid();
         MatrixField2 A(grid);
@@ -303,6 +365,11 @@ namespace delta::testing {
     // -------------------------------------------------------------------------
     // Matrix far from identity (norm > 0.5) still works with scaling
     // -------------------------------------------------------------------------
+
+    /**
+     * @test LogarithmFarFromIdentity
+     * @brief A positive definite matrix far from identity should still work (scaling applied).
+     */
     TEST_F(MatrixFieldTest, LogarithmFarFromIdentity) {
 
         set_precision(Rational(1, 1000000));
@@ -321,19 +388,29 @@ namespace delta::testing {
     // -------------------------------------------------------------------------
     // Square root consistency via exp(0.5*log(M))
     // -------------------------------------------------------------------------
+
+    /**
+     * @test SquareRootConsistency
+     * @brief Checks that exp(0.5 * log(M)) approximates the square root of M.
+     *
+     * The test uses the global default epsilon (1e-30) to minimise error accumulation.
+     * Because both log and exp introduce series truncation errors, the composition
+     * error is larger than the requested epsilon; a tolerance of 1e-25 is used.
+     */
     TEST_F(MatrixFieldTest, SquareRootConsistency) {
-        // Ставим дефолтный эпсилон для вычислений значительно меньше ожидаемого чтобы скомпенсировать композицию аппроксимаций. 
-        // Это математически корректно.
+        // Set default epsilon for calculations significantly smaller than the expected
+        // result to compensate for composition of approximations.
+        // This is mathematically correct.
         internal::reset_default_eps();//1e-30.
         auto grid = make_test_grid();
         MatrixField2 A(grid);
         Matrix2 M; M << 2_r, 1_r, 1_r, 2_r;
         A.set(grid[0], M);
-        // Вторая точка (grid[1]) остаётся нулевой — логарифм её пропустит
+        // The second point (grid[1]) remains zero — logarithm will skip it
 
-        auto logM = A.log();  // содержит только grid[0]
+        auto logM = A.log();  // contains only grid[0]
 
-        // Умножаем каждую матрицу в поле на 0.5
+        // Multiply each matrix in the field by 0.5
         MatrixField2 halfLogField;
         for (const auto& [addr, mat] : logM) {
             halfLogField.set(addr, mat * "0.5"_r);
@@ -342,9 +419,10 @@ namespace delta::testing {
         auto sqrtM = halfLogField.exp();
         auto sqrtM_sq = sqrtM * sqrtM;
 
-        // Ожидаемое поведение: композиция exp(0.5 * log(M,eps=epsilon),eps=epsilon) даёт приближение
-        // к квадратному корню, но с накопленной погрешностью РЕЗУЛЬТАТ НИКОГДА НЕ БУДЕТ РАВЕН M с точностью до epsilon.
-        // Логарифм даёт погрешность отсечения ряда, а экспонента её раздувает (экспоненциально, да).
+        // Expected behaviour: exp(0.5 * log(M, eps=epsilon), eps=epsilon) gives an approximation
+        // of the square root, but with accumulated error. The result will never equal M with
+        // precision epsilon. The logarithm introduces series truncation error, and the exponential
+        // amplifies it (exponentially, yes).
         Rational tolerance = Rational("1/10000000000000000000000000");  // 1e-25
         EXPECT_TRUE(matrix_near(sqrtM_sq.at(grid[0]), M, tolerance));
     }

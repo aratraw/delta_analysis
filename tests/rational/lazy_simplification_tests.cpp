@@ -1,12 +1,26 @@
 // (c) 2026 Timofey Ishimtsev.
 // Licensed under PolyForm Small Business License 1.0.0
 
-// lazy_simplification_tests.cpp
-// Тесты для проверки символьных упрощений:
-// свёртка одинаковых скаляров, свёртка одинаковых узлов,
-// дистрибутивность, удаление нейтральных элементов,
-// а также воспроизведение сценария RepeatingSubgraphInterning.
-// ---------------------------------------------------------------------------
+// tests/rational/lazy_simplification_tests.cpp
+// ============================================================================
+// SYMBOLIC SIMPLIFICATION TESTS FOR LAZYRATIONAL EXPRESSIONS
+// ============================================================================
+//
+// This file tests the algebraic simplification rules implemented in simplify_impl.h.
+// Verified transformations:
+//   - Folding of duplicate scalar constants in sums (a+a+a → 3*a).
+//   - Folding of duplicate scalar factors in products (a*a*a → a^3).
+//   - Folding of identical sub‑expressions (A+A → 2*A, A*A → A^2).
+//   - Distributive law: a*b + a*c → a*(b+c).
+//   - Removal of neutral elements (0 in sums, 1 in products).
+//   - Combined simplification (fold + distribute).
+//   - Interning (hash‑consing) after simplification.
+//   - Stress tests for repeating subgraphs (reproducing edge cases from benchmarks).
+//
+// All simplifications are performed symbolically without evaluating the
+// constants to numbers; the resulting tree structure is verified where possible.
+// ============================================================================
+
 #pragma once
 #include "lazy_rational_test_fixture.h"
 #include "delta/core/rational.h"
@@ -19,14 +33,14 @@ using namespace delta;
 using namespace delta::testing;
 
 class LazySimplificationTests : public LazyRationalTestFixture {
-//protected:
-//    void SetUp() override {
-//        internal::reset_pool();
-//    }
+    //protected:
+    //    void SetUp() override {
+    //        internal::reset_pool();
+    //    }
 };
 
-// Вспомогательная функция – генератор повторяющегося терма
-// (как в transcendentals_canonicalization_benchmark.cpp)
+// Helper function – generator of a repeating term
+// (as in transcendentals_canonicalization_benchmark.cpp)
 static LazyRational generate_repeating_term(int repeats, const Rational& x_val = "0.5"_r) {
     LazyRational term_val = Sin(x_val) * Cos(x_val);
     LazyRational acc;
@@ -37,9 +51,13 @@ static LazyRational generate_repeating_term(int repeats, const Rational& x_val =
 }
 
 // ---------------------------------------------------------------------------
-// 1. Свёртка одинаковых скалярных констант в SUM
-//    3 + 3 + 3  →  PRODUCT(3, CONST(3))   (символьно, не 9)
+// 1. Folding of identical scalar constants in a sum
+//    3 + 3 + 3  →  PRODUCT(3, CONST(3))   (symbolic, not 9)
 // ---------------------------------------------------------------------------
+/**
+ * @test SumScalarFold
+ * @brief Verifies that repeated scalar constants in a sum are folded into a product.
+ */
 TEST_F(LazySimplificationTests, SumScalarFold) {
     LazyRational acc;
     acc + 3_r + 3_r + 3_r;
@@ -50,7 +68,7 @@ TEST_F(LazySimplificationTests, SumScalarFold) {
     Rational val = acc.eval();
     EXPECT_EQ(val, 9_r);
 
-    // Если корень – PRODUCT, проверим, что он содержит множитель 3 и 3
+    // If the root is a PRODUCT, check that it contains factor 3 and 3
     if (root_node.op == internal::LazyOp::PRODUCT) {
         bool has_three_as_leaf = false;
         bool has_three_as_child = false;
@@ -69,9 +87,13 @@ TEST_F(LazySimplificationTests, SumScalarFold) {
 }
 
 // ---------------------------------------------------------------------------
-// 2. Свёртка одинаковых скалярных констант в PRODUCT
-//    2 * 2 * 2  →  POW(CONST(2), CONST(3))   (символьно, не 8)
+// 2. Folding of identical scalar constants in a product
+//    2 * 2 * 2  →  POW(CONST(2), CONST(3))   (symbolic, not 8)
 // ---------------------------------------------------------------------------
+/**
+ * @test ProductScalarFold
+ * @brief Verifies that repeated scalar factors in a product are folded into a power.
+ */
 TEST_F(LazySimplificationTests, ProductScalarFold) {
     LazyRational acc = LazyRational(2_r);
     acc * 2_r * 2_r;
@@ -82,7 +104,7 @@ TEST_F(LazySimplificationTests, ProductScalarFold) {
     Rational val = acc.eval();
     EXPECT_EQ(val, 8_r);
 
-    // Ожидаем увидеть POW(2, 3)
+    // Expect to see POW(2, 3)
     bool has_pow_structure = false;
     if (root_node.op == internal::LazyOp::POW) {
         const auto& base_node = internal::pool.nodes[root_node.children[0]];
@@ -98,9 +120,13 @@ TEST_F(LazySimplificationTests, ProductScalarFold) {
 }
 
 // ---------------------------------------------------------------------------
-// 3. Свёртка одинаковых подвыражений в SUM
+// 3. Folding of identical sub‑expressions in a sum
 //    A + A  →  2 * A
 // ---------------------------------------------------------------------------
+/**
+ * @test SumNodeFold
+ * @brief Verifies that adding the same sub‑expression twice folds into a product by 2.
+ */
 TEST_F(LazySimplificationTests, SumNodeFold) {
     LazyRational x = LazyRational("0.5"_r);
     LazyRational sum = x.clone() + x.clone();
@@ -111,8 +137,8 @@ TEST_F(LazySimplificationTests, SumNodeFold) {
     Rational val = sum.eval();
     EXPECT_EQ(val, 1_r);   // 0.5+0.5
 
-    // Структура: должно быть произведение 2 * CONST(0.5) или что-то подобное
-    // Проверим, что в дереве есть PRODUCT с листом 2
+    // Structure: should be a product of 2 and CONST(0.5) or similar.
+    // Check that the tree contains a PRODUCT node with a leaf 2.
     bool found_product_with_two = false;
     std::stack<int> st;
     st.push(clean_index(sum));
@@ -130,9 +156,13 @@ TEST_F(LazySimplificationTests, SumNodeFold) {
 }
 
 // ---------------------------------------------------------------------------
-// 4. Свёртка одинаковых подвыражений в PRODUCT
+// 4. Folding of identical sub‑expressions in a product
 //    A * A  →  A^2
 // ---------------------------------------------------------------------------
+/**
+ * @test ProductNodeFold
+ * @brief Verifies that multiplying the same sub‑expression twice folds into a power of 2.
+ */
 TEST_F(LazySimplificationTests, ProductNodeFold) {
     LazyRational x = LazyRational(3_r);
     LazyRational prod = x.clone() * x.clone();
@@ -143,7 +173,7 @@ TEST_F(LazySimplificationTests, ProductNodeFold) {
     Rational val = prod.eval();
     EXPECT_EQ(val, 9_r);
 
-    // Должен быть POW с показателем 2
+    // Should be POW with exponent 2
     bool found_pow_with_two = false;
     if (root_node.op == internal::LazyOp::POW) {
         const auto& exp_node = internal::pool.nodes[root_node.children[1]];
@@ -156,8 +186,12 @@ TEST_F(LazySimplificationTests, ProductNodeFold) {
 }
 
 // ---------------------------------------------------------------------------
-// 5. Дистрибутивность: a*b + a*c  →  a*(b+c)
+// 5. Distributivity: a*b + a*c  →  a*(b+c)
 // ---------------------------------------------------------------------------
+/**
+ * @test DistributivitySimple
+ * @brief Checks that a*b + a*c simplifies to a*(b+c).
+ */
 TEST_F(LazySimplificationTests, DistributivitySimple) {
     LazyRational a = LazyRational(2_r);
     LazyRational b = LazyRational(3_r);
@@ -169,7 +203,7 @@ TEST_F(LazySimplificationTests, DistributivitySimple) {
     Rational val = expr.eval();
     EXPECT_EQ(val, 14_r);   // 2*3 + 2*4 = 14
 
-    // Проверяем, что корень — PRODUCT с множителем a (или его значением) и суммой b+c
+    // Check that the root is a PRODUCT with factor a and a sum (b+c)
     const auto& root_node = internal::pool.nodes[clean_index(expr)];
     if (root_node.op == internal::LazyOp::PRODUCT) {
         bool has_sum_child = false;
@@ -182,8 +216,12 @@ TEST_F(LazySimplificationTests, DistributivitySimple) {
 }
 
 // ---------------------------------------------------------------------------
-// 6. Дистрибутивность с несколькими слагаемыми: a*b + a*c + a*d → a*(b+c+d)
+// 6. Distributivity with several terms: a*b + a*c + a*d → a*(b+c+d)
 // ---------------------------------------------------------------------------
+/**
+ * @test DistributivityMultiple
+ * @brief Checks that the distributive law works for three terms.
+ */
 TEST_F(LazySimplificationTests, DistributivityMultiple) {
     LazyRational a = LazyRational(2_r);
     LazyRational b = LazyRational(3_r);
@@ -196,7 +234,7 @@ TEST_F(LazySimplificationTests, DistributivityMultiple) {
     Rational val = expr.eval();
     EXPECT_EQ(val, 2_r * (3_r + 4_r + 5_r));
 
-    // Аналогично, ожидаем PRODUCT с SUM
+    // Similarly, expect PRODUCT with SUM
     const auto& root_node = internal::pool.nodes[clean_index(expr)];
     if (root_node.op == internal::LazyOp::PRODUCT) {
         bool has_sum = false;
@@ -209,9 +247,13 @@ TEST_F(LazySimplificationTests, DistributivityMultiple) {
 }
 
 // ---------------------------------------------------------------------------
-// 7. Дистрибутивность с нескалярным общим множителем
+// 7. Distributivity with a non‑scalar common factor
 //    (x*y)*z + (x*y)*2  →  (x*y)*(z+2)
 // ---------------------------------------------------------------------------
+/**
+ * @test DistributivityNonScalarFactor
+ * @brief Checks distributivity when the common factor is itself a product.
+ */
 TEST_F(LazySimplificationTests, DistributivityNonScalarFactor) {
     LazyRational x = LazyRational("0.5"_r);
     LazyRational y = LazyRational(1_r);
@@ -224,14 +266,18 @@ TEST_F(LazySimplificationTests, DistributivityNonScalarFactor) {
     Rational val = expr.eval();
     EXPECT_EQ(val, 2_r);   // 0.5*1*2 + 0.5*1*2 = 1+1 = 2
 
-    // Структура: PRODUCT, внутри которого множитель (x*y) и SUM (z, 2)
+    // Structure: PRODUCT containing the common factor and a SUM (z, 2)
     const auto& root_node = internal::pool.nodes[clean_index(expr)];
     EXPECT_EQ(root_node.op, internal::LazyOp::PRODUCT);
 }
 
 // ---------------------------------------------------------------------------
-// 8. Дистрибутивность не ломается, когда нет общих множителей
+// 8. Distributivity does not break when there is no common factor
 // ---------------------------------------------------------------------------
+/**
+ * @test DistributivityNoCommon
+ * @brief Verifies that adding two unrelated products does not trigger distribution.
+ */
 TEST_F(LazySimplificationTests, DistributivityNoCommon) {
     LazyRational a = LazyRational(2_r);
     LazyRational b = LazyRational(3_r);
@@ -244,15 +290,19 @@ TEST_F(LazySimplificationTests, DistributivityNoCommon) {
     Rational val = expr.eval();
     EXPECT_EQ(val, 2_r * 3_r + 4_r * 5_r);
 
-    // Корень остаётся SUM (или упростился до CONST? Нет, останется SUM)
+    // Root remains a SUM (or could be evaluated to constant only if numbers were evaluated, but they are not)
     const auto& root_node = internal::pool.nodes[clean_index(expr)];
     EXPECT_EQ(root_node.op, internal::LazyOp::SUM);
 }
 
 // ---------------------------------------------------------------------------
-// 9. Удаление нулей и единиц не мешает свёртке
-//    a + 0 + a + 0 + a  →  PRODUCT(3, a)   (нули исчезли)
+// 9. Removal of zeros and ones does not interfere with folding
+//    a + 0 + a + 0 + a  →  PRODUCT(3, a)   (zeros disappear)
 // ---------------------------------------------------------------------------
+/**
+ * @test FoldWithZerosAndOnes
+ * @brief Checks that neutral elements (0 in sums, 1 in products) are removed before folding.
+ */
 TEST_F(LazySimplificationTests, FoldWithZerosAndOnes) {
     LazyRational acc;
     acc + 5_r + 0_r + 5_r + 0_r + 5_r;
@@ -262,8 +312,8 @@ TEST_F(LazySimplificationTests, FoldWithZerosAndOnes) {
     Rational val = acc.eval();
     EXPECT_EQ(val, 15_r);
 
-    // Должен быть PRODUCT(3, 5) или просто CONST 15 в результате дальнейшего упрощения.
-    // Но как минимум нулей в дереве быть не должно.
+    // Should be PRODUCT(3,5) or eventually CONST 15 after further simplification.
+    // At the very least, there should be no zero nodes in the tree.
     std::stack<int> st;
     st.push(clean_index(acc));
     bool has_zero = false;
@@ -280,9 +330,13 @@ TEST_F(LazySimplificationTests, FoldWithZerosAndOnes) {
 }
 
 // ---------------------------------------------------------------------------
-// 10. Комбинированное упрощение: свёртка + дистрибутивность
-//     a + a*b + a*c  (a = 2)  должно дать a*(1 + b + c) или подобное
+// 10. Combined simplification: folding + distributivity
+//     a + a*b + a*c  (a = 2)  should become a*(1 + b + c) or equivalent
 // ---------------------------------------------------------------------------
+/**
+ * @test CombinedFoldAndDistribute
+ * @brief Tests a scenario that requires both folding of constant terms and distribution.
+ */
 TEST_F(LazySimplificationTests, CombinedFoldAndDistribute) {
     LazyRational a = LazyRational(2_r);
     // a + a*3 + a*4
@@ -293,7 +347,7 @@ TEST_F(LazySimplificationTests, CombinedFoldAndDistribute) {
     Rational val = expr.eval();
     EXPECT_EQ(val, 2_r + 6_r + 8_r);   // 16
 
-    // Ожидаем, что корень – PRODUCT, содержащий a и SUM (1,3,4) или эквивалент.
+    // Expect the root to be a PRODUCT containing a and a SUM (1,3,4) or equivalent.
     const auto& root_node = internal::pool.nodes[clean_index(expr)];
     if (root_node.op == internal::LazyOp::PRODUCT) {
         EXPECT_TRUE(is_canonical_product(expr));
@@ -307,8 +361,12 @@ TEST_F(LazySimplificationTests, CombinedFoldAndDistribute) {
 }
 
 // ---------------------------------------------------------------------------
-// 11. Проверка, что после упрощения узлы становятся каноническими
+// 11. Check that after simplification nodes become canonical
 // ---------------------------------------------------------------------------
+/**
+ * @test ResultIsCanonical
+ * @brief Ensures that the simplified expression is in canonical form (hash‑consed, sorted).
+ */
 TEST_F(LazySimplificationTests, ResultIsCanonical) {
     LazyRational a = LazyRational(2_r);
     LazyRational b = LazyRational(3_r);
@@ -327,9 +385,13 @@ TEST_F(LazySimplificationTests, ResultIsCanonical) {
 }
 
 // ---------------------------------------------------------------------------
-// 12. Проверка, что одинаковые константы после свёртки дают один узел
-//     (тест на интернирование)
+// 12. Check that identical constants after folding share a single clean node (interning)
 // ---------------------------------------------------------------------------
+/**
+ * @test InterningAfterFold
+ * @brief Verifies that after folding, two identical expressions (3+3+3) end up
+ *        sharing the same clean node index.
+ */
 TEST_F(LazySimplificationTests, InterningAfterFold) {
     reset_global_pool();
     LazyRational a = LazyRational(3_r);
@@ -347,9 +409,13 @@ TEST_F(LazySimplificationTests, InterningAfterFold) {
 }
 
 // ---------------------------------------------------------------------------
-// 13-19. Воспроизведение CanonicalizationBenchmark.RepeatingSubgraphInterning
+// 13-19. Reproduction of CanonicalizationBenchmark.RepeatingSubgraphInterning
 // ---------------------------------------------------------------------------
 
+/**
+ * @test RepeatingTerm_Simplify_10
+ * @brief Builds a sum of 10 identical transcendental terms, simplifies, and evaluates.
+ */
 TEST_F(LazySimplificationTests, RepeatingTerm_Simplify_10) {
     LazyRational expr = generate_repeating_term(10, "0.5"_r);
     ASSERT_TRUE(is_dirty(expr));
@@ -361,6 +427,10 @@ TEST_F(LazySimplificationTests, RepeatingTerm_Simplify_10) {
     EXPECT_EQ(val, expected);
 }
 
+/**
+ * @test RepeatingTerm_CloneEval_10
+ * @brief Clones the repeating term expression and evaluates without simplification.
+ */
 TEST_F(LazySimplificationTests, RepeatingTerm_CloneEval_10) {
     LazyRational expr = generate_repeating_term(10, "0.5"_r);
     LazyRational expr_copy = expr.clone();
@@ -370,6 +440,10 @@ TEST_F(LazySimplificationTests, RepeatingTerm_CloneEval_10) {
     EXPECT_EQ(val, expected);
 }
 
+/**
+ * @test RepeatingTerm_Simplify_50
+ * @brief Sum of 50 terms, simplified and evaluated.
+ */
 TEST_F(LazySimplificationTests, RepeatingTerm_Simplify_50) {
     LazyRational expr = generate_repeating_term(50, "0.5"_r);
     expr.simplify_inplace();
@@ -379,6 +453,10 @@ TEST_F(LazySimplificationTests, RepeatingTerm_Simplify_50) {
     EXPECT_EQ(val, expected);
 }
 
+/**
+ * @test RepeatingTerm_NoSimplify_50
+ * @brief Sum of 50 terms evaluated without simplification (direct evaluation).
+ */
 TEST_F(LazySimplificationTests, RepeatingTerm_NoSimplify_50) {
     LazyRational expr = generate_repeating_term(50, "0.5"_r);
     Rational val = expr.eval(true);
@@ -387,6 +465,10 @@ TEST_F(LazySimplificationTests, RepeatingTerm_NoSimplify_50) {
     EXPECT_EQ(val, expected);
 }
 
+/**
+ * @test RepeatingTerm_Simplify_100
+ * @brief Sum of 100 terms, simplified and evaluated.
+ */
 TEST_F(LazySimplificationTests, RepeatingTerm_Simplify_100) {
     LazyRational expr = generate_repeating_term(100, "0.5"_r);
     expr.simplify_inplace();
@@ -396,6 +478,10 @@ TEST_F(LazySimplificationTests, RepeatingTerm_Simplify_100) {
     EXPECT_EQ(val, expected);
 }
 
+/**
+ * @test RepeatingTerm_CloneSimplify_200
+ * @brief Clone of a 200‑term sum, simplified and evaluated.
+ */
 TEST_F(LazySimplificationTests, RepeatingTerm_CloneSimplify_200) {
     LazyRational expr = generate_repeating_term(200, "0.5"_r);
     LazyRational copy = expr.clone();
@@ -406,6 +492,11 @@ TEST_F(LazySimplificationTests, RepeatingTerm_CloneSimplify_200) {
     EXPECT_EQ(val, expected);
 }
 
+/**
+ * @test RepeatingTerm_SimplifyOnly_500
+ * @brief Simply builds a 500‑term sum and calls simplify_inplace()
+ *        to check for any performance or memory issues.
+ */
 TEST_F(LazySimplificationTests, RepeatingTerm_SimplifyOnly_500) {
     LazyRational expr = generate_repeating_term(500, "0.5"_r);
     expr.simplify_inplace();
