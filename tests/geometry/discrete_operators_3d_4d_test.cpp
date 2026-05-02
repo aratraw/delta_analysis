@@ -2,6 +2,21 @@
 // Licensed under PolyForm Small Business License 1.0.0
 
 // tests/numerical/discrete_operators_3d_4d_test.cpp
+// ============================================================================
+// TESTS FOR 3D AND 4D DISCRETE OPERATORS (GRADIENT, DIVERGENCE, CURL, LAPLACIAN)
+// ============================================================================
+//
+// This file extends the tests from discrete_operators_test.cpp to three and four
+// dimensions using ProductGrid. It verifies:
+//   - Exactness on quadratic, cubic, and quartic polynomials (exact rational results).
+//   - Vector calculus identities: curl(grad(f)) = 0, divergence(curl(v)) = 0.
+//   - Second‑order convergence for gradient and Laplacian on sequences of meshes.
+//
+// All tests use the max‑norm metric (Chebyshev distance) on a uniform grid with
+// step 1/(n-1). Only interior grid points are compared to avoid boundary effects.
+//
+// ============================================================================
+
 #include <gtest/gtest.h>
 #include <vector>
 #include <array>
@@ -14,6 +29,8 @@
 
 namespace delta::testing {
     using namespace delta::geometry;
+
+    // Metric for array addresses: max‑norm (Chebyshev distance)
     struct MaxMetric {
         template<typename T, std::size_t N>
         auto operator()(const std::array<T, N>& a, const std::array<T, N>& b) const {
@@ -26,8 +43,9 @@ namespace delta::testing {
             return max_diff;
         }
     };
+
     // -------------------------------------------------------------------------
-    // 3D tests
+    // 3D tests (ProductGrid<UniformGrid, 3>)
     // -------------------------------------------------------------------------
     class DiscreteOperators3DTest : public GeometryNumericalTest {
     protected:
@@ -56,6 +74,10 @@ namespace delta::testing {
         MaxMetric max_metric;
     };
 
+    /**
+     * @test GradientQuadraticExact (3D)
+     * @brief Checks that discrete_gradient of f=x²+y²+z² gives exactly (2x,2y,2z).
+     */
     TEST_F(DiscreteOperators3DTest, GradientQuadraticExact) {
         auto grid = make_grid_3d(5);
         ScalarField3D f(grid);
@@ -75,6 +97,10 @@ namespace delta::testing {
         }
     }
 
+    /**
+     * @test LaplacianQuadraticExact (3D)
+     * @brief Checks discrete_laplacian of f=x²+y²+z²; analytic Δf = 6.
+     */
     TEST_F(DiscreteOperators3DTest, LaplacianQuadraticExact) {
         auto grid = make_grid_3d(5);
         ScalarField3D f(grid);
@@ -90,6 +116,10 @@ namespace delta::testing {
         }
     }
 
+    /**
+     * @test LaplacianCubicExact (3D)
+     * @brief Checks discrete_laplacian of f=x³+y³+z³; analytic Δf = 6x+6y+6z.
+     */
     TEST_F(DiscreteOperators3DTest, LaplacianCubicExact) {
         auto grid = make_grid_3d(5);
         ScalarField3D f(grid);
@@ -106,6 +136,10 @@ namespace delta::testing {
         }
     }
 
+    /**
+     * @test DivergenceQuadraticExact (3D)
+     * @brief Checks discrete_divergence of v=(x², y², z²); analytic divergence = 2x+2y+2z.
+     */
     TEST_F(DiscreteOperators3DTest, DivergenceQuadraticExact) {
         auto grid = make_grid_3d(5);
         VecField3D v(grid);
@@ -124,6 +158,10 @@ namespace delta::testing {
         }
     }
 
+    /**
+     * @test CurlGradZero (3D)
+     * @brief Verifies that curl(grad(f)) = 0 for f = x³+y³+z³.
+     */
     TEST_F(DiscreteOperators3DTest, CurlGradZero) {
         auto grid = make_grid_3d(5);
         ScalarField3D f(grid);
@@ -143,13 +181,17 @@ namespace delta::testing {
         }
     }
 
+    /**
+     * @test DivCurlZero (3D)
+     * @brief Verifies that divergence(curl(v)) = 0 for a vector field with non‑zero curl.
+     */
     TEST_F(DiscreteOperators3DTest, DivCurlZero) {
         auto grid = make_grid_3d(5);
         VecField3D v(grid);
         for (const auto& addr : grid) {
             Rational x = addr[0], y = addr[1], z = addr[2];
             Eigen::Matrix<Scalar, 3, 1> val;
-            val << y, z, x;   // произвольное поле с ненулевым ротором
+            val << y, z, x;   // arbitrary field with non‑zero curl
             v.set(addr, val);
         }
         auto curl_v = discrete_curl_3d(grid, v, max_metric, DifferenceScheme::CENTRAL);
@@ -161,10 +203,13 @@ namespace delta::testing {
         }
     }
 
+    /**
+     * @test GradientSecondOrder (3D)
+     * @brief Checks that the gradient error drops by ~4 when the mesh is refined.
+     * Uses f = x⁴ + y⁴ + z⁴. The analytic gradient is (4x³, 4y³, 4z³).
+     */
     TEST_F(DiscreteOperators3DTest, GradientSecondOrder) {
-
         set_precision(Rational(1, 1000000));
-
         std::vector<std::size_t> ns = { 5, 9, 17 };
         std::vector<double> errors;
         for (std::size_t n : ns) {
@@ -172,7 +217,7 @@ namespace delta::testing {
             ScalarField3D f(grid);
             for (const auto& addr : grid) {
                 Rational x = addr[0], y = addr[1], z = addr[2];
-                f.set(addr, x * x * x * x + y * y * y * y + z * z * z * z); // x^4 + y^4 + z^4
+                f.set(addr, x * x * x * x + y * y * y * y + z * z * z * z);
             }
             auto grad_num = discrete_gradient(grid, f, max_metric, DifferenceScheme::CENTRAL);
             double max_err = 0.0;
@@ -195,8 +240,12 @@ namespace delta::testing {
         }
     }
 
+    /**
+     * @test LaplacianSecondOrder (3D)
+     * @brief Checks that the Laplacian error drops by ~4 when the mesh is refined.
+     * Uses f = x⁴ + y⁴ + z⁴. Analytic Δf = 12(x²+y²+z²).
+     */
     TEST_F(DiscreteOperators3DTest, LaplacianSecondOrder) {
-
         set_precision(Rational(1, 1000000000));
         std::vector<std::size_t> ns = { 5, 9, 17 };
         std::vector<double> errors;
@@ -226,7 +275,7 @@ namespace delta::testing {
     }
 
     // -------------------------------------------------------------------------
-    // 4D tests
+    // 4D tests (ProductGrid<UniformGrid, 4>)
     // -------------------------------------------------------------------------
     class DiscreteOperators4DTest : public GeometryNumericalTest {
     protected:
@@ -257,6 +306,10 @@ namespace delta::testing {
         MaxMetric max_metric;
     };
 
+    /**
+     * @test GradientQuadraticExact (4D)
+     * @brief Checks gradient of f = Σ x_i² in 4D.
+     */
     TEST_F(DiscreteOperators4DTest, GradientQuadraticExact) {
         auto grid = make_grid_4d(5);
         ScalarField4D f(grid);
@@ -278,6 +331,10 @@ namespace delta::testing {
         }
     }
 
+    /**
+     * @test LaplacianQuadraticExact (4D)
+     * @brief Laplacian of Σ x_i² = 8.
+     */
     TEST_F(DiscreteOperators4DTest, LaplacianQuadraticExact) {
         auto grid = make_grid_4d(5);
         ScalarField4D f(grid);
@@ -294,6 +351,10 @@ namespace delta::testing {
         }
     }
 
+    /**
+     * @test LaplacianCubicExact (4D)
+     * @brief Laplacian of Σ x_i³ = 6 Σ x_i.
+     */
     TEST_F(DiscreteOperators4DTest, LaplacianCubicExact) {
         auto grid = make_grid_4d(5);
         ScalarField4D f(grid);
@@ -311,6 +372,10 @@ namespace delta::testing {
         }
     }
 
+    /**
+     * @test DivergenceQuadraticExact (4D)
+     * @brief Divergence of (x², y², z², w²) = 2(x+y+z+w).
+     */
     TEST_F(DiscreteOperators4DTest, DivergenceQuadraticExact) {
         auto grid = make_grid_4d(5);
         VecField4D v(grid);
@@ -330,6 +395,10 @@ namespace delta::testing {
         }
     }
 
+    /**
+     * @test DivGradEqualsLaplacian (4D)
+     * @brief Checks that div(grad(f)) = Δf for a quadratic function.
+     */
     TEST_F(DiscreteOperators4DTest, DivGradEqualsLaplacian) {
         auto grid = make_grid_4d(5);
         ScalarField4D f(grid);
@@ -340,14 +409,17 @@ namespace delta::testing {
         auto grad = discrete_gradient(grid, f, max_metric, DifferenceScheme::CENTRAL);
         auto div_grad = discrete_divergence(grid, grad, max_metric, DifferenceScheme::CENTRAL);
         auto lap = discrete_laplacian(grid, f, max_metric);
-        // Проверяем только центральную точку (0.5,0.5,0.5,0.5), так как для неё все соседи внутренние
+        // Only check the centre point (0.5,0.5,0.5,0.5) where all neighbours are interior
         Addr4D center = { "0.5"_r, "0.5"_r, "0.5"_r, "0.5"_r };
         EXPECT_RATIONAL_NEAR(div_grad.at(center), lap.at(center), delta::default_eps());
         EXPECT_RATIONAL_NEAR(lap.at(center), 8_r, delta::default_eps());
     }
 
+    /**
+     * @test GradientSecondOrder (4D)
+     * @brief Second‑order convergence of gradient in 4D.
+     */
     TEST_F(DiscreteOperators4DTest, GradientSecondOrder) {
-
         set_precision(Rational(1_r / 1000000_r));
         std::vector<std::size_t> ns = { 5, 9, 17 };
         std::vector<double> errors;
@@ -356,7 +428,7 @@ namespace delta::testing {
             ScalarField4D f(grid);
             for (const auto& addr : grid) {
                 Rational x = addr[0], y = addr[1], z = addr[2], w = addr[3];
-                f.set(addr, x * x * x * x + y * y * y * y + z * z * z * z + w * w * w * w); // x^4+y^4+z^4+w^4
+                f.set(addr, x * x * x * x + y * y * y * y + z * z * z * z + w * w * w * w);
             }
             auto grad_num = discrete_gradient(grid, f, max_metric, DifferenceScheme::CENTRAL);
             double max_err = 0.0;
@@ -381,8 +453,11 @@ namespace delta::testing {
         }
     }
 
+    /**
+     * @test LaplacianSecondOrder (4D)
+     * @brief Second‑order convergence of Laplacian in 4D.
+     */
     TEST_F(DiscreteOperators4DTest, LaplacianSecondOrder) {
-
         set_precision(Rational(1_r / 1000000_r));
         std::vector<std::size_t> ns = { 5, 9, 17 };
         std::vector<double> errors;
