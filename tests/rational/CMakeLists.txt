@@ -43,10 +43,10 @@ gtest_discover_tests(delta_tests_rational
 # ============================================================================
 add_executable(delta_tests_rational_kernel_benchmarks
     main_tests_rational.cpp
-    transcendentals_canonicalization_benchmark.cpp
-    transcendentals_comparative.cpp
-    performance_compare_test.cpp
-    performance_test.cpp
+    "transcendentals_canonicalization_benchmark.cpp"
+    "transcendentals_comparative.cpp"
+    "performance_compare_test.cpp"
+    "performance_test.cpp"
 )
 
 target_include_directories(delta_tests_rational_kernel_benchmarks PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/..)
