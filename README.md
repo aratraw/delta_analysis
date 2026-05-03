@@ -61,23 +61,6 @@ This clusters points near the corner without any external heuristics – adaptiv
 
 ---
 
-## 🧪 Tests Are the Primary Documentation
-
-We have **≈400 test cases** organised into ~45 files; the code volume of the test suite is roughly on par with the library headers.  
-Every test verifies a fundamental mathematical invariant, edge case, or cross‑component integration. They serve as **executable examples** – if you want to learn how to use a feature, go to the corresponding test file.
-
-- `tests/calculus/test_riemann_sum.cpp` – Riemann sums on dyadic and non‑uniform grids
-- `tests/geometry/discrete_forms_test.cpp` – `d∘d=0`, Hodge star, Laplacian, wedge product
-- `tests/numerical/discrete_operators_test.cpp` – finite differences, convergence tests
-- `tests/rational/lazy_rational_contract_tests.cpp` – the complete mutation contract of `LazyRational`
-- `tests/rational/transcendentals_correctness.cpp` – π, sin, cos, exp, log up to 100 digits
-
-Full coverage report: [docs/test_coverage.md](docs/test_coverage.md).
-
-The tests always pass (`ctest` returns 0), and they are the ultimate guarantee of correctness.
-
----
-
 ## ⚙️ The Lazy Rational Engine
 
 The library’s numerics are powered by an advanced lazy evaluation system:
@@ -136,6 +119,22 @@ cd out/build/x64-release
 ctest --output-on-failure
 cmake --build . --target benchmarks   # build all benchmarks
 ```
+---
+
+## 🧪 Tests Are the Primary Documentation
+
+We have **≈400 test cases** organised into ~45 files; the code volume of the test suite is roughly on par with the library headers.  
+Every test verifies a fundamental mathematical invariant, edge case, or cross‑component integration. They serve as **executable examples** – if you want to learn how to use a feature, go to the corresponding test file.
+
+- `tests/calculus/test_riemann_sum.cpp` – Riemann sums on dyadic and non‑uniform grids
+- `tests/geometry/discrete_forms_test.cpp` – `d∘d=0`, Hodge star, Laplacian, wedge product
+- `tests/numerical/discrete_operators_test.cpp` – finite differences, convergence tests
+- `tests/rational/lazy_rational_contract_tests.cpp` – the complete mutation contract of `LazyRational`
+- `tests/rational/transcendentals_correctness.cpp` – π, sin, cos, exp, log up to 100 digits
+
+Full coverage report: [docs/test_coverage.md](docs/test_coverage.md).
+
+All tests pass, and they are the ultimate guarantee of correctness.
 
 ---
 
