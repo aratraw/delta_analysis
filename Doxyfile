@@ -1,0 +1,153 @@
+# ============================================================================
+# Doxyfile 1.12.0 for Δ‑Analysis Library
+#
+# Generate with: doxygen Doxyfile
+# ============================================================================
+
+# ----------------------------------------------------------------------------
+# 1. Project
+# ----------------------------------------------------------------------------
+PROJECT_NAME           = "Δ‑Analysis"
+PROJECT_NUMBER         = 0.2.0
+PROJECT_BRIEF          = "Constructive mathematical framework for limits, continuity,
+differentiation, integration and DEC based on exact rational arithmetic. Also lazy expressions, soon to be symbolic"
+
+OUTPUT_DIRECTORY       = ./docs/doxygen
+CREATE_SUBDIRS         = NO
+OUTPUT_LANGUAGE        = English
+
+# ----------------------------------------------------------------------------
+# 2. Input files
+# ----------------------------------------------------------------------------
+INPUT                  = ./include \
+                         ./README.md \
+                         ./docs \
+                         ./tests
+
+RECURSIVE              = YES
+
+# Exclude everything that is not a chosen example
+EXCLUDE                = ./tests/basic \
+                         ./tests/geometry/constructive_core_test.cpp \
+                         ./tests/geometry/discrete_operators_3d_4d_test.cpp \
+                         ./tests/geometry/discrete_operators_test.cpp \
+                         ./tests/geometry/dual_complex_test.cpp \
+                         ./tests/geometry/hat_basis_test.cpp \
+                         ./tests/geometry/matrix_field_test.cpp \
+                         ./tests/geometry/product_regulative_test.cpp \
+                         ./tests/geometry/simplicial_complex_test.cpp \
+                         ./tests/geometry/tensor_field_test.cpp \
+                         ./tests/numerical/integrals_test.cpp \
+                         ./tests/rational \
+                         ./tests/regulative_ideas/test_matrix.cpp \
+                         ./tests/regulative_ideas/test_padic.cpp \
+                         ./tests/regulative_ideas/test_tree.cpp \
+                         ./tests/solvers \
+                         ./tests/test_fixtures.h \
+                         ./tests/test_fixtures_geometry_numerical.h \
+                         ./benchmarks \
+                         ./examples
+
+# Where to look for  tags
+EXAMPLE_PATH           = ./tests
+EXAMPLE_PATTERNS       = *.cpp
+
+FILE_PATTERNS          = *.h *.hpp *.md
+IMAGE_PATH             = ./docs/images
+
+# ----------------------------------------------------------------------------
+# 3. Extraction mode (rely on /** comments, not EXTRACT_ALL)
+# ----------------------------------------------------------------------------
+EXTRACT_ALL            = NO
+EXTRACT_PRIVATE        = NO
+EXTRACT_PACKAGE        = NO
+EXTRACT_STATIC         = NO
+EXTRACT_LOCAL_CLASSES  = YES
+EXTRACT_ANON_NSPACES   = NO
+HIDE_UNDOC_MEMBERS     = NO
+HIDE_UNDOC_CLASSES     = NO
+
+# ----------------------------------------------------------------------------
+# 4. Preprocessing and C++20 concepts
+# ----------------------------------------------------------------------------
+ENABLE_PREPROCESSING   = YES
+MACRO_EXPANSION        = YES
+EXPAND_ONLY_PREDEF     = YES
+PREDEFINED             = DOXYGEN_SHOULD_SKIP_THIS \
+                         "DELTA_USE_CACHING=1" \
+                         "requires=" \
+                         "concept="
+
+# ----------------------------------------------------------------------------
+# 5. HTML output
+# ----------------------------------------------------------------------------
+GENERATE_HTML          = YES
+HTML_OUTPUT            = html
+HTML_FILE_EXTENSION    = .html
+HTML_DYNAMIC_MENUS     = YES
+HTML_COLORSTYLE        = LIGHT
+GENERATE_TREEVIEW      = YES
+TREEVIEW_WIDTH         = 350
+SEARCHENGINE           = YES
+SERVER_BASED_SEARCH    = NO
+
+# ----------------------------------------------------------------------------
+# 6. LaTeX / PDF (disabled)
+# ----------------------------------------------------------------------------
+GENERATE_LATEX         = NO
+
+# ----------------------------------------------------------------------------
+# 7. Diagrams – DOT
+# ----------------------------------------------------------------------------
+HAVE_DOT               = NO       # it falls with errors as of yet, which is none of my concerns
+DOT_NUM_THREADS        = 1
+SHORT_NAMES            = YES
+DOT_GRAPH_MAX_NODES    = 50
+CLASS_GRAPH            = YES
+CALL_GRAPH             = NO
+CALLER_GRAPH           = NO
+DIRECTORY_GRAPH        = YES
+DOT_CLEANUP            = YES
+DOT_MULTI_TARGETS      = NO
+# ----------------------------------------------------------------------------
+# 8. Extra pages and main page
+# ----------------------------------------------------------------------------
+WARNINGS               = YES
+WARN_IF_UNDOCUMENTED   = YES
+WARN_IF_DOC_ERROR      = YES
+WARN_NO_PARAMDOC       = YES
+
+USE_MDFILE_AS_MAINPAGE = ./README.md
+
+# ----------------------------------------------------------------------------
+# 9. Graphs and relations
+# ----------------------------------------------------------------------------
+INCLUDE_GRAPH          = YES
+INCLUDED_BY_GRAPH      = YES
+DIRECTORY_GRAPH        = YES
+GRAPHICAL_HIERARCHY    = YES
+REFERENCED_BY_RELATION = YES
+REFERENCES_RELATION    = YES
+
+# ----------------------------------------------------------------------------
+# 10. Source browser (disabled)
+# ----------------------------------------------------------------------------
+SOURCE_BROWSER         = NO
+VERBATIM_HEADERS       = NO
+
+# ----------------------------------------------------------------------------
+# 11. Project-specific settings
+# ----------------------------------------------------------------------------
+HIDE_SCOPE_NAMES       = YES
+BRIEF_MEMBER_DESC      = YES
+REPEAT_BRIEF           = YES
+ALWAYS_DETAILED_SEC    = YES
+INLINE_INHERITED_MEMB  = YES
+FULL_PATH_NAMES        = YES
+STRIP_FROM_PATH        = ./include
+STRIP_FROM_INC_PATH    = ./include
+
+# ----------------------------------------------------------------------------
+# 12. Encoding
+# ----------------------------------------------------------------------------
+DOXYGEN_ENCODING       = UTF-8

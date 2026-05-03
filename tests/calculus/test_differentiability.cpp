@@ -1,6 +1,18 @@
 // (c) 2026 Timofey Ishimtsev.
 // Licensed under PolyForm Small Business License 1.0.0
-
+/**
+ *  test_differentiability.cpp
+ *
+ * \brief Differentiability checks on a dyadic grid.
+ *
+ * Shows how to use `check_differentiability` to verify that a function has a
+ * given derivative at a point, using a modulus of convergence. Examples
+ * include the identity, quadratic, and absolute value (non-differentiable)
+ * functions. The test builds a sequence of grids via `DeltaPath` and locates
+ * the point of interest.
+ *
+ * \ingroup examples
+ */
 // tests/calculus/test_differentiability.cpp
 #include <gtest/gtest.h>
 #include "test_fixtures.h"
@@ -49,6 +61,7 @@ namespace delta::testing {
      *       The derivative is 1, and the error is bounded by the grid step,
      *       so the linear modulus ω(δ)=δ should be satisfied.
      */
+     //! [differentiability_quadratic_at_half]
     TEST_F(DifferentiabilityTest, QuadraticAtHalf) {
         ListGrid<Addr, Compare> grid0({ 0_r, 1_r });
         auto path = make_midpoint_path(grid0);
@@ -70,6 +83,7 @@ namespace delta::testing {
         bool diff = check_differentiability(grids, x, func, D, modulus, 1, tolerance);
         EXPECT_TRUE(diff);
     }
+    //! [differentiability_quadratic_at_half]
 
     /**
      * @test Quadratic function f(x)=x² at x=1/4.

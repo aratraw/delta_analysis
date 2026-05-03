@@ -1,6 +1,18 @@
 // (c) 2026 Timofey Ishimtsev.
 // Licensed under PolyForm Small Business License 1.0.0
-
+/**
+ *  cotangent_laplacian_test.cpp
+ *
+ * \brief Cotangent Laplacian – algebraic properties and action on functions.
+ *
+ * Builds the cotangent Laplacian for a triangulation of the unit square and
+ * verifies symmetry, row-sum zero, and the kernel of constant functions. For
+ * a mesh with an interior vertex, the exact value of *L u* for linear and
+ * quadratic functions is compared with the analytically derived result.
+ * Lumped mass matrix positivity is also checked.
+ *
+ * \ingroup examples
+ */
 // tests/numerical/cotangent_laplacian_test.cpp
 // ============================================================================
 // MATHEMATICAL JUSTIFICATION FOR COTANGENT LAPLACIAN TESTS

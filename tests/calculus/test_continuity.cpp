@@ -1,5 +1,18 @@
 // (c) 2026 Timofey Ishimtsev.
 // Licensed under PolyForm Small Business License 1.0.0
+/**
+ *  test_continuity.cpp
+ *
+ * \brief Continuity verification with power and logarithmic moduli.
+ *
+ * Demonstrates how to verify that a function satisfies a given modulus of
+ * continuity on a sequence of refined grids. Both `PowerModulus` and
+ * `LogarithmicModulus` are used with the identity, quadratic, and square-root
+ * functions. The check `check_continuity_level` is invoked for several
+ * levels of a dyadic delta path.
+ *
+ * \ingroup examples
+ */
 
 // tests/calculus/test_continuity.cpp
 #include <gtest/gtest.h>
@@ -21,6 +34,7 @@ namespace delta::testing {
      * @test Identity function f(x)=x on a dyadic path.
      *       The modulus ω(δ)=δ (C=1, α=1) should be satisfied exactly.
      */
+     //! [continuity_identity]
     TEST_F(ContinuityTest, IdentityFunctionOnDyadicPath) {
         ListGrid<Addr, Compare> grid0({ 0_r, 1_r });
         auto path = make_midpoint_path(grid0);
@@ -36,7 +50,8 @@ namespace delta::testing {
             if (n < 5) path.advance(func);
         }
     }
-
+    //! [continuity_identity]
+    
     /**
      * @test Constant function f(x)=5. Any modulus with C=0 works,
      *       so the test should always pass.

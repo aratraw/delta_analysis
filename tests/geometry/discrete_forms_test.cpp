@@ -1,6 +1,19 @@
 // (c) 2026 Timofey Ishimtsev.
 // Licensed under PolyForm Small Business License 1.0.0
-
+/**
+ *  discrete_forms_test.cpp
+ *
+ * \brief Discrete Exterior Calculus (DEC) – exterior derivative, Hodge star,
+ * Laplacian, and wedge product.
+ *
+ * Verifies fundamental algebraic identities: *d*◦*d* = 0, integral
+ * preservation of the Hodge star, constant-in-kernel property of the
+ * Laplacian, and antisymmetry of the wedge product. Uses a barycentric dual
+ * complex on 2D triangle meshes and a tetrahedron in 3D. All identities are
+ * checked exactly with `Rational` arithmetic.
+ *
+ * \ingroup examples
+ */
 // tests/geometry/discrete_forms_test.cpp
 // ============================================================================
 // TESTS FOR DISCRETE FORMS AND DEC OPERATORS (Discrete Exterior Calculus)
@@ -342,6 +355,7 @@ namespace delta::testing {
      * The test passes only if the incidence signs from incident_faces are
      * consistent (boundary of a triangle has zero sum).
      */
+     //! [dsquare_zero_for_0form]
     TEST_F(DiscreteFormsTest, DSquareZeroFor0Form) {
         auto mesh = make_triangle_mesh();
         DiscreteForm<0, Scalar, Complex<2>> f(mesh);
@@ -353,6 +367,7 @@ namespace delta::testing {
         for (std::size_t t = 0; t < mesh.num_triangles(); ++t)
             EXPECT_EQ(ddf.at(t), 0_r);
     }
+    //! [dsquare_zero_for_0form]
     /**
      * @test DOf1FormGives2Form
      * @brief Verifies that the exterior derivative of a 1‑form produces a 2‑form

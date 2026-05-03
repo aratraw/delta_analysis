@@ -16,40 +16,50 @@
 // MUTATION PHILOSOPHY: WHY acc + term, NOT acc = acc + term
 // ---------------------------------------------------------------------------
 //
-// LazyRational is designed for the main scenario of computational mathematics:
-// accumulating a sum (or product) in a loop followed by ONE evaluation.
+// Let's be on point. 99% of all computations in any numerical library – ANY –
+// boil down to one stupid simple pattern: **accumulating a sum (or product) in a loop**.
 //
-//   LazyRational acc;                  // creates CONST(0)
+//   LazyRational acc;                  // CONST(0)
 //   for (...) {
-//       acc + term;                    // mutates acc, adding term to the tree
+//       acc + term;                    // mutates acc, O(1) per iteration
 //   }
-//   Rational result = acc.eval();      // one evaluation of the whole tree
+//   Rational result = acc.eval();      // one evaluation at the end
 //
-// Note: it is NOT «acc = acc + term», but simply «acc + term».
-// Assignment acc = acc + ... is BLOCKED at compile time,
-// because LazyRational prohibits copying (operator= is deleted).
+// That's it. Determinant? Matrix multiplication? Series sum? Scalar product?
+// Riemann sum for an integral? Finite difference? Iterative approximation?
+// ALL OF THEM ARE SUMMATIONS. And when you add Taylor series, iterations,
+// nested loops – it's SUMMATION OF SUMMATIONS OF SUMMATIONS OF SUMMATIONS.
 //
-// WHY:
-//   - If acc = acc + term worked, each addition would create a FULL COPY
-//     of the acc tree, leading to O(N²) memory and time.
-//   - In an immutable design these copies happen IMPLICITLY,
-//     and the user cannot avoid them.
-//   - Here, acc + term mutates acc in place in O(1), and the full
-//     evaluation acc.eval() is done ONCE at the end in O(N).
+// This is NOT a niche scenario. This is THE dominant workload of THE computational mathematics.
+// Optimize this, and you are the king. Miss it, and your library is just another toy.
 //
-// In 99.99999% of cases you have EXACTLY ONE LazyRational object per expression.
-// All operands are eager values (Rational, int, literals) that are absorbed
-// into the tree without creating additional LazyRationals:
+// Note: it is NOT `acc = acc + term`, just `acc + term`. Assignment is BLOCKED
+// at compile time because LazyRational is move-only (copy assignment deleted).
+//
+// WHY MUTATION?
+//   - `acc = acc + term` would copy the ENTIRE tree every iteration → O(N²).
+//   - Immutable designs do those copies IMPLICITLY – you can't avoid them.
+//   - Here, `acc + term` mutates `acc` in-place in O(1). The full evaluation
+//     `acc.eval()` happens ONCE at the end in O(N).
+//
+// In 99.99999% of real use cases you have EXACTLY ONE LazyRational object per expression.
+// All operands are eager values (Rational, int, literals) that get absorbed as leaf values:
 //
 //   acc + 10_r;     // Rational absorbed as leaf_value
 //   acc / 3_r;      // Rational absorbed as leaf_value
 //   acc * term_r;   // Rational absorbed as leaf_value
 //
-// The entire architecture is optimised exactly for this scenario.
+// The whole architecture is laser‑focused on this scenario. It does NOT mean it cannot do other scenarios
+// like nested transcendentals, cool simplifications and whatnot - YES it can. 
+// But if you do the BASE scenario faster - you're king.
+// Algebraic simplification is orthogonal and happens later – 
+// but the raw accumulation and final SUM calculation MUST be fast.
 //
-// Underline: acc = acc + term; — THIS IS SHIT CODE.
-// We have blocked it at the compiler level.
+// So underline it: `acc = acc + term;` – THIS IS SHIT CODE. We blocked it.
+// Copying is for clones, not for loops.
 //
+// If you think this is "niche", you have no idea about math. Get real.
+// ---------------------------------------------------------------------------
 // ---------------------------------------------------------------------------
 // HOW OPERATIONS WORK: CHAINS OF MUTATIONS
 // ---------------------------------------------------------------------------
@@ -104,7 +114,28 @@
 // Wherever the operator returns a reference to the left operand, the chain
 // keeps mutating ONE AND THE SAME object, creating no new ones.
 //
-// ---
+// ---------------------------------------------------------------------------
+// WHY a + 2 + 3 + 4 + 5 DOES NOT EXPLODE YOUR COMPILER
+// ---------------------------------------------------------------------------
+// Classic Expression Templates (Eigen, Blaze, Boost.Proto) build a type-level
+// tree at compile time. That's great – until your tree depth exceeds ~100 nodes.
+// Then the compiler hits its template recursion limit and dies. And if that
+// expression lives inside a loop? You're screwed.
+//
+// LazyRational does something radically different:
+//   1. a + 2   – mutates the left operand. No type trees. No templates.
+//   2. ... + 3 – adds into the SAME object. No new LazyRational created.
+//   3. ... + 4 – same object again. Zero template recursion. Zero compiler pain.
+// 
+//  Accumulate half a million numbers? Sure, it's tested.
+//
+// Bottom line: the expression tree lives at runtime, between assignments.
+// And we don't need assignments anyway – `acc = acc + term` is BLOCKED
+// (move-only semantics).
+//
+// Go ahead: write `a + 2 + 3 + 4 + 5 + ... + 100500`. The compiler won't blink.
+// This is not "wrong". This is optimal for real numerical code.
+// ---------------------------------------------------------------------------
 // THE PRICE OF MUTATION: WHEN .clone() IS NEEDED
 // ---
 //

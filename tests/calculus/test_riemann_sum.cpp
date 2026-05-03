@@ -1,6 +1,17 @@
 // (c) 2026 Timofey Ishimtsev.
 // Licensed under PolyForm Small Business License 1.0.0
-
+/**
+ *  test_riemann_sum.cpp
+ *
+ * \brief Riemann sums on dyadic and arbitrary grids.
+ *
+ * Covers `left_riemann_sum`, `right_riemann_sum`, and `tagged_riemann_sum`
+ * for the identity function. Edge cases (empty grid, single-point grid) are
+ * included. The test uses `DeltaPath` to refine a `ListGrid` and checks the
+ * expected convergence of the sums.
+ *
+ * \ingroup examples
+ */
 // tests/calculus/test_riemann_sum.cpp
 #include <gtest/gtest.h>
 #include "test_fixtures.h"

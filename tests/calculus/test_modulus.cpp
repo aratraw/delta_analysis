@@ -1,6 +1,17 @@
 // (c) 2026 Timofey Ishimtsev.
 // Licensed under PolyForm Small Business License 1.0.0
-
+/**
+ *  test_modulus.cpp
+ *
+ * \brief Modulus of continuity classes and their application.
+ *
+ * Illustrates the `PowerModulus` and `LogarithmicModulus` templates for
+ * `double` and `Rational`, including boundary cases (delta ≤ 0 for
+ * logarithmic). Also verifies `check_continuity_level` with different moduli
+ * and `check_differentiability` with linear and power moduli.
+ *
+ * \ingroup examples
+ */
 // tests/calculus/test_modulus.cpp
 #include <gtest/gtest.h>
 #include "test_fixtures.h"

@@ -1,6 +1,17 @@
 // (c) 2026 Timofey Ishimtsev.
 // Licensed under PolyForm Small Business License 1.0.0
-
+/**
+ *  test_sqrt2_construction.cpp
+ *
+ * \brief Construction of √2 as a fundamental sequence.
+ *
+ * Uses a dyadic path on [0, 2] to generate nested intervals containing √2.
+ * The left endpoints form a Cauchy sequence with exponential rate 1/2.
+ * Demonstrates the equivalence of left-endpoint and right-endpoint sequences
+ * through `FundamentalSequence` and `are_equivalent`.
+ *
+ * \ingroup examples
+ */
 // tests/calculus/test_sqrt2_construction.cpp
 #include <gtest/gtest.h>
 #include "test_fixtures.h"
