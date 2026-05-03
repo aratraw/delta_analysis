@@ -837,6 +837,7 @@ namespace delta::testing {
      * @brief Checks that sin(π) < 1000*eps for various eps.
      */
     TEST_F(TranscendentalCorrectnessTest, PiSinConsistency) {
+        internal::reset_default_eps();
         std::vector<Rational> epsilons = {
             "1/1000000000000000000000000000000"_r,        // 1e-30
             "1/10000000000000000000000000000000000000000"_r, // 1e-40

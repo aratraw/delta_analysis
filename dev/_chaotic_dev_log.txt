@@ -540,3 +540,82 @@ Moral:
 Date of realization: April 28, 2026, when it suddenly dawned that the eps in the matrix_exp signature is there, but in the body it is not used.
 
 Status: Bug closed. Exponential respects user eps. Tests are green. Shame and laughter in equal proportions.
+
+----
+
+
+Here is the English translation of the provided text:
+
+---
+
+We conducted a series of experiments optimizing `sqrt` and `exp` in the Delta library. During this work, several issues arose, which we are documenting along with conclusions and lessons learned.
+
+## 1. Exponential (`series_exp`)
+
+**Problem:**  
+An attempt to speed up `exp` for typical arguments (e.g., x=1.23) by lowering the reduction threshold from 2.0 to 1.0.
+
+**Observation:**  
+- With threshold 2.0: x ≤ 2 → no reduction applied, result `exp(x)` has a compact rational representation.  
+- With threshold 1.0: x > 1 → reduction with k=1, result `exp(x)` becomes a giant fraction (numerator/denominator in the thousands of bits).  
+- Subsequent operations, especially `log(exp(x))` (correctness tests), slowed down catastrophically (from 11 sec to 50+ sec).
+
+**Cause:**  
+Scaling of `internal_eps` (necessary to guarantee absolute error after squaring), combined with reduction for small x, produces ultra-precise results with huge integers. Although the numerical value is correct, the rational form is bloated to the point of being unusable.
+
+**Lesson:**  
+When optimizing transcendental functions, you cannot consider a function in isolation. One must account for the impact of the result's representation on subsequent operations. In this case, a win in a micro-benchmark (a slightly faster `exp`) turned into a loss in real-world scenarios. The reduction threshold remains 2.0.
+
+## 2. Square root (`series_sqrt` and `try_exact_nth_root`)
+
+**Problem 1:**  
+`sqrt` in Delta was 1.5–2.5 times slower than a naive implementation due to:
+- Checking for exact squares (`try_exact_nth_root`) with binary search (many exponentiations).
+- Unnecessary conversions between `Value` ↔ `double` and `std::sqrt`.
+- Complex scaling logic even for ordinary numbers.
+
+**Optimization attempt 1:**  
+Replaced binary search with integer Newton's method and added fast filters (`mod256`, `mod10`).  
+**Result:** speedup from 59→54 µs (at 1e-80), but the gap with naive (26 µs) remained.
+
+**Problem 2:**  
+Temporarily disabled the exact root check to measure pure `series_sqrt` time.  
+**Result:** `sqrt` was still slower than naive (56 vs 31 µs at 1e-80). This meant the problem was inside `series_sqrt`.
+
+**Optimization attempt 2:**  
+Simplified `series_sqrt`: for ordinary numbers, removed `double` and `std::sqrt`, made initial guess `x/2`.  
+**Result:** speed caught up with naive, but unexpectedly the `PiSinConsistency` test (computing `sin(π)` for high precision) hung.
+
+**Cause:**  
+To compute π in the test, `series_sqrt(10005, eps)` is used (required for the Chudnovsky formula). With the initial guess `x/2` and high precision (eps=1e-30), the number of Newton iterations increased, and more importantly, the numerators and denominators of intermediate rational numbers grew enormously. This caused π itself to be represented as a giant fraction, and the subsequent computation of `sin(π)` (which uses this π for argument reduction) slowed down catastrophically (the test hung).
+
+**Lesson:**  
+Even for `sqrt`, you need a good initial approximation (e.g., via `double`) to keep the result compact. A "bare" Newton method with a crude start generates huge rational numbers, making any further computations with this result impossible. An optimization that speeds up an isolated `sqrt` at the cost of approximation quality is unacceptable.
+
+**Final solution for `series_sqrt`:**  
+Revert to using `std::sqrt(to_double(x))` for the initial approximation in the fast path, while:
+- Removing all unnecessary scaling checks for typical numbers (fast and slow paths separated by `log2x` estimate).
+- Keeping `to_double` and `std::sqrt` only in the fast path, yielding a compact result in 2–3 iterations.
+- For extreme numbers (rare case), keep scaling, but there `to_double` will be needed anyway.
+
+## 3. General conclusions
+
+1. **Micro-benchmarks lie.** Measuring the time of an isolated function (especially if the result is unused) does not reflect real performance in the context of a chain of operations. Always verify the impact on typical usage scenarios (`exp` → `log`, `sqrt` → `sin`, etc.).
+
+2. **Rational arithmetic is not free.** The size of the numerator and denominator is critical. An optimization that leads to bloated fractions, even while preserving numerical accuracy, can render the library impractical for real-world use.
+
+3. **A good initial approximation for iterative methods (Newton) is not just about speed, but also about representation quality.** A crude initial approximation generates more iterations and larger intermediate integers, which can catastrophically affect any subsequent operations.
+
+4. **"Clever" checks (exact root) must be either very fast or optional.** If you cannot make the check cheap (e.g., via 64-bit `std::sqrt` and squaring comparison), it's better to provide a separate `exact_sqrt` function and not call it in the main `sqrt`.
+
+5. **Architectural decisions should be documented along with their consequences.** The comment for `series_exp` now explains why the threshold is 2.0, not 1.0. The comment for `series_sqrt` should explain why `std::sqrt` is used for the initial approximation and warn about the risks of replacing it.
+
+## 4. Next steps
+
+- Restore `series_sqrt` using `std::sqrt` for the fast path with a clear separation between normal/extreme numbers.
+- Keep the exact root check (`try_exact_nth_root`) in `eager_sqrt` only after a fast 64-bit path and cheap filters are implemented. For now – comment it out.
+- Add a check in `series_sqrt` that if `k == 0` and the number requires no scaling, use the initial approximation via `double` and do not execute scaling loops.
+- Update tests, ensure `PiSinConsistency` and `Sqrt2PrecisionBenchmark` run quickly.
+- Document all these lessons in the code and in this note.
+
+Thus, we not only fix the problems but also capture knowledge about which optimizations are dangerous and why.
