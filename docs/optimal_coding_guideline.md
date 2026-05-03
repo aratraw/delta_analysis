@@ -1,4 +1,5 @@
-```markdown
+*Back to [README](../README.md) | [Documentation Index](../README.md#-documentation)*
+
 ## Performance-Optimized Coding Guidelines for LazyRational
 
 This guide focuses on extracting maximum performance from the library’s lazy evaluation system. It assumes you are already familiar with the basics of `Rational` and `LazyRational` (construction, basic operations).  
@@ -196,4 +197,3 @@ The library will never leak memory, and it will always maintain correctness. It 
 ---
 
 **The bottom line:** For normal use, forget about the pool. Build your expressions, evaluate them, and let the automatic GC handle the rest. The architecture has been designed so that you can “throw nodes at it” without creating dangling references or memory corruption. The garbage collector is not a janitor – it’s your deferred computation engine.
-```

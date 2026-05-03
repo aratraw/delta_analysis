@@ -1,3 +1,5 @@
+*Back to [README](../README.md) | [Documentation Index](../README.md#-documentation)*
+
 ## Architecture Overview: Foundation
 
 This document explains the foundational layers of the Δ‑analysis library: the integer and rational arithmetic backends, the design rationale behind the scalar type, and the lazy evaluation engine. These are the building blocks upon which grids, paths, operators, and the discrete exterior calculus are constructed.

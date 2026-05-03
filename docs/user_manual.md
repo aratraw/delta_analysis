@@ -1,4 +1,5 @@
-```markdown
+*Back to [README](../README.md) | [Documentation Index](../README.md#-documentation)*
+
 # User Manual
 
 ## Philosophy: Read the Tests
@@ -237,4 +238,3 @@ See the full coding guidelines in `docs/coding_guidelines.md` for details.
 - **Doxygen** documentation for detailed API reference.
 
 Remember: the tests are your best friend. They are guaranteed to compile and pass; copy, adapt, and extend them.
-```
