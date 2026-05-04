@@ -1,10 +1,11 @@
 # Δ‑analysis Library
 
+[![CI](https://img.shields.io/badge/build-passing-brightgreen)]()
+[![Tests](https://img.shields.io/badge/tests-400%20passing-brightgreen)](https://github.com/aratraw/delta_analysis/tree/main/tests)
+[![Coverage](https://img.shields.io/badge/coverage-%3E95%25-brightgreen)](https://github.com/aratraw/delta_analysis/tree/main/tests)
+[![License](https://img.shields.io/badge/license-PolyForm%20Small%20Business%201.0.0-blue)]()
 [![DOI (paper)](https://zenodo.org/badge/DOI/10.5281/zenodo.18761044.svg)](https://doi.org/10.5281/zenodo.18761044)
 [![DOI (software)](https://zenodo.org/badge/DOI/10.5281/zenodo.18934082.svg)](https://doi.org/10.5281/zenodo.18934082)
-[![CI](https://img.shields.io/badge/build-passing-brightgreen)]()
-[![Coverage](https://img.shields.io/badge/coverage->95%-brightgreen)]()
-[![License](https://img.shields.io/badge/license-PolyForm%20Small%20Business%201.0.0-blue)]()
 
 A C++20 library for **exact, constructive mathematical analysis** where the continuum is the *limit of a refinement process*, not a pre‑existing set of points. It provides grids, adaptive paths, discrete exterior calculus, and an advanced lazy rational engine – all parametric over the address space (rationals, matrices, binary strings, p‑adic numbers, …).
 
@@ -24,6 +25,101 @@ A C++20 library for **exact, constructive mathematical analysis** where the cont
 For a deep dive see the [documentation table](#-documentation).
 
 ---
+
+## ⚙️ The Lazy Rational Engine
+
+The library’s numerics are powered by an advanced and meticulously crafted lazy evaluation system:
+
+- **Move‑only mutable trees** – `a + b` mutates `a` in place, O(1) per term.
+- **Global hash‑consed pool** – structurally identical sub‑expressions are shared.
+- **Automatic garbage collection** – when the pool fills up, all live clean roots are evaluated to constants and the pool is rebuilt. GC is **part of the computational model** – it’s the moment deferred evaluation is forced.
+- **Pyramidal compact reduction (PCR)** – sums are reduced in batches of 32 to avoid intermediate fraction swell.
+- **Algebraic simplification** – detects `Exp(Log(x)) → x`, folds `A+A → 2*A`, distributive `a*b + a*c → a*(b+c)`, up to **1000× speedup**.
+- **One step away from symbolic differentiation** – the same expression tree can be differentiated automatically (planned for v0.3).
+
+Learn more in [docs/optimal_coding_guideline.md](docs/optimal_coding_guideline.md) and [docs/architecture.md](docs/architecture.md).
+
+---
+
+## Competitive Landscape
+
+Δ‑analysis occupies a **new niche** at the intersection of four domains that are usually served by separate, unintegrated tools:
+
+1. **Exact rational arithmetic & symbolic manipulation** – Boost.Multiprecision, GiNaC, Mathematica, SymPy  
+2. **Discrete Exterior Calculus (DEC) & simplicial meshes** – PyDEC, DecLib, geometry components of CGAL  
+3. **Adaptive mesh refinement & numerical analysis** – deal.II, p4est, libMesh (usually floating‑point only)  
+4. **Constructive mathematics & formal verification** – Coq, Agda, NuPRL (not designed for industrial‑scale computation)
+
+No existing library bridges all four. The table below shows how Δ‑analysis compares against the most relevant tools across the key capability domains.
+
+### 1. Arithmetical Core — the raw computational engine
+
+This table compares Δ‑analysis against dedicated arbitrary‑precision libraries on arithmetic capabilities, lazy evaluation, and performance.
+
+| Capability | Δ‑analysis | Boost.MP | GMP | CLN |
+|------------|------------|----------|-----|-----|
+| **Arbitrary‑precision rationals** | ✅ (native, via Boost) | ✅ | ✅ | ✅ |
+| **Lazy evaluation with built‑in GC** | ✅ (unique) | ❌ (et_on only, no GC) | ❌ | ❌ |
+| **Algebraic simplification** (flatten, fold, distribute, cancel) | ✅ (up to 1000× speedup) | ❌ | ❌ | ❌ |
+| **Transcendental functions** with absolute error guarantee | ✅ (hybrid float/series, cached π) | ❌ | ❌ | ❌ |
+| **Smart Summation** (pyramidal compact reduction) | ✅ (2–6× faster than Boost) | ❌ | ❌ | ❌ |
+| **Eigen integration** (NumTraits, ADL transcendental) | ✅ | ❌ | ❌ | ❌ |
+| **Source Available** | ✅ PolyForm Small Business | ✅ Boost | ✅ LGPL/GPL | ✅ GPL |
+
+*Δ‑analysis wraps Boost.Multiprecision as its integer backend, then adds a full lazy‑evaluation layer with GC, simplification, and transcendental caching. You can always drop down to raw Boost rationals within the same codebase, but the lazy engine provides substantial speed and convenience for any non‑trivial workload.*
+
+### 2. Mathematical Framework — high‑level discrete analysis
+
+This table compares Δ‑analysis against systems that integrate multiple mathematical domains (symbolic, geometric, numerical) under one roof.
+
+| Capability | Δ‑analysis | Mathematica | GiNaC | CGAL | deal.II / libMesh | SymPy / NumPy |
+|------------|------------|-------------|-------|------|-------------------|---------------|
+| **Discrete Exterior Calculus** (d, ⋆, δ, Δ, ∧) with exact invariants | ✅ exact, metric‑aware | ❌ | ❌ | ❌ | ❌ | ❌ |
+| **Simplicial complexes & barycentric dual** | ✅ (2D, 3D) | ❌ (general, but not exact rational) | ❌ | ✅ (meshes, but no DEC) | ✅ (floating‑point) | ❌ |
+| **Adaptive mesh refinement** (priority‑queue, deviation‑based) | ✅ (up to 1000× gain) | ⚠️ (general, not exact rational) | ❌ | ❌ | ✅ (floating‑point) | ❌ |
+| **Parametric over address space & metric** (ℝⁿ, p‑adic, matrices, trees) | ✅ | ❌ (fixed ℝ) | ❌ | ❌ | ❌ | ❌ |
+| **Tensor & matrix fields** with algebraic ops | ✅ | ✅ | ❌ | ❌ | ✅ (tensors) | ✅ (NumPy) |
+| **Finite‑difference operators** (grad, div, curl, Laplacian) on product grids | ✅ (1D–4D, metric‑aware) | ✅ | ❌ | ❌ | ✅ | ⚠️ (NumPy only via extensions) |
+| **Hat basis functions & interpolation** on simplices | ✅ (2D, 3D) | ❌ | ❌ | ✅ | ✅ | ❌ |
+| **Algebraic simplification engine** | ✅ (symbolic, up to 1000×) | ✅ (closed) | ✅ | ❌ | ❌ | ✅ (SymPy) |
+| **Source Available** | ✅ (PolyForm) | ❌ (closed kernel) | ✅ (GPL) | ✅ (GPL/LGPL) | ✅ (LGPL) | ✅ (BSD) |
+
+### What we do that nobody else does
+
+1. **Exact constructive analysis built on refinement processes**  
+   We treat the continuum as the limit of a discretization process, not a pre‑existing set. Algebraic identities (d²=0, Green’s identities) hold *exactly* on every finite grid, thanks to rational arithmetic. This eliminates floating‑point noise as an error class.
+
+2. **Discrete Exterior Calculus with arbitrary metric, fully integrated**  
+   Our DEC operators (exterior derivative, Hodge star, codifferential, Laplacian, wedge product) work with any user‑supplied metric. Switch from Euclidean to p‑adic or matrix metric, and the operators remain valid – something no other DEC library provides.
+
+3. **Parametric regulative idea**  
+   Addresses, metric, betweenness, and refinement strategies are template parameters. The same path, continuity check, and Riemann sum code works for classical ℝⁿ, p‑adic numbers, matrices, binary trees – without modification. This is a completely novel architectural abstraction.
+
+4. **Lazy rational engine where GC is part of the computational model**  
+   Our move‑only mutable expression trees accumulate lazily; when the global pool fills, a garbage collector forces evaluation of all living roots into constants. GC is not a cleanup afterthought – it is the moment deferred computation is realized, achieving 2–6× speedups over eager evaluation.
+
+5. **Adaptive refinement driven by a priority queue**  
+   We insert new points only where the function deviates from linearity. For localized features (kinks, narrow peaks) this yields 600–1000× speedups over uniform grids. The logic is generic and decoupled from the grid type.
+
+6. **Transcendental functions with absolute accuracy and caching**  
+   All elementary functions guarantee |f(x) – result| < ε, with a hybrid float/series path and caching of constants per epsilon. This combination of speed, precision, and correctness is unmatched in open‑source rational libraries.
+
+7. **Test suite as executable specification**  
+   Our >400 tests verify fundamental mathematical invariants. They are not mere unit tests – they are the operational proof that the library’s algebraic claims hold exactly. The test code volume is on par with the library headers.
+
+### Our aspiration: the open alternative to Mathematica’s kernel
+
+Systems like Mathematica integrate symbolic manipulation, numerics, geometry, and visualization into a seamless experience – but their core is **closed, proprietary, and hidden**.  
+**Δ‑analysis aims to provide a comparable integrated mathematical computing platform, built from the ground up on exact, constructive principles, with a fully open, inspectable, and embeddable C++20 core.**  
+We are not there yet – v0.2 already delivers a unique combination of exact DEC, adaptive refinement, lazy symbolic simplification, and parametric geometry that no other open‑source library offers. The roadmap to v0.3 brings symbolic differentiation, full differential geometry on forms, and PDE solvers, pushing us further toward that vision.
+
+The difference? **You can see every line of code, understand every mathematical choice, and embed the exact same machinery into your own applications (under the PolyForm Small Business license).**
+
+### In summary
+
+Δ‑analysis is not just another numerics library – it is a **framework for exact constructive mathematical modelling**. It is the first open‑source tool to unify exact rational arithmetic, discrete exterior calculus, adaptive refinement, and a symbolic simplification engine under a single, parametric architecture, whose unique theoretical backbone is algorithm- and discrete-native, where finite meshes are **first-class citizens of the source approach to mathematial analysis itself**.
+
+**There is no comparable open‑source project.**
 
 ## 🚀 Quick Example
 
@@ -57,22 +153,9 @@ int main() {
 }
 ```
 
-This clusters points near the corner without any external heuristics – adaptivity is built into the Δ‑path.
+This code clusters points near the corner without any external heuristics – adaptivity is built into the Δ‑path.
 
 ---
-
-## ⚙️ The Lazy Rational Engine
-
-The library’s numerics are powered by an advanced lazy evaluation system:
-
-- **Move‑only mutable trees** – `a + b` mutates `a` in place, O(1) per term.
-- **Global hash‑consed pool** – structurally identical sub‑expressions are shared.
-- **Automatic garbage collection** – when the pool fills up, all live clean roots are evaluated to constants and the pool is rebuilt. GC is **part of the computational model** – it’s the moment deferred evaluation is forced.
-- **Pyramidal compact reduction (PCR)** – sums are reduced in batches of 32 to avoid intermediate fraction swell.
-- **Algebraic simplification** – detects `Exp(Log(x)) → x`, folds `A+A → 2*A`, distributive `a*b + a*c → a*(b+c)`, up to **1000× speedup**.
-- **One step away from symbolic differentiation** – the same expression tree can be differentiated automatically (planned for v0.3).
-
-Learn more in [docs/optimal_coding_guideline.md](docs/optimal_coding_guideline.md) and [docs/architecture.md](docs/architecture.md).
 
 ---
 
@@ -168,8 +251,25 @@ Development will preserve the strict separation of layers; no breaking changes a
 
 ## 📄 License
 
-**PolyForm Small Business License 1.0.0**.  
-For uses beyond this license, please contact: timohaishimcev@gmail.com
+**PolyForm Small Business License 1.0.0**
+
+| Your case | Allowed? |
+|-----------|----------|
+| Non-commercial: personal learning, research, hobby projects, etc. | ✅ Yes, free |
+| Student / academic projects (non-commercial) | ✅ Yes, free |
+| Commercial startup with revenue < $1M/year | ✅ Yes, free |
+| Commercial business with revenue ≥ $1M/year | ❌ No, requires commercial license |
+| Proprietary closed-source software (no source distribution) | ❌ No, requires commercial license |
+
+> **For use outside the PolyForm Small Business License**  
+> (e.g., large enterprise, proprietary integration, OEM licensing)  
+> **contact:** `timohaishimcev@gmail.com`  
+> Usually reply within 1–2 business days.
+
+### Why this license?
+
+This library is the result of an enormous research and implementation effort (920‑page source monograph, ~40k lines of code, hundreds of tests).  
+The PolyForm Small Business License allows **free use of Δ‑analysis in education, research, and small commercial projects**, while requiring fair compensation when a large business derives substantial value from it.
 
 ---
 
