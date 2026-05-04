@@ -221,9 +221,9 @@ All tests pass, and they are the ultimate guarantee of correctness.
 
 ---
 
-## 🌌 Philosophy & Scientific Background
+# 🌌 Philosophy & Scientific Background
 
-Δ‑analysis rebuilds analysis from a single premise: *between any two addresses a third can be inserted*. Iterative refinement generates a sequence of finite grids that converge to a continuum – but the continuum is **never postulated**; it remains a regulative idea.
+Δ‑analysis theory rebuilds mathematical analysis from a single premise: *between any two addresses a third can be inserted*. Iterative refinement generates a sequence of finite grids that converge to a continuum – but the continuum is **never postulated**; it remains a regulative idea.
 
 Originally developed in a 920‑page research monograph ([Zenodo](https://doi.org/10.5281/zenodo.18761044)), the theory:
 
@@ -233,6 +233,40 @@ Originally developed in a 920‑page research monograph ([Zenodo](https://doi.or
 - Argues that the Navier–Stokes Millennium Problem is physically meaningless at finite energy – and gives an explicit constructive solution at any finite scale.
 
 This library is the computational companion to that work. It realises the constructive core of the theory in C++20, letting you experiment with the concepts directly.
+
+## Why Rational Numbers Are NOT a Niche Choice
+
+Every other numerical library uses floating‑point arithmetic. It’s fast, it’s familiar, it’s “good enough for most cases.”  
+
+**But in double precision, you cannot even guarantee `0.1 + 0.2 == 0.3`.**  
+We consider that not just a minor nuisance, but a **ridiculous** foundation for any serious mathematical work. When a simulation violates a conservation law by 1e‑16 and you shrug and say “floating‑point error”, you’ve stopped doing mathematics and started doing heuristics. We refuse to accept that.
+
+The immediate objection is always performance: “Rationals are too slow; this library is a niche toy.”
+
+**We disagree, and here is why.**
+
+1. **Raw rational arithmetic will never beat double in a fist‑fight.**  
+   But we don’t fight that fight. We change the rules of engagement entirely.
+
+2. **The lazy engine with pyramidal compact reduction** sums 500 000 random terms **2.3x faster** than eager Boost rationals – *while using the same Boost backend underneath*.  
+   The speedup comes from knowing how fractions grow, and preventing intermediate swell through batched, hierarchical reduction. We don’t optimise the low-level arithmetic; we optimise the *algorithmic structure* of how the arithmetic is conducted, to do it the smart way.
+
+3. **And the benefit scales with problem size.**  
+   For harmonic‑series‑like workloads (the worst case for rational numbers), our advantage grows to **5.9 ×** on 50 000 terms.  
+   The more operands you have, the more our smart summation outruns the naive one. Meanwhile, double‑based code would already be drowning in rounding noise from the start, while we march on with exact results.
+
+4. **Now add adaptive refinement on top of that lazy engine.**  
+   A uniform double‑precision grid can spend 5 seconds resolving a narrow peak to ε=1e‑4.  
+   Our adaptive path finishes the same job in **8 milliseconds**, and the result is **exact**.  
+   That’s not a niche trade‑off. That’s a qualitative leap in efficiency *and* correctness.
+
+So no, Δ‑analysis is not a slow, academic curiosity.  
+It’s a deliberate bet that **algorithmic intelligence beats brute‑force arithmetic**, and that exactness is not the enemy of performance – it’s the foundation on which genuinely robust numerical methods can be built.
+
+**Stop optimising your multiplication. Start optimising your asymptotics.**  
+That’s what we do. And the outcome is a library that competes with floating‑point frameworks on speed, while delivering results that are mathematically impeccable.
+
+*Because speed does not matter if the result is weather on Mars (unless you explicitly compute weather on Mars)*
 
 ---
 
