@@ -10,8 +10,12 @@
       "cacheVariables": {
         "CMAKE_C_COMPILER": "cl.exe",
         "CMAKE_CXX_COMPILER": "cl.exe",
+        "CMAKE_MSVC_SHOW_INCLUDES": "OFF",
+        "CMAKE_DEPENDS_USE_COMPILER": "OFF",
+        "CMAKE_NINJA_FORCE_RESPONSE_FILE": "ON",
         "CMAKE_TOOLCHAIN_FILE": "$env{VCPKG_ROOT}/scripts/buildsystems/vcpkg.cmake",
-        "VCPKG_TARGET_TRIPLET": "x64-windows"
+        "VCPKG_TARGET_TRIPLET": "x64-windows",
+        "CMAKE_CXX_FLAGS": "/DWIN32 /D_WINDOWS /W3 /GR /EHsc /MP"
       },
       "condition": {
         "type": "equals",
@@ -27,18 +31,30 @@
         "value": "x64",
         "strategy": "external"
       },
-      "cacheVariables": { "CMAKE_BUILD_TYPE": "Debug" }
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Debug"
+      }
     },
     {
       "name": "x64-release",
       "displayName": "x64 Release",
-      "inherits": "x64-debug",
-      "cacheVariables": { "CMAKE_BUILD_TYPE": "Release" }
+      "inherits": "windows-base",
+      "architecture": {
+        "value": "x64",
+        "strategy": "external"
+      },
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Release",
+        "CMAKE_CXX_FLAGS_RELEASE": "/O2 /Oi /Ot /Gy /DNDEBUG /GL /Gw /arch:AVX2",
+        "CMAKE_EXE_LINKER_FLAGS_RELEASE": "/OPT:REF /OPT:ICF /LTCG"
+      }
     },
     {
       "name": "linux-base",
       "hidden": true,
-      "inherits": "windows-base",
+      "generator": "Ninja",
+      "binaryDir": "${sourceDir}/out/build/${presetName}",
+      "installDir": "${sourceDir}/out/install/${presetName}",
       "cacheVariables": {
         "CMAKE_TOOLCHAIN_FILE": "$env{VCPKG_ROOT}/scripts/buildsystems/vcpkg.cmake",
         "VCPKG_TARGET_TRIPLET": "x64-linux"
@@ -47,10 +63,6 @@
         "type": "equals",
         "lhs": "${hostSystemName}",
         "rhs": "Linux"
-      },
-      "architecture": {
-        "value": "x64",
-        "strategy": "external"
       }
     },
     {
@@ -63,37 +75,11 @@
       "name": "x64-release-linux",
       "displayName": "x64 Release (Linux)",
       "inherits": "linux-base",
-      "cacheVariables": { "CMAKE_BUILD_TYPE": "Release" }
-    },
-    {
-      "name": "macos-base",
-      "hidden": true,
-      "inherits": "windows-base",
       "cacheVariables": {
-        "CMAKE_TOOLCHAIN_FILE": "$env{VCPKG_ROOT}/scripts/buildsystems/vcpkg.cmake",
-        "VCPKG_TARGET_TRIPLET": "x64-osx"
-      },
-      "condition": {
-        "type": "equals",
-        "lhs": "${hostSystemName}",
-        "rhs": "Darwin"
-      },
-      "architecture": {
-        "value": "x64",
-        "strategy": "external"
+        "CMAKE_BUILD_TYPE": "Release",
+        "CMAKE_CXX_FLAGS_RELEASE": "-O3 -DNDEBUG -flto",
+        "CMAKE_EXE_LINKER_FLAGS_RELEASE": "-flto"
       }
-    },
-    {
-      "name": "x64-debug-macos",
-      "displayName": "x64 Debug (macOS)",
-      "inherits": "macos-base",
-      "cacheVariables": { "CMAKE_BUILD_TYPE": "Debug" }
-    },
-    {
-      "name": "x64-release-macos",
-      "displayName": "x64 Release (macOS)",
-      "inherits": "macos-base",
-      "cacheVariables": { "CMAKE_BUILD_TYPE": "Release" }
     }
   ]
 }

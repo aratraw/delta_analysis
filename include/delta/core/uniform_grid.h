@@ -1,3 +1,6 @@
+// (c) 2026 Timofey Ishimtsev.
+// Licensed under PolyForm Small Business License 1.0.0
+
 // include/delta/core/uniform_grid.h
 #pragma once
 
@@ -22,7 +25,7 @@ namespace delta {
      *         Defaults to std::less<T>.
      */
     template<typename T, typename Compare = std::less<T>>
-        requires LinearAddress<T>
+        requires LinearAddress<T, T>
     class UniformGrid {
     public:
         using value_type = T;
@@ -86,6 +89,16 @@ namespace delta {
 
         /// Returns the comparator used by the grid.
         const Compare& comparator() const noexcept { return comp_; }
+
+        /// Generates a flat vector of all addresses (sequential).
+        std::vector<value_type> collect_points() const {
+            std::vector<value_type> points;
+            points.reserve(size());
+            for (const auto& addr : *this) {
+                points.push_back(addr);
+            }
+            return points;
+        }
 
         // -------------------------------------------------------------------------
         // Refinement is not provided directly – use the free function refine_grid

@@ -1,3 +1,6 @@
+// (c) 2026 Timofey Ishimtsev.
+// Licensed under PolyForm Small Business License 1.0.0
+
 #include <gtest/gtest.h>
 #include "../test_fixtures.h"
 
@@ -90,7 +93,7 @@ namespace delta::testing {
         Addr left = "4478508612376765966049"_r / "4521910375044022450050"_r;
         Addr right = 1_r;
         // max_oscillation ≈ 0.94148, df ≈ 0.1883
-        Dist max_osc = "941480149401"_r / "1000000000000"_r;
+        Dist max_osc = 941480149401_r / 1000000000000_r;
         Dist df = max_osc * 2_r / 10_r;
         Val f_left = 0_r;
         Val f_right = df;
@@ -110,8 +113,8 @@ namespace delta::testing {
             // Generate random left and right in [0,1] with left < right
             double a = static_cast<double>(rand()) / RAND_MAX;
             double b = a + static_cast<double>(rand()) / RAND_MAX * (1.0 - a);
-            Addr left = Rational(static_cast<int64_t>(a * 10000), 10000);
-            Addr right = Rational(static_cast<int64_t>(b * 10000), 10000);
+            Addr left = Rational(static_cast<int>(a * 10000), 10000);
+            Addr right = Rational(static_cast<int>(b * 10000), 10000);
             if (left >= right) std::swap(left, right);
 
             Dist max_osc = Rational(rand() % 100, 100);

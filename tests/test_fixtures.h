@@ -1,9 +1,13 @@
-// tests/basic/test_fixtures.h
+// (c) 2026 Timofey Ishimtsev.
+// Licensed under PolyForm Small Business License 1.0.0
+
+// tests/test_fixtures.h
 #pragma once
 
 #include <gtest/gtest.h>
 #include <vector>
 #include <set>
+#include <random>
 #include "delta/core/rational.h"
 #include "delta/core/regulative_idea.h"
 #include "delta/core/value_metric.h"
@@ -30,7 +34,6 @@ namespace delta::testing {
     using AddrMetric = EuclideanMetric;
     using ValMetric = EuclideanValueMetric;
     using Compare = std::less<Addr>;
-    using delta::operator""_r;
 
     /**
      * @class DeltaTest
@@ -43,8 +46,30 @@ namespace delta::testing {
      */
     class DeltaTest : public ::testing::Test {
     protected:
-        void SetUp() override {}
-        void TearDown() override {}
+        // -------------------------------------------------------------------------
+        // Precision management (inherit from DeltaTest, but we add convenience)
+        // -------------------------------------------------------------------------
+        void SetUp() override {
+            old_precision_ = default_eps();
+        }
+
+        void TearDown() override {
+            set_default_eps(old_precision_);
+        }
+
+        static void set_precision(const Rational& eps) {
+            set_default_eps(eps);
+        }
+        //if something breaks miserably - blame these usings.
+        using Addr = testing::Addr;
+        using Val = testing::Val;
+        using Dist = testing::Dist;
+        using Between = testing::Between;
+        using AddrMetric = testing::AddrMetric;
+        using ValMetric = testing::ValMetric;
+        using Compare = testing::Compare;
+
+
 
         /**
          * @brief Checks that a grid is sorted according to its comparator.
@@ -121,6 +146,9 @@ namespace delta::testing {
                 left, right, level, f_left, f_right, max_osc,
                 Between{}, AddrMetric{}, ValMetric{});
         }
+
+    private:
+        Rational old_precision_= default_eps();;
     };
 
     // -------------------------------------------------------------------------
@@ -209,5 +237,70 @@ namespace delta::testing {
     // -------------------------------------------------------------------------
 #define EXPECT_RATIONAL_NEAR(val, expected, eps) \
         EXPECT_PRED3((::delta::testing::DeltaTest::near), val, expected, eps)
+
+    // -------------------------------------------------------------------------
+    // Additional fixtures for core and calculus tests
+    // -------------------------------------------------------------------------
+
+    /**
+     * @brief Fixture providing instances of various metrics.
+     */
+    class MetricFixture : public DeltaTest {
+    protected:
+        EuclideanMetric euclidean;
+        DiscreteMetric discrete;
+        StringUltrametric stringUltra;
+        PAdicMetric<2> pAdic2;
+        PAdicMetric<3> pAdic3;
+    };
+
+    /**
+     * @brief Generator for fields on a grid.
+     * @tparam Grid Type of grid (must provide value_type as point type).
+     * @tparam Value Type of field values (e.g., double, Eigen::VectorXd).
+     */
+    template<typename Grid, typename Value>
+    class FieldGenerator {
+    public:
+        using Point = typename Grid::value_type;
+        using Scalar = typename Point::Scalar;
+
+        /// Constant field
+        static std::function<Value(const Point&)> constant(Value c) {
+            return [c](const Point&) { return c; };
+        }
+
+        /// Linear field: value = coeff·point (for scalar or vector values)
+        static std::function<Value(const Point&)> linear(const Eigen::Matrix<Scalar, Point::RowsAtCompileTime, 1>& coeff) {
+            return [coeff](const Point& p) -> Value {
+                return coeff.dot(p.template cast<Scalar>());
+                };
+        }
+
+        /// Quadratic field: value = sum coeff_i * (p_i)^2
+        static std::function<Value(const Point&)> quadratic(const Eigen::Matrix<Scalar, Point::RowsAtCompileTime, 1>& coeff) {
+            return [coeff](const Point& p) -> Value {
+                return (p.array() * p.array()).matrix().dot(coeff);
+                };
+        }
+
+        /// Sine field: sin(kx·x) * sin(ky·y) * sin(kz·z) (works for 1D,2D,3D)
+        static std::function<Value(const Point&)> sine(double kx, double ky = 0, double kz = 0) {
+            return [kx, ky, kz](const Point& p) -> Value {
+                double v = 1.0;
+                if constexpr (Point::RowsAtCompileTime >= 1) v *= std::sin(kx * p.x());
+                if constexpr (Point::RowsAtCompileTime >= 2) v *= std::sin(ky * p.y());
+                if constexpr (Point::RowsAtCompileTime >= 3) v *= std::sin(kz * p.z());
+                return v;
+                };
+        }
+
+        /// Random field (uniform in [-scale, scale])
+        static std::function<Value(const Point&)> random(Scalar scale = 1.0) {
+            static std::mt19937 rng(42);
+            static std::uniform_real_distribution<Scalar> dist(-scale, scale);
+            return [scale](const Point&) { return dist(rng); };
+        }
+    };
 
 } // namespace delta::testing

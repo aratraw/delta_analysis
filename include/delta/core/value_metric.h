@@ -1,3 +1,6 @@
+// (c) 2026 Timofey Ishimtsev.
+// Licensed under PolyForm Small Business License 1.0.0
+
 // include/delta/core/value_metric.h
 #pragma once
 
@@ -29,49 +32,37 @@ namespace delta {
      * @brief A metric that computes the Euclidean (absolute) distance between two values.
      *
      * This metric works for:
-     * - Arithmetic types (int, double, etc.) via std::abs.
-     * - Rational (boost::multiprecision number) via boost::multiprecision::abs.
+     * - Arithmetic types (int, double, etc.) via abs.
+     * - Rational or custom Rational via delta::abs()
      * - Eigen::MatrixXd via the Frobenius norm.
      *
      * The returned type is the same as the result of the absolute operation for the given type.
      */
     struct EuclideanValueMetric {
-        /**
-         * @brief General overload for arithmetic types.
-         * @tparam T An arithmetic type (int, double, etc.).
-         * @param a First value.
-         * @param b Second value.
-         * @return |a - b| using std::abs.
-         */
         template<typename T>
-        auto operator()(const T& a, const T& b) const -> decltype(std::abs(a - b)) {
+        auto operator()(const T& a, const T& b) const -> decltype(abs(a - b)) {
+            return abs(a - b);
+        }
+
+        auto operator()(const Rational& a, const Rational& b) const {
+            using delta::abs;
+            return abs(a - b);// abs returns our custom Rational 
+        }
+
+        double operator()(const Eigen::MatrixXd& a, const Eigen::MatrixXd& b) const {
+            return (a - b).norm();
+        }
+
+        template<typename T>
+        auto operator()(const std::complex<T>& a, const std::complex<T>& b) const {
             using std::abs;
             return abs(a - b);
         }
 
-        /**
-         * @brief Specialisation for Rational (boost::multiprecision).
-         * @param a First rational.
-         * @param b Second rational.
-         * @return |a - b| using boost::multiprecision::abs.
-         */
-        auto operator()(const Rational& a, const Rational& b) const {
-            using boost::multiprecision::abs;
-            return abs(a - b);
-        }
-
-        /**
-         * @brief Specialisation for Eigen::MatrixXd.
-         * @param a First matrix.
-         * @param b Second matrix.
-         * @return Frobenius norm of (a - b).
-         */
-        double operator()(const Eigen::MatrixXd& a, const Eigen::MatrixXd& b) const {
-            return (a - b).norm(); // Frobenius norm
+        // Для double – оставляем double (для полноты)
+        double operator()(double a, double b) const {
+            return std::abs(a - b);
         }
     };
-
-    // Verify that EuclideanValueMetric satisfies the ValueMetric concept for double.
-    static_assert(ValueMetric<EuclideanValueMetric, double, double>);
 
 } // namespace delta

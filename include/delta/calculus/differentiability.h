@@ -1,3 +1,6 @@
+// (c) 2026 Timofey Ishimtsev.
+// Licensed under PolyForm Small Business License 1.0.0
+
 // include/delta/calculus/differentiability.h
 #pragma once
 
@@ -7,9 +10,10 @@
 #include <stdexcept>
 #include "modulus.h"
 #include "delta/core/regulative_idea.h"
+#include "delta/core/rational.h"
 
 namespace delta::calculus {
-
+    using delta::abs;
     /**
      * @brief Find the index of an address in a grid.
      *
@@ -20,6 +24,7 @@ namespace delta::calculus {
      * @return Index of the address if found, otherwise -1.
      */
     template<typename Grid, typename Addr>
+        requires SimpleGrid<Grid>
     std::ptrdiff_t find_address_index(const Grid& grid, const Addr& addr) {
         for (std::size_t i = 0; i < grid.size(); ++i) {
             if (grid[i] == addr) return static_cast<std::ptrdiff_t>(i);
@@ -42,7 +47,7 @@ namespace delta::calculus {
      * @throws std::invalid_argument if addr is not found or is an endpoint.
      */
     template<typename Grid, typename Func>
-        requires SubtractableAddress<typename Grid::value_type>
+        requires SimpleGrid<Grid>&& SubtractableAddress<typename Grid::value_type>
     auto left_difference_quotient(const Grid& grid, const typename Grid::value_type& addr,
         Func&& func) {
         std::ptrdiff_t idx = find_address_index(grid, addr);
@@ -71,7 +76,7 @@ namespace delta::calculus {
      * @throws std::invalid_argument if addr is not found or is an endpoint.
      */
     template<typename Grid, typename Func>
-        requires SubtractableAddress<typename Grid::value_type>
+        requires SimpleGrid<Grid>&& SubtractableAddress<typename Grid::value_type>
     auto right_difference_quotient(const Grid& grid, const typename Grid::value_type& addr,
         Func&& func) {
         std::ptrdiff_t idx = find_address_index(grid, addr);
@@ -105,14 +110,14 @@ namespace delta::calculus {
      * @param D          Expected derivative value.
      * @param modulus    Modulus of convergence (called with the maximum gap of each grid).
      * @param first_level The first level at which addr appears (inclusive).
-     * @param tolerance  Additional tolerance for floating‑point comparisons (default 1e-12).
+     * @param tolerance  Additional tolerance for comparisons (default 1e-12).
      * @return true if the differentiability condition holds for all levels n >= first_level.
      */
     template<typename Grid, typename Func, typename Distance, typename Addr, typename Mod>
         requires SubtractableAddress<Addr>
     bool check_differentiability(const std::vector<Grid>& grids, const Addr& addr,
         Func&& func, const Distance& D, const Mod& modulus,
-        std::size_t first_level, double tolerance = 1e-12) {
+        std::size_t first_level, const Rational& tolerance = Rational(1, 1000000000000)) {
         for (std::size_t n = first_level; n < grids.size(); ++n) {
             const auto& grid = grids[n];
             std::ptrdiff_t idx = find_address_index(grid, addr);
@@ -124,13 +129,9 @@ namespace delta::calculus {
 
             Distance delta_n = max_gap(grid);
             Distance bound = modulus(delta_n);   // modulus must return a Distance
-
-            // Convert to double for tolerance comparison
-            double left_error = std::abs((left_dq - D).template convert_to<double>());
-            double right_error = std::abs((right_dq - D).template convert_to<double>());
-            double bound_d = bound.template convert_to<double>();
-
-            if (left_error > bound_d + tolerance || right_error > bound_d + tolerance) {
+            // Теперь сравниваем рациональные числа напрямую
+            if (delta::abs(left_dq - D) > bound + tolerance ||
+                delta::abs(right_dq - D) > bound + tolerance) {
                 return false;
             }
         }

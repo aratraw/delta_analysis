@@ -1,3 +1,7 @@
+// (c) 2026 Timofey Ishimtsev.
+// Licensed under PolyForm Small Business License 1.0.0
+
+//tests/basic/test_operational_function.cpp
 #include <gtest/gtest.h>
 #include "../test_fixtures.h"
 #include "delta/core/operational_function.h"

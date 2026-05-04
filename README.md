@@ -1,299 +1,185 @@
 # Δ‑analysis Library
 
-[![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.18761044.svg)](https://doi.org/10.5281/zenodo.18761044)
+[![DOI (paper)](https://zenodo.org/badge/DOI/10.5281/zenodo.18761044.svg)](https://doi.org/10.5281/zenodo.18761044)
+[![DOI (software)](https://zenodo.org/badge/DOI/10.5281/zenodo.18934082.svg)](https://doi.org/10.5281/zenodo.18934082)
 [![CI](https://img.shields.io/badge/build-passing-brightgreen)]()
-[![Coverage](https://img.shields.io/badge/coverage-95%25-brightgreen)]()
-[![License](https://img.shields.io/badge/license-NC--SA%204.0%20%26%20Commercial-blue)]()
+[![Coverage](https://img.shields.io/badge/coverage->95%-brightgreen)]()
+[![License](https://img.shields.io/badge/license-PolyForm%20Small%20Business%201.0.0-blue)]()
 
-A modern C++20 library that implements **Δ‑analysis** – a constructive reformulation of mathematical analysis where the continuum emerges as the invariant of an iterative refinement process, not as a primitive given. The library provides a unified framework to work with functions on arbitrary discrete address spaces, bridging pure mathematics, computational physics, and numerical methods.
+A C++20 library for **exact, constructive mathematical analysis** where the continuum is the *limit of a refinement process*, not a pre‑existing set of points. It provides grids, adaptive paths, discrete exterior calculus, and an advanced lazy rational engine – all parametric over the address space (rationals, matrices, binary strings, p‑adic numbers, …).
 
-This code is the computational companion to our full 920-pages foundational research published at [Zenodo (click the link)](https://doi.org/10.5281/zenodo.18761044). Fascinating foundational stuff with a whiff of British humor in between rigorous theorems.
-
----
-
-## 🔥 Killer Features: What the Library Already Does
-
-### 1. Integrate the Dirichlet Function Without Measure Theory
-Classically, the Dirichlet function (1 on rationals, 0 on irrationals) is not Riemann integrable; integrating it requires measure theory and yields different values depending on the integral.  
-In Δ‑analysis, by **changing the regulative idea** to a tree‑based one (binary strings), the same instruction becomes locally constant. The library computes its integral as a simple sum over sibling pairs, converging to `1/2` – **no measure theory, no sigma‑algebras, no uncountable sets**.  
-🔍 *Test*: `tests/regulative_ideas/test_tree.cpp` (`DirichletIntegral`).
-
-### 2. Exact Rational Arithmetic with Configurable Precision
-All computations use `Rational` from Boost.Multiprecision, which can be either **dynamic** (arbitrary precision) or **static** (fixed bit width, stack‑allocated) – controlled by a single CMake flag. This means you can trade off speed vs. precision, and **no floating‑point error** creeps into the core algorithms.  
-🔍 *See*: `include/delta/core/rational.h`.
-
-### 3. Construct Real Numbers as Invariants of Refinement
-The library implements the construction of ℝ from fundamental Δ‑sequences (Block 6 of the theory). For example, it represents √2 as the sequence of left endpoints of intervals containing √2 in a dyadic refinement. Two different representations of the same number are recognised as equivalent, and the resulting equivalence classes form an ordered field isomorphic to the classical ℝ.  
-🔍 *Test*: `tests/calculus/test_sqrt2_construction.cpp`.
-
-### 4. Adaptive Refinement – Built into the Foundation
-`AdaptiveDeltaPath` inserts new points where the function deviates most from linearity, clustering points in regions of rapid change. In classical numerical analysis this is just an algorithm; in Δ‑analysis it is a **first‑class citizen** – a valid Δ‑path that respects the betweenness relation and inherits all convergence theorems. The library lets you define your own adaptive strategies and immediately obtain rigorous error bounds.  
-🔍 *Test*: `tests/basic/test_adaptive_path.cpp`.
-
-### 5. Non‑Commutativity of Strategies – Process Matters
-Different orders of applying the same two λ‑strategies (e.g., λ=1/3 and λ=2/3) produce **different intermediate grids**, even though both converge to the same continuum limit. This demonstrates that Δ‑analysis captures the process, not just the outcome – a feature absent in classical analysis.  
-🔍 *Test*: `tests/basic/test_non_commutativity.cpp`.
-
-### 6. Tensor Fields (Matrix‑Valued Functions)
-Addresses can be `Eigen::MatrixXd`. The library builds uniform grids of matrices, evaluates functions like `f(X)=X` or `f(X)=X²`, and computes Riemann sums. For the identity function on `[0·I, I]`, the left Riemann sum converges to `0.5·I` – an exact matrix analogue of the scalar integral.  
-🔍 *Test*: `tests/regulative_ideas/test_matrix.cpp` (`IdentityIntegral`).
-
-### 7. Quantitative Continuity and Differentiability
-Using a modulus of continuity (e.g., `C·δ^α`), the library verifies whether a function satisfies that modulus on a given grid. For `sqrt(x)` on `[0,1]` it confirms Hölder continuity with exponent `1/2`, while a linear modulus fails – exactly as expected. Similarly, it checks differentiability by comparing one‑sided difference quotients against a modulus of convergence.  
-🔍 *Tests*: `tests/calculus/test_modulus_continuity.cpp`, `test_differentiability.cpp`.
-
-Every feature listed above is backed by tests (as well as theorems in source research) and demonstrates something that classical analysis either cannot do, *does not even know that it should do*, or requires heavy additional machinery. 
-
-All these features are implemented, tested, and ready for experimentation. Most notably, these 'killer features' are not even the endpoint but the by-product. These are only the beginning where we've successfully implemented roughly 100 pages of the 900-pages source.
-
-**In short, delta-analysis is a parametric factory for producing analysis on any kind of space: rational, matrices, strings, p-adic, etc. To build analysis on an all-new kind of space, you only need to implement the regulative idea and some supporting classes**
+> **Version 0.2 is stable and feature‑rich.** The next release (0.3) will add symbolic differentiation, differential geometry on forms, and solvers. See the [future milestones](#-future) below.
 
 ---
 
-## 🌌 Philosophy
+## 🔥 What the Library Already Does
 
-We rebuild mathematical analysis from a single elementary premise: *between any two addresses a third can be inserted*.  
+- **Exact rational arithmetic** with arbitrary precision and zero floating‑point error. Algebraic identities (e.g., d² = 0) hold *exactly*.
+- **Adaptive refinement** that concentrates points where a function deviates from linearity. For localised features it can be **1000× faster** than uniform grids.
+- **Discrete Exterior Calculus (DEC)** – exterior derivative, Hodge star, codifferential, Laplacian, wedge product – all with exact invariants.
+- **Lazy rational engine** – a mutable, move‑only expression tree with global hash‑consing, automatic garbage collection, and algebraic simplification. Summation of 500 000 terms runs **2–6× faster** than eager Boost rationals.
+- **Parametric analysis** – change the address space or metric, and the same code works for p‑adic analysis, matrix‑valued functions, or ultra‑metric trees.
+- **Hundreds of tests** that double as executable documentation and usage examples.
 
-From this seed, iteration generates a sequence of nested finite grids that converge to a continuum – but the continuum is never assumed; it remains a regulative idea. The formalism is fully parametric: you choose the address space (rationals, matrices, binary strings, p‑adic numbers…), the betweenness relation, the metric, and the refinement strategy. Out of these choices emerges an entire family of possible analyses – real, p‑adic, ultrametric, tree‑based, or tailored to any combinatorial or geometric structure.
-
-**Why rebuild analysis from scratch?**  
-Classical analysis postulates the continuum as a ready‑made set of points. This leads to foundational puzzles: Zeno’s paradox, Banach–Tarski, the need for infinite energy to resolve arbitrarily small scales. Classical physical derivations rest on a promissory note of infinite divisibility of space, time and coordinate grids for zero cost - an absurd notion, if given a second thought. Δ‑analysis removes actual infinity from the operational level. Every object – grids, addresses, function values – is finite and constructible. The infinite appears only as a limit, a horizon, an invariant of all reasonable refinement processes.
-
-Further, our approach yields concrete applications, as outlined in the following theses (non-exhaustively).
-
-**Five theses from the original research:**
-
-1. **Discrete decomposition of Einstein equations** – from a simple insertion rule and the causality condition `‖Δ𝐮‖ ≤ cτₙ`, Lorentzian signature and Regge action emerge naturally. In the continuum limit, we recover Einstein equations with an extra term encoding topological complexity (dark matter / dark energy).
-2. **Reinvention of analysis without actual infinity** – all theorems (continuity, differentiability, integrability) are reproved using only finite grids and constructive estimates.
-3. **Discrete Dirichlet principle** – no measure theory, no “almost everywhere”. For any tolerance ε, we stop at a finite level and obtain an exact discrete solution.
-4. **Navier–Stokes: the Millennium Problem is physically meaningless** – with finite energy, there is an absolute minimum resolvable scale. For any finite ε, we give an explicit solution; the infinite limit is a regulative horizon.
-5. **Dark matter and dark energy explained** – they emerge from a single informational field `ℐ(x)`, the coarse‑grained density of topological complexity. No fine‑tuning, no extra dimensions.
-
-This is precisely what we set out to achieve in code in the end, and why we bother with this library at all. Right now this library implements the core machinery of Δ‑analysis, providing tools to build grids, define functions, compute integrals and derivatives, and explore adaptive strategies – all within a constructive, verifiable framework.
-
----
-
-## ✨ Code Features
-
-- **Unprecedented abstraction** – addresses can be:
-  - rational numbers (with dynamic or fixed‑precision `Rational`),
-  - dense matrices (`Eigen::MatrixXd`),
-  - binary strings (tree‑like addresses),
-  - p‑adic numbers (concept ready, with metric).
-
-More regulative ideas can be added by implementing a few simple concepts.
-
-- **Flexible grid refinement** – use any delta operator (midpoint, fixed/dynamic fraction, adaptive) plugged into static, dynamic or factory strategies.
-
-- **Adaptive refinement** – `AdaptiveDeltaPath` inserts new points where the function deviates most from linearity, concentrating points in regions of rapid change.
-
-- **Operational functions** – values can be stored and extended to refined grids; specialisations for uniform grids provide O(1) access.
-
-- **Calculus on grids** – compute Riemann sums (left, right, tagged, tree‑adapted), check continuity with arbitrary moduli, test differentiability using difference quotients and convergence moduli.
-
-- **Performance aware** – optional OpenMP acceleration for computing maximum oscillation, double buffering in `DeltaPath`, and benchmarks to track efficiency.
-
-- **Battle‑tested** – the test suite covers every public component, edge cases, and several regulative ideas; test coverage is above 95%.
-
-## 📁 Repository Structure
-
-```
-include/delta/          # all public headers
-  core/                 # core concepts and classes: Rational, grids, paths, operators, strategies, completion
-  calculus/             # calculus‑related algorithms: continuity, differentiability, Riemann sums, moduli
-
-tests/                  # unit and integration tests
-  basic/                # tests for core components (grids, paths, operators, strategies, basic calculus)
-  calculus/             # tests for calculus algorithms (continuity, differentiability, moduli, Riemann sums)
-  regulative_ideas/     # tests for non‑standard address spaces (matrices, p‑adic, tree)
-  numerical/            # numerical tests (tensor fields)
-
-benchmarks/             # Google Benchmark executables for performance measurement
-examples/               # example applications (e.g., Dirichlet problem on strings)
-```
+For a deep dive see the [documentation table](#-documentation).
 
 ---
 
 ## 🚀 Quick Example
 
 ```cpp
-#include <delta/core/adaptive_delta_path.h>
-#include <delta/core/delta_operator.h>
-#include <delta/core/rational.h>
+#include "delta/core/rational.h"
+#include "delta/core/adaptive_delta_path.h"
+#include "delta/core/delta_operator.h"
 #include <iostream>
 
 using namespace delta;
 using Addr = Rational;
-using Compare = std::less<Addr>;
 
 int main() {
-    // Function with a sharp corner at x = 0.5: f(x) = |x - 1/2|
+    // f(x) = |x - 0.5|  (a sharp kink at the centre)
     auto func = [](const Addr& x) -> Rational {
         return abs(x - Rational(1, 2));
     };
 
-    // Adaptive operator: places new points closer to regions of high variation
-    // Parameters: threshold = 0.1, epsilon = 0.05
-    AdaptiveOperator adapt_op(Rational(1, 10), Rational(1, 20));
+    AdaptiveOperator adapt_op(Rational(1,10), Rational(1,20));
     std::vector<Addr> initial = {0_r, 1_r};
 
-    // Create adaptive path with threshold 0.01 – intervals with priority ≤ 0.01 are not refined
-    auto path = AdaptiveDeltaPath<Addr, Rational, Rational,
-                                  LessBetweenness, EuclideanMetric,
-                                  EuclideanValueMetric, AdaptiveOperator, Compare>(
-        initial, func, adapt_op, Rational(1, 100)
-    );
+    auto path = AdaptiveDeltaPath<Addr,Rational,Rational,
+        LessBetweenness,EuclideanMetric,EuclideanValueMetric,
+        AdaptiveOperator>(initial, func, adapt_op, Rational(1,100));
 
-    // Perform 10 refinement steps
-    for (int i = 0; i < 10; ++i) {
-        if (!path.advance()) break;
-    }
+    while (path.advance()) {}   // refine until the queue is empty
 
-    // Output results
-    std::cout << "Number of points after adaptive refinement: " << path.size() << "\n";
-    std::cout << "Points around the corner (0.45 – 0.55):\n";
-    for (const auto& p : path.points()) {
-        if (p > Rational(45, 100) && p < Rational(55, 100))
+    for (const auto& p : path.points())
+        if (p > Rational(45,100) && p < Rational(55,100))
             std::cout << p << " ";
-    }
-    std::cout << "\n";
-
-    return 0;
 }
 ```
 
-**What happens in this example?**  
-- We define a non‑smooth function `f(x)=|x‑0.5|` on the interval `[0,1]`.  
-- The `AdaptiveOperator` places new points closer to regions where the function varies rapidly (i.e., near the corner).  
-- The path starts with just the endpoints `0` and `1`. At each step, the interval with the highest priority (deviation from linearity) is split, and the new point is inserted.  
-- After 10 steps, the grid is **non‑uniform** – many points cluster around `0.5`, while regions where the function is linear (`|x‑0.5|` is actually linear on each side) have fewer points.  
-- All computations use exact rational arithmetic – no floating‑point approximations.  
+This clusters points near the corner without any external heuristics – adaptivity is built into the Δ‑path.
 
-This example demonstrates that Δ‑analysis is not just a theoretical construct: it provides a practical, **rigorous** framework for adaptive grid generation, with the same mathematical guarantees as the underlying theory. The adaptive path is a valid Δ‑path, so all convergence theorems apply – the integral of `|x‑0.5|` computed on this grid will converge to the true value, and we even obtain explicit error bounds from the priority threshold.
+---
+
+## ⚙️ The Lazy Rational Engine
+
+The library’s numerics are powered by an advanced lazy evaluation system:
+
+- **Move‑only mutable trees** – `a + b` mutates `a` in place, O(1) per term.
+- **Global hash‑consed pool** – structurally identical sub‑expressions are shared.
+- **Automatic garbage collection** – when the pool fills up, all live clean roots are evaluated to constants and the pool is rebuilt. GC is **part of the computational model** – it’s the moment deferred evaluation is forced.
+- **Pyramidal compact reduction (PCR)** – sums are reduced in batches of 32 to avoid intermediate fraction swell.
+- **Algebraic simplification** – detects `Exp(Log(x)) → x`, folds `A+A → 2*A`, distributive `a*b + a*c → a*(b+c)`, up to **1000× speedup**.
+- **One step away from symbolic differentiation** – the same expression tree can be differentiated automatically (planned for v0.3).
+
+Learn more in [docs/optimal_coding_guideline.md](docs/optimal_coding_guideline.md) and [docs/architecture.md](docs/architecture.md).
+
+---
+
+## 📁 Documentation
+
+| Document | Description |
+|----------|-------------|
+| [**User Manual**](docs/user_manual.md) | Getting started, basic types, grids, paths, DEC, numerical operators, and `LazyRational`. |
+| [**Architecture Overview**](docs/architecture.md) | Rational backend, lazy engine, pool & GC, core & calculus layers, geometry & numerical modules, modularity principles. |
+| [**Performance Benchmarks**](docs/benchmark_results.md) | Methodology and interpretation for rational arithmetic, transcendentals, simplification, and core adaptivity. |
+| [**Optimal Coding Guidelines**](docs/optimal_coding_guideline.md) | Performance‑critical patterns, when to simplify, GC behaviour, and pool management. |
+| [**Test Coverage Report**](docs/test_coverage.md) | Detailed walk‑through of every test suite, what it validates, and non‑obvious aspects. |
+
+---
+
+## 📊 Benchmarks (overview)
+
+All benchmarks include correctness checks. Full report: [docs/benchmark_results.md](docs/benchmark_results.md).
+
+| Scenario | Delta | Reference | Speedup |
+|----------|-------|-----------|---------|
+| **Harmonic series (50 000 terms)** |  lazy 487 ms  | Boost et_off 2860 ms | **5.9×** |
+| **Random rationals (500 000 terms)** | lazy 794 ms  | Boost et_off 1847 ms | **2.33×** |
+| **sin(1.234…) at ε=1e-80** | 247 µs  | naive series 1646 µs | **6.7×** |
+| **π at ε=1e-80 (cached)** | 2 µs  | naive series 547 µs | **273×** |
+| **Adaptive vs uniform (kink, ε=1e-4)** |  adaptive 96 µs  | uniform 98 ms  | **1021×** |
+| **Adaptive vs uniform (narrow peak, ε=1e-4)** | adaptive 8.6 ms  | uniform 5.3 s  | **618×** |
+
+> **Important:** Micro‑benchmarks can be misleading (e.g., a faster `sqrt` may produce bloated rationals that kill downstream performance). Read the [Benchmarking Philosophy](docs/benchmark_results.md#1-benchmarking-philosophy-and-global-remarks) before drawing conclusions.
+
+---
 
 ## 🔧 Building
 
-### Requirements
-
-- CMake 3.15+
-- C++20 compiler (MSVC 19.29+, GCC 11+, Clang 14+)
-- [vcpkg](https://github.com/microsoft/vcpkg) (recommended for dependency management)
-- Dependencies: Boost, Eigen3, fmt, Google Test, Google Benchmark
-
-### Using CMake Presets
-
-We provide CMake presets for Windows (x64 Debug/Release), Linux (x64 Debug/Release) and macOS (x64 Debug/Release).  
-Configure and build with:
+**Requirements:** CMake ≥ 3.15, C++20 compiler, [vcpkg](https://vcpkg.io/) (recommended), Boost, Eigen3, Abseil, fmt, Google Test, Google Benchmark.
 
 ```bash
-# For Windows
-cmake --preset x64-debug
-cmake --build out/build/x64-debug
+# Configure with presets
+cmake --preset x64-release
+cmake --build out/build/x64-release
 
-# For Linux
-cmake --preset x64-debug-linux
-cmake --build out/build/x64-debug-linux
-
-# For macOS
-cmake --preset x64-debug-macos
-cmake --build out/build/x64-debug-macos
-```
-
-The presets automatically set up the vcpkg toolchain if `VCPKG_ROOT` is defined.
-
-### Manual Build
-
-```bash
-mkdir build && cd build
-cmake .. -DCMAKE_TOOLCHAIN_FILE=$VCPKG_ROOT/scripts/buildsystems/vcpkg.cmake
-cmake --build .
-```
-
----
-
-
-```bash
-# Configure the project (example with x64-debug preset)
-cmake --preset x64-debug
-
-# Build the tests and benchmarks
-cmake --build out/build/x64-debug
-
-# Run all tests
-cd out/build/x64-debug
-ctest --output-on-failure
-
-# Run only benchmarks (they are also registered as tests)
-ctest -R benchmark -C Debug
-```
-
-(For Release builds, replace `Debug` with `Release` in the preset name and `-C` flag.)
-
----
-
-## 📊 Benchmarks
-
-The `benchmarks/` folder contains several Google Benchmark executables:
-
-- `benchmark_advance` – measures the cost of one `DeltaPath::advance()` step.
-- `benchmark_operational_function` – evaluates extension of an operational function to a refined grid.
-- `benchmark_riemann_sum` – times left Riemann sum computation on grids of increasing size.
-- `benchmark_adaptive_path` – measures performance of adaptive refinement.
-
-To build and run all benchmarks:
-
-```bash
-cmake --preset x64-release          # configure
-cmake --build out/build/x64-release # build
+# Run tests
 cd out/build/x64-release
-ctest -R benchmark -C Release       # run
+ctest --output-on-failure
+cmake --build . --target benchmarks   # build all benchmarks
 ```
+---
+
+## 🧪 Tests Are the Primary Documentation
+
+We have **≈400 test cases** organised into ~45 files; the code volume of the test suite is roughly on par with the library headers.  
+Every test verifies a fundamental mathematical invariant, edge case, or cross‑component integration. They serve as **executable examples** – if you want to learn how to use a feature, go to the corresponding test file.
+
+- `tests/calculus/test_riemann_sum.cpp` – Riemann sums on dyadic and non‑uniform grids
+- `tests/geometry/discrete_forms_test.cpp` – `d∘d=0`, Hodge star, Laplacian, wedge product
+- `tests/numerical/discrete_operators_test.cpp` – finite differences, convergence tests
+- `tests/rational/lazy_rational_contract_tests.cpp` – the complete mutation contract of `LazyRational`
+- `tests/rational/transcendentals_correctness.cpp` – π, sin, cos, exp, log up to 100 digits
+
+Full coverage report: [docs/test_coverage.md](docs/test_coverage.md).
+
+All tests pass, and they are the ultimate guarantee of correctness.
 
 ---
 
-## 🧪 Testing
+## 🌌 Philosophy & Scientific Background
 
-The library is thoroughly tested. All tests are automatically discovered by CTest.  
-To build and run the full test suite:
+Δ‑analysis rebuilds analysis from a single premise: *between any two addresses a third can be inserted*. Iterative refinement generates a sequence of finite grids that converge to a continuum – but the continuum is **never postulated**; it remains a regulative idea.
 
-```bash
-cmake --preset x64-debug
-cmake --build out/build/x64-debug
-cd out/build/x64-debug
-ctest --output-on-failure
-```
+Originally developed in a 920‑page research monograph ([Zenodo](https://doi.org/10.5281/zenodo.18761044)), the theory:
 
-Tests are also integrated with Visual Studio’s Test Explorer (on Windows) for easy development.
+- Constructs ℝ without actual infinity,
+- Derives Einstein equations from a discrete insertion rule,
+- Explains dark matter/energy as topological complexity,
+- Argues that the Navier–Stokes Millennium Problem is physically meaningless at finite energy – and gives an explicit constructive solution at any finite scale.
 
-### If It Doesn't Build
-Well, life is tough - go figure. 
+This library is the computational companion to that work. It realises the constructive core of the theory in C++20, letting you experiment with the concepts directly.
+
+---
+
+## 🔮 Future (v0.3)
+
+The existing codebase is stable and already huge, but the roadmap for v0.3 includes:
+
+- **Symbolic differentiation** – automatic differentiation on `LazyRational` trees.
+- **Differential geometry on discrete forms** – full DEC with circumcentric duals, 3D wedge products, and generalised N‑forms.
+- **Solvers** – template‑based PDE solvers (Poisson, wave, elasticity) decoupled from the discretisation, using the generic Δ‑path interface.
+- Further performance optimisations and additional metrics.
+
+Development will preserve the strict separation of layers; no breaking changes are expected in the core modules
+
+---
 
 ## 📄 License
 
-This project is **dual‑licensed**:
-
-- **Non‑commercial use**: Creative Commons Attribution-NonCommercial-ShareAlike 4.0 International ([CC BY-NC-SA 4.0](https://creativecommons.org/licenses/by-nc-sa/4.0/)).  
-  You are free to share and adapt the material for non‑commercial purposes, provided you give appropriate credit and distribute any contributions under the same license.
-
-- **Commercial use**: Requires a separate explicit agreement. For commercial licensing and inquiries, please contact: timohaishimcev@gmail.com
-
----
-
-## 🧩 Contributing
-
-We welcome **issues** – bug reports, feature requests, and we welcome **discussions** concerning both the code and the underlying research from Zenodo. 
-**Pull requests** will generally **not** be accepted, because the library’s development follows a planned roadmap. Exceptions may be made for truly exceptional contributions that align with the project’s vision. If you have an idea, please open an issue first to discuss.
+**PolyForm Small Business License 1.0.0**.  
+For uses beyond this license, please contact: timohaishimcev@gmail.com
 
 ---
 
 ## 📚 Citation
 
-If you use this library in your research, please cite the accompanying theoretical work:
-
 ```bibtex
 @misc{ishimtsev_2026_18761044,
   author       = {Ishimtsev, Timofey and Echo},
-  title        = {General Delta-Theory of the Discrete Continuum: Refounding Analysis to Unify Relativity and Quantum Gravity},
+  title        = {General Delta-Theory of the Discrete Continuum:
+                  Refounding Analysis to Unify Relativity and Quantum Gravity},
   month        = feb,
   year         = 2026,
   publisher    = {Zenodo},
@@ -302,18 +188,17 @@ If you use this library in your research, please cite the accompanying theoretic
 }
 ```
 
-For now, please cite both the paper and the repository URL.
-
 ---
 
 ## 🙏 Acknowledgements
 
-- Boost.Multiprecision for the `Rational` type.
-- Eigen for linear algebra.
-- {fmt} for modern formatting.
-- Google Test and Google Benchmark for testing and benchmarking.
+- [Boost.Multiprecision](https://www.boost.org/doc/libs/release/libs/multiprecision/) – arbitrary‑precision backend.
+- [Eigen](https://eigen.tuxfamily.org/) – linear algebra and tensor operations.
+- [Abseil](https://abseil.io/) – high‑performance containers.
+- [Google Test / Benchmark](https://github.com/google) – testing and benchmarking.
+- [fmt](https://fmt.dev/) – formatting.
 
 ---
 
-**Explore the discrete foundations of mathematical analysis and physics with delta‑analysis.**  
-For questions, ideas, or commercial licensing, please open an issue or contact the authors.
+**Explore the discrete foundations of analysis and physics with Δ‑analysis.**  
+Questions, ideas, commercial licensing: open an issue or email the author.

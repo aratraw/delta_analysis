@@ -1,3 +1,6 @@
+// (c) 2026 Timofey Ishimtsev.
+// Licensed under PolyForm Small Business License 1.0.0
+
 // include/delta/core/delta_operator.h
 #pragma once
 
@@ -104,25 +107,24 @@ namespace delta {
      * The fraction is obtained from a user‑provided function λ = f(level).
      * If the computed point lies outside the interval, it falls back to the midpoint.
      *
-     * @note Requires Addr to be LinearAddress with scalar type double.
+     * @note Requires Addr to be LinearAddress
      */
     class DynamicLambdaOperator {
     public:
-        /**
-         * @param lambda_gen Function that takes a level (std::size_t) and returns a double λ.
-         */
-        explicit DynamicLambdaOperator(std::function<double(std::size_t)> lambda_gen)
+        using LambdaFunc = std::function<Rational(std::size_t)>;
+
+        explicit DynamicLambdaOperator(LambdaFunc lambda_gen)
             : lambda_gen_(std::move(lambda_gen)) {
         }
 
         template<typename Addr, typename Value, typename Distance,
             typename Betweenness, typename Metric, typename ValueMetric>
-            requires LinearAddress<Addr, double>
+            requires LinearAddress<Addr, Rational>
         Addr operator()(const Addr& left, const Addr& right,
             const IntervalInfo<Addr, Value, Distance,
             Betweenness, Metric, ValueMetric>& info) const {
-            double lambda = lambda_gen_(info.level);
-            Addr mid = left + Addr(lambda) * (right - left);
+            Rational lambda = lambda_gen_(info.level);
+            Addr mid = left + lambda * (right - left);
             if (mid <= left || mid >= right) {
 #ifndef NDEBUG
                 std::cerr << "WARNING: DynamicLambdaOperator produced out-of-bounds point, using midpoint\n";
@@ -133,9 +135,8 @@ namespace delta {
         }
 
     private:
-        std::function<double(std::size_t)> lambda_gen_;   ///< Level‑dependent fraction generator.
+        LambdaFunc lambda_gen_;
     };
-
     /**
      * @class AdaptiveOperator
      * @brief Delta operator that adaptively places points based on function variation.

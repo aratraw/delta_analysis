@@ -1,7 +1,11 @@
+// (c) 2026 Timofey Ishimtsev.
+// Licensed under PolyForm Small Business License 1.0.0
+
 // tests/calculus/test_modulus_continuity.cpp
 #include <gtest/gtest.h>
 #include "test_fixtures.h"
 #include "delta/calculus/modulus.h"
+#include "delta/rational/transcendentals.h"
 
 namespace delta::testing {
 
@@ -17,30 +21,32 @@ namespace delta::testing {
      *       with exponent 0.5 on a dyadic path.
      */
     TEST_F(ModulusContinuityTest, SqrtFunctionHasHolderExponentHalf) {
+        
         ListGrid<Addr, Compare> grid0({ 0_r, 1_r });
         auto path = make_midpoint_path(grid0);
 
+        // Use exact rational sqrt
         auto func = [](const Addr& x) -> Rational {
-            double val = std::sqrt(x.convert_to<double>());
-            // Return Rational approximating the double value.
-            // For modulus comparison we will use double.
-            return Rational(val);
+            return delta::sqrt(x);
             };
 
         const int MAX_LEVEL = 10;
-        double M = 1.0;
-        double gamma = 0.5;
-        calculus::PowerModulus<double> mod(M, gamma);
+        // Modulus ω(δ) = δ^{0.5} as Rational
+        PowerModulus<Rational> mod(1_r, Rational(1, 2));
 
         for (int n = 0; n <= MAX_LEVEL; ++n) {
             const auto& grid = path.current_grid();
             for (std::size_t i = 0; i + 1 < grid.size(); ++i) {
-                double left = grid[i].convert_to<double>();
-                double right = grid[i + 1].convert_to<double>();
-                double dx = right - left;
-                double df = std::abs(std::sqrt(right) - std::sqrt(left));
-                double bound = mod(dx);
-                EXPECT_LE(df, bound + 1e-12) << "Failed at level " << n << " interval [" << left << "," << right << "]";
+                Addr left = grid[i];
+                Addr right = grid[i + 1];
+                Rational dx = right - left;
+                Rational df = delta::abs(delta::sqrt(right) - delta::sqrt(left));
+                Rational bound = mod(dx);
+                // Allow small tolerance due to rational approximations in sqrt
+                Rational tolerance = Rational(1, 1000000000000);
+                EXPECT_LE(df, bound + tolerance)
+                    << "Failed at level " << n << " interval ["
+                    << left << ", " << right << "]";
             }
             if (n < MAX_LEVEL) path.advance(func);
         }
@@ -56,19 +62,17 @@ namespace delta::testing {
 
         auto func = [](const Addr& x) { return x; };
 
-        double M = 1.0;
-        double gamma = 1.0;
-        calculus::PowerModulus<double> mod(M, gamma);
+        PowerModulus<Rational> mod(1_r, 1_r);
 
         for (int n = 0; n <= 5; ++n) {
             const auto& grid = path.current_grid();
             for (std::size_t i = 0; i + 1 < grid.size(); ++i) {
-                double left = grid[i].convert_to<double>();
-                double right = grid[i + 1].convert_to<double>();
-                double dx = right - left;
-                double df = (func(right) - func(left)).convert_to<double>();
-                double bound = mod(dx);
-                EXPECT_LE(df, bound + 1e-12);
+                Addr left = grid[i];
+                Addr right = grid[i + 1];
+                Rational dx = right - left;
+                Rational df = delta::abs(right - left);
+                Rational bound = mod(dx);
+                EXPECT_LE(df, bound);
             }
             if (n < 5) path.advance(func);
         }

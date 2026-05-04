@@ -1,3 +1,6 @@
+// (c) 2026 Timofey Ishimtsev.
+// Licensed under PolyForm Small Business License 1.0.0
+
 // include/delta/core/delta_path.h
 #pragma once
 
@@ -42,6 +45,10 @@ namespace delta {
     public:
         using GridType = ListGrid<Addr, Compare>;
         using Func = std::function<Value(const Addr&)>;
+        using grid_type = GridType;      // For ProductGrid to see the grid type
+        using metric_type = Metric;        // For ProductGrid to see metric
+        using value_type = Value;         //general utility.
+        using addr_type = Addr;
 
         /**
          * @brief Construct a path from an initial grid and a refinement strategy.
@@ -172,6 +179,18 @@ namespace delta {
             return max_g;
         }
 
+
+        template<typename ExtMetric>
+        auto max_gap(const ExtMetric& ext_metric) const {
+            using Distance = decltype(ext_metric(current_grid_[0], current_grid_[0]));
+            Distance max_g{ 0 };
+            for (std::size_t i = 0; i + 1 < current_grid_.size(); ++i) {
+                Distance gap = ext_metric(current_grid_[i + 1], current_grid_[i]);
+                if (gap > max_g) max_g = gap;
+            }
+            return max_g;
+        }
+
     private:
         GridType current_grid_;          ///< The grid at the current level.
         Strategy strategy_;               ///< Strategy providing the delta operator.
@@ -206,6 +225,10 @@ namespace delta {
         using Betweenness = TreeBetweenness;
         using Metric = StringUltrametric;
 
+        using grid_type = GridType;      // Чтобы ProductGrid понимал, что за сетка
+        using metric_type = Metric;        // Чтобы ProductPath видел тип метрики
+        using value_type = Value;         // На будущее, пригодится
+        using addr_type = Addr;
         /**
          * @brief Construct a tree path at level 0 (only the root node).
          * @param vm Value metric (default constructed).
@@ -228,6 +251,24 @@ namespace delta {
          * @return An empty string (default‑constructed Addr).
          */
         Addr max_gap() const { return Addr{}; }
+
+        /**
+         * @brief Maximum gap for tree grid – largest distance between consecutive nodes in lexicographic order.
+         * @tparam Metric Address metric type.
+         * @param metric The metric to use.
+         * @return Maximum distance between consecutive nodes.
+         */
+        template<typename Metric>
+        auto max_gap(const Metric& metric) const {
+            using Distance = decltype(metric(Addr{}, Addr{}));
+            Distance max_g{ 0 };
+            const auto& grid = grid_;
+            for (std::size_t i = 0; i + 1 < grid.size(); ++i) {
+                Distance d = metric(grid[i], grid[i + 1]);
+                if (d > max_g) max_g = d;
+            }
+            return max_g;
+        }
 
         /// Returns the betweenness relation (TreeBetweenness).
         const Betweenness& betweenness() const noexcept { return betweenness_; }

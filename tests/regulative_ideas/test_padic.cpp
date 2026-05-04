@@ -1,4 +1,7 @@
-//tests/regulative_ideas/test_padic.cpp
+// (c) 2026 Timofey Ishimtsev.
+// Licensed under PolyForm Small Business License 1.0.0
+
+// tests/regulative_ideas/test_padic.cpp
 #include <gtest/gtest.h>
 #include "../test_fixtures.h"
 #include "delta/calculus/continuity.h"
@@ -67,7 +70,7 @@ namespace delta::testing {
         PowerModulus<Rational> modulus(0_r, 1_r);
         for (int n = 0; n < 5; ++n) {
             const auto& grid = path_->current_grid();
-            bool ok = check_continuity_level(grid, func, value_metric_, modulus, 1e-12);
+            bool ok = check_continuity_level(grid, func, value_metric_, modulus, Rational(1, 1000000000000));
             EXPECT_TRUE(ok) << "Failed at level " << n;
             if (n < 4) path_->advance(func);
         }
@@ -82,7 +85,7 @@ namespace delta::testing {
         PowerModulus<Rational> modulus(0_r, 1_r);
         for (int n = 0; n < 5; ++n) {
             const auto& grid = path_->current_grid();
-            bool ok = check_continuity_level(grid, func, value_metric_, modulus, 1e-12);
+            bool ok = check_continuity_level(grid, func, value_metric_, modulus, Rational(1, 1000000000000));
             EXPECT_TRUE(ok) << "Failed at level " << n;
             if (n < 4) path_->advance(func);
         }
@@ -100,8 +103,8 @@ namespace delta::testing {
     TEST_F(PAdicPathTest2, DivisibilityFunction) {
         // Function: 1 if x is an integer divisible by p, else 0.
         auto func = [](const Addr& x) -> Rational {
-            int num = numerator(x).convert_to<int>();
-            int den = denominator(x).convert_to<int>();
+            int num = x.numerator().convert_to<int>();
+            int den = x.denominator().convert_to<int>();
             // For simplicity, consider only integers (denominator == 1).
             if (den == 1) {
                 return (num % 2 == 0) ? Rational(1) : Rational(0);
@@ -113,7 +116,7 @@ namespace delta::testing {
         PowerModulus<Rational> modulus(1_r, 1_r);
         for (int n = 0; n < 3; ++n) {
             const auto& grid = path_->current_grid();
-            check_continuity_level(grid, func, value_metric_, modulus, 1e-12);
+            check_continuity_level(grid, func, value_metric_, modulus, Rational(1, 1000000000000));
             path_->advance(func);
         }
         // Reaching this point means no exception was thrown.
@@ -164,6 +167,7 @@ namespace delta::testing {
         Addr x = 1_r / 2_r;
         Distance D = 1_r;
         PowerModulus<Rational> modulus(0_r, 1_r); // zero modulus because error is zero
+        Rational tolerance = Rational(1, 1000000000000); // 1e-12 as Rational
 
         std::size_t first_level = 0;
         for (; first_level < grids.size(); ++first_level) {
@@ -171,7 +175,7 @@ namespace delta::testing {
         }
         ASSERT_LT(first_level, grids.size());
 
-        bool diff = check_differentiability(grids, x, func, D, modulus, first_level, 1e-12);
+        bool diff = check_differentiability(grids, x, func, D, modulus, first_level, tolerance);
         EXPECT_TRUE(diff);
     }
 

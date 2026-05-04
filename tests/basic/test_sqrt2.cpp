@@ -1,6 +1,11 @@
+// (c) 2026 Timofey Ishimtsev.
+// Licensed under PolyForm Small Business License 1.0.0
+
+// tests/basic/test_sqrt2.cpp
 #include <gtest/gtest.h>
 #include <vector>
 #include "../test_fixtures.h"
+#include "delta/rational/transcendentals.h"
 
 using namespace delta::testing;
 
@@ -21,29 +26,39 @@ TEST_F(Sqrt2Test, DyadicApproximation) {
     ListGrid<Addr, Compare> grid0({ 0_r, 2_r });
     auto path = make_midpoint_path(grid0);
 
+    // Lambda to find the interval containing sqrt(2) using exact rational comparison
     auto contains_sqrt2 = [](const ListGrid<Addr, Compare>& grid) -> Addr {
         const auto& data = grid.data();
-        // Find the interval containing sqrt(2) ≈ 1.41421356
         for (size_t i = 0; i + 1 < data.size(); ++i) {
-            if (data[i] <= 141421356_r / 100000000_r && data[i + 1] >= 141421356_r / 100000000_r) {
-                return data[i];
+            const Addr& left = data[i];
+            const Addr& right = data[i + 1];
+            // Check if left^2 <= 2 <= right^2
+            if (left * left <= 2_r && right * right >= 2_r) {
+                return left;
             }
         }
         return Addr(-1);
         };
 
     std::vector<Addr> left_endpoints;
+    // Dummy function for path advancement (values not used for grid generation with midpoint operator)
+    auto dummy_func = [](const Addr&) { return 0_r; };
+
     for (int i = 0; i < 10; ++i) {
         left_endpoints.push_back(contains_sqrt2(path.current_grid()));
-        path.advance([](const Addr&) { return Addr(0); });
+        path.advance(dummy_func);
     }
 
     // Check that the sequence of left endpoints converges
     for (size_t i = 1; i < left_endpoints.size(); ++i) {
         Addr diff = left_endpoints[i] - left_endpoints[i - 1];
-        // The difference should decrease roughly as 2/2^i
-        double expected = 2.0 / (1 << i);
-        EXPECT_LE(diff.convert_to<double>(), expected + 1e-12);
+        if (diff < 0) diff = -diff;
+        // Expected bound: 2 / 2^i
+        Rational expected = Rational(2) / delta::pow(Rational(2), static_cast<int>(i));
+        // Allow a small tolerance for rational approximations (though differences should be exact powers of two)
+        Rational tolerance = Rational(1, 1000000000000);
+        EXPECT_LE(diff, expected + tolerance)
+            << "Difference at step " << i << " = " << diff << ", expected <= " << expected;
     }
 
     // Invariant: all grids are sorted

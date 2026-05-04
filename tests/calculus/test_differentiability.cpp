@@ -1,3 +1,18 @@
+// (c) 2026 Timofey Ishimtsev.
+// Licensed under PolyForm Small Business License 1.0.0
+/**
+ *  test_differentiability.cpp
+ *
+ * \brief Differentiability checks on a dyadic grid.
+ *
+ * Shows how to use `check_differentiability` to verify that a function has a
+ * given derivative at a point, using a modulus of convergence. Examples
+ * include the identity, quadratic, and absolute value (non-differentiable)
+ * functions. The test builds a sequence of grids via `DeltaPath` and locates
+ * the point of interest.
+ *
+ * \ingroup examples
+ */
 // tests/calculus/test_differentiability.cpp
 #include <gtest/gtest.h>
 #include "test_fixtures.h"
@@ -35,8 +50,9 @@ namespace delta::testing {
         Addr x = 1_r / 2_r;
         Dist D = 1_r;
         PowerModulus<Rational> modulus(0_r, 1_r);
+        Rational tolerance = Rational(1, 1000000000000);
 
-        bool diff = check_differentiability(grids, x, func, D, modulus, 1);
+        bool diff = check_differentiability(grids, x, func, D, modulus, 1, tolerance);
         EXPECT_TRUE(diff);
     }
 
@@ -45,6 +61,7 @@ namespace delta::testing {
      *       The derivative is 1, and the error is bounded by the grid step,
      *       so the linear modulus ω(δ)=δ should be satisfied.
      */
+     //! [differentiability_quadratic_at_half]
     TEST_F(DifferentiabilityTest, QuadraticAtHalf) {
         ListGrid<Addr, Compare> grid0({ 0_r, 1_r });
         auto path = make_midpoint_path(grid0);
@@ -61,10 +78,12 @@ namespace delta::testing {
         Addr x = 1_r / 2_r;
         Dist D = 1_r; // 2 * 0.5
         PowerModulus<Rational> modulus(1_r, 1_r);
+        Rational tolerance = Rational(1, 1000000000000);
 
-        bool diff = check_differentiability(grids, x, func, D, modulus, 1);
+        bool diff = check_differentiability(grids, x, func, D, modulus, 1, tolerance);
         EXPECT_TRUE(diff);
     }
+    //! [differentiability_quadratic_at_half]
 
     /**
      * @test Quadratic function f(x)=x² at x=1/4.
@@ -87,6 +106,7 @@ namespace delta::testing {
         Addr x = 1_r / 4_r;
         Dist D = 1_r / 2_r; // 2 * 0.25
         PowerModulus<Rational> modulus(1_r, 1_r);
+        Rational tolerance = Rational(1, 1000000000000);
 
         std::size_t first_level = 0;
         for (; first_level < grids.size(); ++first_level) {
@@ -94,7 +114,7 @@ namespace delta::testing {
         }
         ASSERT_LT(first_level, grids.size());
 
-        bool diff = check_differentiability(grids, x, func, D, modulus, first_level);
+        bool diff = check_differentiability(grids, x, func, D, modulus, first_level, tolerance);
         EXPECT_TRUE(diff);
     }
 
@@ -119,8 +139,9 @@ namespace delta::testing {
         Addr x = 0_r;
         Dist D = 0_r;
         PowerModulus<Rational> modulus(1_r, 1_r);
+        Rational tolerance = Rational(1, 1000000000000);
 
-        bool diff = check_differentiability(grids, x, func, D, modulus, 0);
+        bool diff = check_differentiability(grids, x, func, D, modulus, 0, tolerance);
         EXPECT_FALSE(diff);
     }
 

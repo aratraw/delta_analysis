@@ -1,3 +1,6 @@
+// (c) 2026 Timofey Ishimtsev.
+// Licensed under PolyForm Small Business License 1.0.0
+
 // include/delta/calculus/modulus.h
 #pragma once
 
@@ -6,7 +9,9 @@
 #include <type_traits>
 #include <cstddef>
 #include <limits>
+#include <stdexcept>
 #include "delta/core/rational.h"
+#include "delta/rational/transcendentals.h"
 
 namespace delta::calculus {
 
@@ -45,6 +50,7 @@ namespace delta::calculus {
      * @return The largest gap; if grid.size() < 2, returns a default‑constructed value (zero).
      */
     template<typename Grid>
+        requires SimpleGrid<Grid>&& SubtractableAddress<typename Grid::value_type>
     typename Grid::value_type max_gap(const Grid& grid) {
         using T = typename Grid::value_type;
         if (grid.size() < 2) return T{ 0 };
@@ -100,26 +106,11 @@ namespace delta::calculus {
     template<>
     class PowerModulus<Rational> {
     public:
-        /**
-         * @brief Construct a power modulus with Rational parameters.
-         * @param C     Coefficient (Rational).
-         * @param alpha Exponent (Rational).
-         */
         PowerModulus(Rational C, Rational alpha) : C_(C), alpha_(alpha) {}
-
-        /**
-         * @brief Evaluate approximately using double arithmetic.
-         * @param delta Step size (Rational).
-         * @return Rational approximation of C * δ^α.
-         */
         Rational operator()(Rational delta) const {
-            double d = delta.convert_to<double>();
-            double a = alpha_.convert_to<double>();
-            double c = C_.convert_to<double>();
-            double result = c * std::pow(d, a);
-            return Rational(result);   // approximate, acceptable for tests
+            // Используем точное возведение в рациональную степень через delta::pow
+            return C_ * delta::pow(delta, alpha_, delta::default_eps());
         }
-
     private:
         Rational C_, alpha_;
     };
@@ -151,13 +142,37 @@ namespace delta::calculus {
             if (delta <= 0) return std::numeric_limits<T>::infinity();
             using std::log;
             using std::pow;
-            return C_ / pow(std::abs(log(delta)), p_);
+            using std::abs;
+            return C_ / pow(abs(log(delta)), p_);
         }
 
     private:
         T C_, p_;
     };
 
-    // A Rational specialisation of LogarithmicModulus can be added if needed.
+    /**
+     * @brief Specialisation of LogarithmicModulus for Rational.
+     *
+     * Uses rational transcendental functions from delta:: namespace
+     * (log, abs, pow) with default epsilon.
+     */
+    template<>
+    class LogarithmicModulus<Rational> {
+    public:
+        LogarithmicModulus(Rational C, Rational p) : C_(C), p_(p) {}
+
+        Rational operator()(Rational delta) const {
+            if (delta <= 0) {
+                throw std::domain_error("LogarithmicModulus: delta must be positive");
+            }
+            Rational log_delta = delta::log(delta);
+            Rational abs_log = delta::abs(log_delta);
+            Rational pow_log = delta::pow(abs_log, p_);
+            return C_ / pow_log;
+        }
+
+    private:
+        Rational C_, p_;
+    };
 
 } // namespace delta::calculus

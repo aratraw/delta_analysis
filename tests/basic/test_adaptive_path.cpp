@@ -1,3 +1,19 @@
+// (c) 2026 Timofey Ishimtsev.
+// Licensed under PolyForm Small Business License 1.0.0
+/**
+ *  test_adaptive_path.cpp
+ *
+ * \brief AdaptiveDeltaPath – adaptive refinement based on deviation from
+ * linearity.
+ *
+ * Demonstrates the construction and usage of `AdaptiveDeltaPath` with
+ * `MidpointOperator` and `AdaptiveOperator`. It verifies that the path
+ * refines only intervals with high priority and maintains sortedness of the
+ * point set. The test also explores threshold behaviour and invariance under
+ * many steps.
+ *
+ * \ingroup examples
+ */
 #include <gtest/gtest.h>
 #include <vector>
 #include "../test_fixtures.h"

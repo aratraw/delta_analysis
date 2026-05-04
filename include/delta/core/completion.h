@@ -1,3 +1,6 @@
+// (c) 2026 Timofey Ishimtsev.
+// Licensed under PolyForm Small Business License 1.0.0
+
 // include/delta/core/completion.h
 #pragma once
 
@@ -6,38 +9,136 @@
 #include <functional>
 #include <stdexcept>
 #include <cmath>
+#include <type_traits>
 #include "rational.h"
 
 namespace delta {
 
+    // -------------------------------------------------------------------------
+    // Convergence modulus concept and predefined moduli for sequences
+    // -------------------------------------------------------------------------
+
     /**
-     * @class FundamentalSequence
-     * @brief Represents a fundamental (Cauchy) sequence with exponential convergence rate.
+     * @concept ConvergenceModulus
+     * @brief A modulus of convergence for fundamental sequences.
      *
-     * A fundamental sequence {x_n} is defined for n ≥ start_level and satisfies
-     * |x_m - x_n| ≤ C·r^{min(m,n)} for some rational C > 0 and 0 < r < 1.
-     * Such sequences are used to construct real numbers via completion.
+     * A convergence modulus is a function m(n) that returns an upper bound
+     * on the error at level n, i.e., |x_n - x| ≤ m(n) for the limit x.
+     * For a fundamental sequence, we require that m(n) → 0 as n → ∞.
+     *
+     * @tparam M The modulus type.
+     * The expression M::value_type must be a scalar type (typically Rational).
+     * The expression m(n) for std::size_t n must return a value convertible to that scalar.
      */
-    class FundamentalSequence {
+    template<typename M>
+    concept ConvergenceModulus = requires(M m, std::size_t n) {
+        typename M::value_type;
+        { m(n) } -> std::convertible_to<typename M::value_type>;
+    };
+
+    /**
+     * @class ExponentialModulus
+     * @brief Exponential decay modulus: error ≤ C * r^n, with 0 < r < 1.
+     */
+    class ExponentialModulus {
     public:
         using value_type = Rational;
 
+        ExponentialModulus(Rational C, Rational r) : C_(std::move(C)), r_(std::move(r)) {
+            if (r_ <= 0 || r_ >= 1) {
+                throw std::invalid_argument("ExponentialModulus: rate r must be in (0,1)");
+            }
+        }
+
+        Rational operator()(std::size_t n) const {
+            Rational result = C_;
+            for (std::size_t i = 0; i < n; ++i) result *= r_;
+            return result;
+        }
+
+        const Rational& C() const { return C_; }
+        const Rational& r() const { return r_; }
+
+    private:
+        Rational C_, r_;
+    };
+
+    /**
+     * @class PowerDecayModulus
+     * @brief Power‑law decay modulus: error ≤ C * n^{-α}, with α > 0.
+     */
+    class PowerDecayModulus {
+    public:
+        using value_type = Rational;
+
+        PowerDecayModulus(Rational C, Rational alpha) : C_(std::move(C)), alpha_(std::move(alpha)) {
+            if (alpha_ <= 0) {
+                throw std::invalid_argument("PowerDecayModulus: exponent alpha must be positive");
+            }
+        }
+
         /**
-         * @brief Construct a fundamental sequence.
+         * @brief Evaluate the modulus at level n.
+         * @param n Level index (must be ≥ 1 for meaningful results).
+         * @return C * n^{-alpha} as Rational.
+         */
+        Rational operator()(std::size_t n) const {
+            if (n == 0) return C_; // fallback, but n should be >= start_level > 0
+            // Compute n^{-alpha} = 1 / n^{alpha} exactly using rational arithmetic
+            Rational n_rational(static_cast<long long>(n));
+            Rational n_pow_alpha = delta::pow(n_rational, alpha_);
+            return C_ / n_pow_alpha;
+        }
+
+        const Rational& C() const { return C_; }
+        const Rational& alpha() const { return alpha_; }
+
+    private:
+        Rational C_, alpha_;
+    };
+
+    // -------------------------------------------------------------------------
+    // FundamentalSequence – now templated on modulus
+    // -------------------------------------------------------------------------
+
+    /**
+     * @class FundamentalSequence
+     * @brief A fundamental (Cauchy) sequence with a given convergence modulus.
+     *
+     * The sequence {x_n} is defined for n ≥ start_level and satisfies
+     * |x_m - x_n| ≤ modulus(min(m,n)) for all m,n.
+     *
+     * @tparam Modulus A type satisfying ConvergenceModulus (default ExponentialModulus).
+     */
+    template<ConvergenceModulus Modulus = ExponentialModulus>
+    class FundamentalSequence {
+    public:
+        using value_type = typename Modulus::value_type;
+        using modulus_type = Modulus;
+
+        /**
+         * @brief Construct from generator and modulus.
          *
-         * @param generator   Function that returns x_n for a given n (starting from start_level).
-         * @param C           Constant C (bound on the initial error).
-         * @param r           Rate r (must satisfy 0 < r < 1).
-         * @param start_level The first level for which the sequence is defined.
+         * @param generator   Function x_n = f(n) for n ≥ start_level.
+         * @param modulus     Convergence modulus object.
+         * @param start_level First defined level.
+         */
+        FundamentalSequence(std::function<value_type(std::size_t)> generator,
+            Modulus modulus, std::size_t start_level = 0)
+            : gen_(std::move(generator)), modulus_(std::move(modulus)), start_(start_level) {
+        }
+
+        /**
+         * @brief Construct for exponential decay (backward compatibility).
          *
-         * @throws std::invalid_argument if r is not in (0,1).
+         * @param generator   Generator.
+         * @param C           Constant factor.
+         * @param r           Rate (0<r<1).
+         * @param start_level Start level.
          */
         FundamentalSequence(std::function<value_type(std::size_t)> generator,
             Rational C, Rational r, std::size_t start_level = 0)
-            : gen_(std::move(generator)), C_(std::move(C)), r_(std::move(r)), start_(start_level) {
-            if (r_ <= 0 || r_ >= 1) {
-                throw std::invalid_argument("Rate r must be in (0,1)");
-            }
+            : gen_(std::move(generator)), modulus_(ExponentialModulus(std::move(C), std::move(r))), start_(start_level) {
         }
 
         /**
@@ -54,67 +155,77 @@ namespace delta {
             return gen_(n);
         }
 
-        /// Returns the constant C (error bound factor).
-        Rational bound() const { return C_; }
+        /// Returns the convergence modulus.
+        const Modulus& modulus() const { return modulus_; }
 
-        /// Returns the rate r (convergence factor).
-        Rational rate() const { return r_; }
-
-        /// Returns the first level at which the sequence is defined.
+        /// Returns the first defined level.
         std::size_t start_level() const { return start_; }
 
+        // For backward compatibility with old code that expects bound() and rate()
+        // These are only available if Modulus is ExponentialModulus.
+        template<typename M = Modulus>
+        auto bound() const -> std::enable_if_t<std::is_same_v<M, ExponentialModulus>, Rational> {
+            return modulus_.C();
+        }
+
+        template<typename M = Modulus>
+        auto rate() const -> std::enable_if_t<std::is_same_v<M, ExponentialModulus>, Rational> {
+            return modulus_.r();
+        }
+
     private:
-        std::function<value_type(std::size_t)> gen_;   ///< Generator function.
-        Rational C_;                                    ///< Error bound constant.
-        Rational r_;                                    ///< Convergence rate.
-        std::size_t start_;                             ///< First defined level.
+        std::function<value_type(std::size_t)> gen_;
+        Modulus modulus_;
+        std::size_t start_;
     };
+
+    // -------------------------------------------------------------------------
+    // Equivalence testing for fundamental sequences (now with modulus awareness)
+    // -------------------------------------------------------------------------
 
     /**
      * @brief Check whether two fundamental sequences are equivalent.
      *
-     * Two sequences {x_n} and {y_n} are equivalent if there exist constants K > 0
-     * and 0 < ρ < 1 such that |x_n - y_n| ≤ K·ρ^n for all n.
-     *
-     * This function estimates K and ρ and verifies the condition for a range of levels.
+     * Two sequences are equivalent if there exists a constant K > 0 such that
+     * |x_n - y_n| ≤ K * (modulus1(n) + modulus2(n)) for all n.
+     * This function estimates K and verifies the condition for a range of levels.
      *
      * @param seq1 First sequence.
      * @param seq2 Second sequence.
-     * @param K    Output parameter: estimated constant K.
-     * @param rho  Output parameter: estimated rate ρ (chosen as max(r1, r2)).
-     * @return true if the sequences appear to be equivalent within a small tolerance.
+     * @param K    Output estimated constant.
+     * @return true if sequences appear equivalent.
      */
-    static inline bool are_equivalent(const FundamentalSequence& seq1, const FundamentalSequence& seq2,
-        Rational& K, Rational& rho) {
-        // Start at the maximum of the two start levels.
+    template<ConvergenceModulus M1, ConvergenceModulus M2>
+    static inline bool are_equivalent(const FundamentalSequence<M1>& seq1,
+        const FundamentalSequence<M2>& seq2,
+        Rational& K) {
         std::size_t start = std::max(seq1.start_level(), seq2.start_level());
-        // Choose ρ as the larger of the two rates (simplistic but sufficient for tests).
-        rho = std::max(seq1.rate(), seq2.rate());
+        const std::size_t N = 20; // number of levels to estimate K
 
-        // Estimate K as the maximum of |x_n - y_n| / ρ^n over the first N levels after start.
-        const std::size_t N = 20;   // number of levels to estimate K
         Rational maxK = 0;
         for (std::size_t i = 0; i < N; ++i) {
             std::size_t n = start + i;
             Rational diff = seq1(n) - seq2(n);
             if (diff < 0) diff = -diff;
-            Rational factor = 1;
-            for (std::size_t j = 0; j < i; ++j) factor = factor * rho;   // ρ^i
-            if (factor == 0) break;   // avoid division by zero (should not happen with ρ>0)
-            Rational Ki = diff / factor;
+            Rational total_err = seq1.modulus()(n) + seq2.modulus()(n);
+            if (total_err == 0) {
+                // Exact sequences: diff must be zero for equivalence
+                if (diff != 0) return false;
+                continue;
+            }
+            Rational Ki = diff / total_err;
             if (Ki > maxK) maxK = Ki;
         }
         K = maxK;
 
-        // Verify the condition for the next N levels (start+N … start+2N-1).
+        // Verify for next N levels
         for (std::size_t i = N; i < 2 * N; ++i) {
             std::size_t n = start + i;
             Rational diff = seq1(n) - seq2(n);
             if (diff < 0) diff = -diff;
-            Rational factor = 1;
-            for (std::size_t j = 0; j < i; ++j) factor = factor * rho;
+            Rational total_err = seq1.modulus()(n) + seq2.modulus()(n);
             // Allow a tiny tolerance to account for rounding.
-            if (diff > K * factor + Rational(1, 1000000)) {
+            if (diff > K * total_err + Rational(1, 1000000)) {
                 return false;
             }
         }
@@ -122,18 +233,19 @@ namespace delta {
     }
 
     /**
-     * @brief Simplified equivalence test for two fundamental sequences.
-     *
-     * Calls the three‑argument version and discards the estimated constants.
-     *
-     * @param seq1 First sequence.
-     * @param seq2 Second sequence.
-     * @return true if the sequences are equivalent.
+     * @brief Simplified equivalence test (discards K).
      */
-    static inline bool are_equivalent(const FundamentalSequence& seq1, const FundamentalSequence& seq2) {
-        Rational K, rho;
-        return are_equivalent(seq1, seq2, K, rho);
+    template<ConvergenceModulus M1, ConvergenceModulus M2>
+    static inline bool are_equivalent(const FundamentalSequence<M1>& seq1,
+        const FundamentalSequence<M2>& seq2) {
+        Rational K;
+        return are_equivalent(seq1, seq2, K);
     }
+
+    // -------------------------------------------------------------------------
+    // RealNumber – kept as originally (only works with exponential sequences)
+    // to avoid massive refactoring. It uses FundamentalSequence<ExponentialModulus>.
+    // -------------------------------------------------------------------------
 
     /**
      * @class RealNumber
@@ -142,6 +254,9 @@ namespace delta {
      * This class demonstrates the completion of rationals to reals.
      * It provides equality via sequence equivalence and approximate comparison
      * with a given tolerance.
+     *
+     * @note This version only works with exponential sequences (ExponentialModulus)
+     *       for simplicity. For general moduli, a type‑erased wrapper would be needed.
      */
     class RealNumber {
     public:
@@ -149,21 +264,26 @@ namespace delta {
 
         /**
          * @brief Construct a real number from a rational (constant sequence).
+         *
          * @param q The rational value.
          */
         explicit RealNumber(value_type q)
-            : seq_(std::make_shared<FundamentalSequence>(
+            : seq_(std::make_shared<FundamentalSequence<ExponentialModulus>>(
                 [q](std::size_t) { return q; }, Rational(0), Rational(1, 2), 0)) {
         }
 
         /**
-         * @brief Construct a real number from an arbitrary fundamental sequence.
+         * @brief Construct a real number from an arbitrary exponential fundamental sequence.
+         *
          * @param seq Shared pointer to the sequence (must be non‑null).
          */
-        explicit RealNumber(std::shared_ptr<FundamentalSequence> seq) : seq_(std::move(seq)) {}
+        explicit RealNumber(std::shared_ptr<FundamentalSequence<ExponentialModulus>> seq)
+            : seq_(std::move(seq)) {
+        }
 
         /**
          * @brief Obtain an approximation at a given level.
+         *
          * @param n Level (must be ≥ sequence's start_level).
          * @return The element x_n of the underlying sequence.
          */
@@ -206,6 +326,10 @@ namespace delta {
                 if (total_err <= eps) {
                     Rational diff = approximate(n) - other.approximate(n);
                     if (diff < 0) diff = -diff;
+                    // Если погрешность нулевая (точные числа), сравниваем с eps
+                    if (total_err == 0) {
+                        return diff <= eps;
+                    }
                     return diff <= total_err;
                 }
             }
@@ -213,7 +337,12 @@ namespace delta {
         }
 
     private:
-        std::shared_ptr<FundamentalSequence> seq_;   ///< Underlying fundamental sequence.
+        std::shared_ptr<FundamentalSequence<ExponentialModulus>> seq_; ///< Underlying exponential sequence.
     };
+
+    // -------------------------------------------------------------------------
+    // For backward compatibility, we keep a typedef for the old name
+    // -------------------------------------------------------------------------
+    using FundamentalSequenceExponential = FundamentalSequence<ExponentialModulus>;
 
 } // namespace delta

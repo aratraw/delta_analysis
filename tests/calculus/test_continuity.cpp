@@ -1,3 +1,19 @@
+// (c) 2026 Timofey Ishimtsev.
+// Licensed under PolyForm Small Business License 1.0.0
+/**
+ *  test_continuity.cpp
+ *
+ * \brief Continuity verification with power and logarithmic moduli.
+ *
+ * Demonstrates how to verify that a function satisfies a given modulus of
+ * continuity on a sequence of refined grids. Both `PowerModulus` and
+ * `LogarithmicModulus` are used with the identity, quadratic, and square-root
+ * functions. The check `check_continuity_level` is invoked for several
+ * levels of a dyadic delta path.
+ *
+ * \ingroup examples
+ */
+
 // tests/calculus/test_continuity.cpp
 #include <gtest/gtest.h>
 #include "test_fixtures.h"
@@ -18,6 +34,7 @@ namespace delta::testing {
      * @test Identity function f(x)=x on a dyadic path.
      *       The modulus ω(δ)=δ (C=1, α=1) should be satisfied exactly.
      */
+     //! [continuity_identity]
     TEST_F(ContinuityTest, IdentityFunctionOnDyadicPath) {
         ListGrid<Addr, Compare> grid0({ 0_r, 1_r });
         auto path = make_midpoint_path(grid0);
@@ -28,12 +45,13 @@ namespace delta::testing {
 
         for (std::size_t n = 0; n <= 5; ++n) {
             const auto& grid = path.current_grid();
-            bool ok = check_continuity_level(grid, func, vm, modulus, 1e-12);
+            bool ok = check_continuity_level(grid, func, vm, modulus, Rational(1, 1000000000000));
             EXPECT_TRUE(ok) << "Failed at level " << n;
             if (n < 5) path.advance(func);
         }
     }
-
+    //! [continuity_identity]
+    
     /**
      * @test Constant function f(x)=5. Any modulus with C=0 works,
      *       so the test should always pass.
@@ -48,7 +66,7 @@ namespace delta::testing {
 
         for (std::size_t n = 0; n <= 5; ++n) {
             const auto& grid = path.current_grid();
-            bool ok = check_continuity_level(grid, func, vm, modulus, 1e-12);
+            bool ok = check_continuity_level(grid, func, vm, modulus, Rational(1, 1000000000000));
             EXPECT_TRUE(ok) << "Failed at level " << n;
             if (n < 5) path.advance(func);
         }
@@ -68,7 +86,7 @@ namespace delta::testing {
 
         for (std::size_t n = 0; n <= 5; ++n) {
             const auto& grid = path.current_grid();
-            bool ok = check_continuity_level(grid, func, vm, modulus, 1e-12);
+            bool ok = check_continuity_level(grid, func, vm, modulus, Rational(1, 1000000000000));
             EXPECT_TRUE(ok) << "Failed at level " << n;
             if (n < 5) path.advance(func);
         }
@@ -79,20 +97,22 @@ namespace delta::testing {
      *       The modulus ω(δ)=√δ should be satisfied (within tolerance).
      */
     TEST_F(ContinuityTest, SqrtFunction) {
+        internal::reset_default_eps();
         ListGrid<Addr, Compare> grid0({ 0_r, 1_r });
         auto path = make_midpoint_path(grid0);
-        // Approximate sqrt(x) as a Rational with 1e‑12 accuracy
+
+        // Use exact rational sqrt from delta::sqrt
         auto func = [](const Addr& x) -> Rational {
-            double val = std::sqrt(x.convert_to<double>());
-            return Rational(static_cast<int64_t>(val * 1e12), 1e12);
+            return delta::sqrt(x);
             };
         EuclideanValueMetric vm;
+
         // Modulus of continuity for sqrt: ω(δ) = √δ (C=1, α=0.5)
         PowerModulus<Rational> modulus(1_r, Rational(1, 2));
 
         for (std::size_t n = 0; n <= 5; ++n) {
             const auto& grid = path.current_grid();
-            bool ok = check_continuity_level(grid, func, vm, modulus, 1e-6);
+            bool ok = check_continuity_level(grid, func, vm, modulus, Rational(1, 100000));
             EXPECT_TRUE(ok) << "Failed at level " << n;
             if (n < 5) path.advance(func);
         }

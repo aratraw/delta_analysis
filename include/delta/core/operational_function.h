@@ -1,3 +1,6 @@
+// (c) 2026 Timofey Ishimtsev.
+// Licensed under PolyForm Small Business License 1.0.0
+
 // include/delta/core/operational_function.h
 #pragma once
 
@@ -5,12 +8,14 @@
 #include <functional>
 #include <cassert>
 #include <type_traits>
+#include <concepts>
 #include <Eigen/Dense>
 #include <Eigen/StdVector>
 #include "list_grid.h"
 #include "uniform_grid.h"
 #include "grid_concept.h"
 #include "grid_refine.h"
+#include "rational.h"
 
 namespace delta {
 
@@ -28,20 +33,22 @@ namespace delta {
          * @throws std::runtime_error if addr is not exactly on the grid (non‑integer index).
          * @throws std::out_of_range if the computed index is out of bounds.
          */
+         //КОММЕНТАРИЙ: КАКОГО ЧЁРТА ОПЕРАЦИОННАЯ ФУНКЦИЯ ТРЕБУЕТ ДЛЯ АДРЕСА ЗНАМЕНАТЕЛЬ?
+         // А ЕСЛИ МЫ ХОТИМ ОПЕРАЦИОННУЮ ФУНКЦИЮ, ОПРЕДЕЛЁННУЮ НА ПОЛЕ БИНАРНЫХ СТРОК ИЛИ МАТРИЦ?!
+         // КОГДА ТЕСТЫ ПОЗЕЛЕНЕЮТ - РАЗОБРАТЬСЯ И ПРИ НЕОБХОДИМОСТИ ПЕРЕПИСАТЬ НАХРЕН НОРМАЛЬНО. КАРАУЛ!
         template<typename Addr, typename Grid>
         std::size_t uniform_index(const Addr& addr, const Grid& grid) {
             auto idx = (addr - grid.start()) / grid.step();
-            if (denominator(idx) != 1) {
+            if (idx.denominator() != Rational(1)) {
                 throw std::runtime_error("Address does not belong to uniform grid (non-integer index)");
             }
-            std::size_t uidx = static_cast<std::size_t>(numerator(idx));
+            std::size_t uidx = static_cast<std::size_t>(idx.numerator().convert_to<long long>());
             if (uidx >= grid.size()) {
                 throw std::out_of_range("Index out of bounds");
             }
             return uidx;
         }
     }
-
     // -------------------------------------------------------------------------
     // Primary template (for arbitrary grids) – uses std::map with a comparator
     // -------------------------------------------------------------------------
@@ -74,7 +81,7 @@ namespace delta {
              * @param initial Function to compute the value at each address.
              */
             template<typename Func>
-                requires GridConcept<Grid, Addr>
+                requires OrderedGrid<Grid>
             OperationalFunction(const Grid& grid, Func&& initial)
                 : values_(grid.comparator()) // use the grid's comparator for ordering
             {
@@ -96,7 +103,7 @@ namespace delta {
              * @param interpolate Interpolator used to compute values at new addresses.
              */
             template<typename OldGrid>
-                requires GridConcept<OldGrid, Addr>
+                requires OrderedGrid<OldGrid>
             void extend(const OldGrid& old_grid, const Grid& new_grid,
                 Interpolator interpolate) {
                 const std::size_t old_size = old_grid.size();
@@ -268,6 +275,38 @@ namespace delta {
     private:
         Grid grid_;           ///< The current uniform grid.
         StorageType values_;  ///< Values in the same order as grid points.
+    };
+
+    // -------------------------------------------------------------------------
+    // FieldTraits для получения информации о поле
+    // -------------------------------------------------------------------------
+
+    template<typename Field>
+    struct FieldTraits;
+
+    template<typename Addr, typename Value, typename Grid, typename Compare>
+    struct FieldTraits<OperationalFunction<Addr, Value, Grid, Compare>> {
+        using address_type = Addr;
+        using value_type = Value;
+        using grid_type = Grid;
+    };
+
+    template<typename Addr, typename Value, typename Compare>
+    struct FieldTraits<OperationalFunction<Addr, Value, UniformGrid<Addr, Compare>>> {
+        using address_type = Addr;
+        using value_type = Value;
+        using grid_type = UniformGrid<Addr, Compare>;
+    };
+
+    // -------------------------------------------------------------------------
+    // Concept Field для проверки, что тип является полем
+    // -------------------------------------------------------------------------
+
+    template<typename F, typename Addr>
+    concept Field = requires(F f, const F cf, Addr a) {
+        typename F::value_type;
+        { cf(a) } -> std::convertible_to<typename F::value_type>;
+        { cf.contains(a) } -> std::convertible_to<bool>;
     };
 
 } // namespace delta

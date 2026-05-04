@@ -1,3 +1,6 @@
+// (c) 2026 Timofey Ishimtsev.
+// Licensed under PolyForm Small Business License 1.0.0
+
 // include/delta/calculus/riemann_sum.h
 #pragma once
 
@@ -130,13 +133,13 @@ namespace delta::calculus {
      * @return The approximate integral over the tree.
      */
     template<typename Path, typename Func>
-    double tree_riemann_sum(const Path& path, Func&& func) {
-        double sum = 0.0;
+    Rational tree_riemann_sum(const Path& path, Func&& func) {
+        Rational sum = 0_r;
         const auto& grid = path.current_grid();
         std::size_t level = grid.level();
+        Rational weight = Rational(1) / delta::pow(Rational(2), static_cast<int>(level));
         for (const auto& addr : grid) {
-            if (addr.size() == level) {      // only leaves contribute
-                double weight = std::pow(2.0, -static_cast<double>(level));
+            if (addr.size() == level) {
                 sum += func(addr) * weight;
             }
         }

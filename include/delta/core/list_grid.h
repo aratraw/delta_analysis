@@ -1,3 +1,6 @@
+// (c) 2026 Timofey Ishimtsev.
+// Licensed under PolyForm Small Business License 1.0.0
+
 // include/delta/core/list_grid.h
 #pragma once
 
@@ -92,6 +95,10 @@ namespace delta {
         /// Returns the comparator used by the grid.
         const Compare& comparator() const noexcept { return comp_; }
 
+        std::vector<value_type> collect_points() const {
+            return data_;   // data_ is std::vector<T>
+        }
+
         // -------------------------------------------------------------------------
         // Refinement
         // -------------------------------------------------------------------------
@@ -150,6 +157,6 @@ namespace delta {
     };
 
     // Ensure ListGrid satisfies the GridConcept.
-    static_assert(GridConcept<ListGrid<int>, int>);
+    static_assert(OrderedGrid<ListGrid<int>>);
 
 } // namespace delta

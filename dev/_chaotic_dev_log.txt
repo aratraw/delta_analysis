@@ -1,0 +1,621 @@
+LESSONS AND LESSONS LEARNED FROM MISTAKES (UPDATED FOR CURRENT ARCHITECTURE)
+
+---
+
+LESSON 1: NEVER CALL GC IN THE MIDDLE OF CANONICALIZATION
+
+What happened:
+In canonicalize(), when creating clean nodes and filling the pool up to the gc_threshold, collect_garbage() was called. The GC would see a partially initialized node (already with op = CONST, but value_idx = -1) and when trying to evaluate its value, it would access pool.values[-1] → crash.
+
+Why this is a mistake:
+Violation of invariant: a node must not be accessible to the GC until fully initialized. The GC must not run when data structures are in an inconsistent state.
+
+How we fixed it:
+Introduced thread_local bool gc_disabled. RAII guard CanonicalizeGuard sets gc_disabled = true before canonicalization. In allocate_node, check: if (!gc_disabled && next_free_index >= gc_threshold). Temporarily remove the limit max_size = SIZE_MAX to avoid triggering GC during expansion.
+
+Why this is correct:
+Guarantees that the GC will not interrupt tree construction. After canonicalization, GC can be called explicitly or will trigger on the next allocation. RAII ensures restoration even with exceptions.
+
+---
+
+LESSON 2: GC MUST PRESERVE ONLY ROOTS, NOT ALL LIVE NODES
+
+What happened:
+The old version of collect_garbage() copied all nodes with refcount > 0 into a new pool, turning each into a constant. As a result, after GC, the new pool had as many nodes as the original tree (~400), even though there were only 3 live roots (root1, root2, root3).
+
+Why this is a mistake:
+Violation of expectations: GC should compress the tree, not preserve the intermediate structure. The pool size after GC remained large, when it should have shrunk to the number of roots. max_size was meaningless — the pool lived its own life.
+
+How we fixed it:
+GC uses get_clean_objects_snapshot() to get the list of root objects. Creates a new pool with size max_root_index + 1. Creates constants only for root indices. All other nodes (intermediate) are discarded.
+
+Why this is correct:
+After GC, the pool contains exactly as many nodes as there are clean LazyRationals. max_size finally acquires meaning — it is the limit on the number of nodes. Memory is freed efficiently.
+
+---
+
+LESSON 3: WE NEED A REGISTRY OF CLEAN OBJECTS, NOT EPOCHS
+
+What happened:
+We long debated between epochs (add a clean_epoch_ field to each object) and a registry (store pointers to clean objects). Epochs were rejected.
+
+Why epochs are a bad solution:
+They add 8 bytes to every object, even though 99% of objects never use reset_pool. They require a check on every access to clean state. They do not solve the decrement_ref problem after pool destruction.
+
+How we fixed it:
+Registry: thread_local unordered_set<LazyRational*> g_clean_rationals. Registration only in canonicalize() (when object becomes clean). Deregistration in ensure_dirty(), destructor, move constructor. reset_pool() iterates over a registry snapshot and invalidates objects.
+
+Why this is correct:
+Does not add fields to the object. Complete control over all clean objects. reset_pool and collect_garbage can work with the registry directly.
+
+---
+
+LESSON 4: HASH FUNCTIONS MUST BE PERFECTLY CONSISTENT WITH EQUALITY
+
+What happened:
+absl::flat_hash_map crashed because operator== said two Value objects were equal (after normalization), but hash returned different values. This happened because the hash was computed from a non-canonical representation.
+
+Why this is a mistake:
+absl::flat_hash_map requires hash(a) == hash(b) for all a == b. Otherwise, the container cannot find the key and enters an infinite loop or assertion.
+
+How we fixed it:
+template <typename H>
+H AbslHashValue(H h, const Value& v) {
+    const auto& n = numerator(v);
+    const auto& d = denominator(v);
+    return H::combine(std::move(h), n, d);
+}
+Value has no "reduced" flag — the fraction is always stored in normalized form thanks to rational_adaptor. Therefore, the hash can be computed directly from the numerator and denominator.
+
+Why this is correct:
+Normalization is guaranteed by the type at the backend level. No need to separately normalize before hashing. Eliminates a class of errors related to non-canonical representation.
+
+---
+
+LESSON 5: WHEN COMPOSING FUNCTIONS, PASS A STRICTER EPSILON TO SUBCOMPUTATIONS
+
+What happened:
+In eager_pow(base, exp, eps) for a rational exponent, eager_log(base, eps) and eager_exp(... , eps) were called. The error from the log and exponent accumulated, and the final error could exceed eps.
+
+Why this is a mistake:
+The user requests precision eps but gets n * eps (where n is the number of subcomputations). Particularly critical for large exponents.
+
+How we fixed it:
+Value internal_eps = (p == 0) ? eps : eps / Value(p * 1000);
+Value log_base = eager_log(base, internal_eps);
+// ...
+Value result = eager_exp(p_log_div_q, internal_eps);
+
+Why this is correct:
+A safety margin of 1000 ensures that the final error will be dominated by the last step. The user does not see a difference, but the library is reliable.
+
+---
+
+LESSON 6: reset_pool() MUST INVALIDATE CLEAN OBJECTS VIA PLACEMENT NEW
+
+What happened:
+After reset_pool(), the old pool was destroyed, but clean LazyRational objects continued to store clean_index_ pointing to destroyed memory. The next time these objects were used, a crash occurred.
+
+Why this is a mistake:
+Invariant: clean state means a valid index in the pool. reset_pool() violates this invariant without notifying the objects.
+
+How we fixed it:
+auto clean_objects = get_clean_objects_snapshot();
+for (LazyRational* obj : clean_objects) {
+    decrement_ref(obj->clean_index_);
+    obj->~LazyRational();
+    new (obj) LazyRational();   // dirty zero, not registered
+}
+pool = NodePool();
+clear_clean_registry();
+
+Why this is correct:
+The object becomes a dirty zero — the default initial state. Reference counts of the old pool are correctly decremented before the pool is destroyed. The registry is cleared because dirty objects should not be in it.
+
+---
+
+LESSON 7: clone() OF A CLEAN OBJECT MUST REGISTER THE COPY
+
+What happened:
+clone() for a clean object created a copy with the same clean_index_, incremented the reference count, but did NOT add the copy to the registry. During reset_pool(), this copy was not found in the registry and was not invalidated, leaving it with a dangling index.
+
+Why this is a mistake:
+Invariant: every clean object must be registered in the registry. Cloning creates a new clean object, which must be in the registry.
+
+How we fixed it:
+LazyRational copy;
+copy.state_ = State::Clean;
+copy.clean_index_ = clean_index_;
+internal::increment_ref(clean_index_);
+copy.register_clean();   // added
+return copy;
+
+Why this is correct:
+Maintains the invariant "all clean objects are in the registry". reset_pool() and collect_garbage() see all copies.
+
+---
+
+LESSON 8: DO NOT TRUST to_double() WHEN DEBUGGING TRANSCENDENTAL FUNCTIONS
+
+What happened:
+We spent hours looking at EXPECT_LE output and conversion to double, but did not see a difference. It turned out that to_double() lost precision, hiding the true difference between expected and actual values.
+
+Why this is a mistake:
+double has only 15-17 decimal digits of precision. Rational numbers can have hundreds of digits. Comparison via to_double() does not show the real error.
+
+How we fixed it:
+std::cout << "val = " << internal::to_string(val) << "\n";
+std::cout << "expected = " << internal::to_string(expected) << "\n";
+std::cout << "diff = " << internal::to_string(diff) << "\n";
+
+Why this is correct:
+Full precision of the rational number is visible. You can see how many digits actually do not match. Saves hours of debugging.
+
+---
+
+LESSON 9: AVOID ARBITRARY LIMITS ON THE NUMBER OF ITERATIONS IN SERIES
+
+What happened:
+Some series (e.g., series_ln2) had max_iter = 10000 and stopped when the limit was reached, not when precision was achieved. For very small eps (1e-100), the required precision was not achieved.
+
+Why this is a mistake:
+The user requested precision eps but got much worse precision. Violation of function contract.
+
+How we fixed it:
+DEFAULT_MAX_ITER = 1'000'000 only as a protection against divergence. The main stopping condition: term < eps. User-provided eps takes priority over any limit.
+
+Why this is correct:
+If the series converges, it will run until the required precision is achieved. If the series diverges, the protection will trigger and it will not hang.
+
+---
+
+LESSON 10: WHEN CHANGING THE API — GREP EVERYTHING, THEN GREP AGAIN
+
+What happened:
+When changing the API (e.g., adding register_clean), we forgot to update clone() for clean objects, which led to a bug.
+
+Why this is a mistake:
+API changes have side effects in all places of use. It is easy to miss, especially if the changes are "obvious".
+
+How we fixed it:
+After changing the API — systematic search for all places of use. Recompilation and review of all errors. Double-check: if something should be registered — then everywhere a clean object is created.
+
+Why this is correct:
+Prevents forgotten updates. Saves debugging time.
+
+---
+
+LESSON 11: CODE SHOULD BE "DEEP", NOT "WIDE". DENSITY OF MEANING IS GOOD
+
+What happened:
+We did not proliferate abstractions for the sake of abstractions. We used thread_local wherever possible. We did not add extra fields. We did not make "epochs" via a field in each object.
+
+Why this is correct:
+High density of functionality per line of code. Fewer places for errors. Easier to maintain invariants.
+
+---
+
+SUMMARY OF CURRENT ARCHITECTURE (what to remember)
+
+1. Never call GC during canonicalization — gc_disabled + RAII guard
+2. GC only preserves roots — the clean object registry tells what is live
+3. Registry is cleaner than epochs — does not bloat objects
+4. Hash always from normalized representation — thanks to rational_adaptor
+5. Function composition requires a stricter eps in subcomputations — safety margin of 1000
+6. Use to_string() for debugging, not to_double() — full precision is visible
+7. Cloning a clean object = registering the copy — registry invariant
+8. reset_pool invalidates via placement new — dirty zero, deregistration
+9. Iterative series are not limited by arbitrary limits — eps rules
+10. API changes require systematic search — grep, compile, grep
+
+---
+
+[04/26] BUG REPORT: vector subscript out of range in GCAndResetInteraction test
+
+Conditions for occurrence:
+1. Pool limit max_size = 120 is set
+2. A complex lazy expression acc is created as the sum of 80 terms Sin(i) * Cos(i+1)
+3. acc.simplify_inplace() is called (canonicalization of a dirty tree into a clean one)
+4. During canonicalization, hundreds of new nodes are created in the pool
+5. When next_free_index >= gc_threshold (108) is reached, a recursive call to collect_garbage() triggers
+6. The GC begins to evaluate the value of every live node, including a just-allocated but not yet fully initialized node of type CONST with value_idx = -1
+7. Accessing pool.values[-1] causes vector subscript out of range
+
+Root of the problem:
+Recursive call to GC inside canonicalize() — at a moment when the pool is full but canonicalization is not yet complete. Nodes are created in this order:
+1. allocate_node() allocates a slot and returns an index
+2. Before assigning value_idx (or before fully filling the node's fields), the threshold is checked and GC is called
+3. The GC sees a node with op = CONST (already set by the Node constructor), but value_idx = -1 (not yet assigned)
+4. evaluate() tries to read pool.values[-1] → crash
+
+Additional factors:
+max_size is too small (120) relative to the complexity of the expression (requires several hundred nodes). gc_threshold = 0.9 * max_size = 108 — the threshold is reached long before canonicalization completes. No mechanism exists to prohibit GC during critical moments.
+
+Solution (comprehensive):
+1. Introduced gc_disabled flag (thread-local) in global_state.h
+2. RAII guard CanonicalizeGuard in lazy_rational_impl.h:
+   - Sets gc_disabled = true
+   - Temporarily removes the limit max_size = SIZE_MAX (via pool.max_size = SIZE_MAX)
+   - Restores original values in destructor
+3. Modified allocate_node in node_pool.h:
+   - GC runs only if !gc_disabled && next_free_index >= gc_threshold
+   - When GC is disabled, the pool is allowed to expand without limits
+4. Rewrote collect_garbage:
+   - Uses the clean object registry (g_clean_rationals) to determine roots
+   - Creates a new pool of size max_root_index + 1
+   - Preserves only root nodes as CONST
+   - Does not copy all live nodes, only roots
+5. Introduced clean object registry g_clean_rationals:
+   - Registration in canonicalize() after transitioning to Clean
+   - Deregistration in ensure_dirty(), destructor, move constructor
+   - Used in reset_pool() and collect_garbage()
+6. Fixed clone() for clean objects — added call to register_clean()
+7. Fixed reset_pool() — iterates over registry, invalidates clean objects via placement new
+
+Mitigation (reproduction and fixing):
+- Reproduction: test GCAndResetInteraction from reset_pool_edge_cases_tests.h
+- Fixing: all the above changes, verified through verbose tests
+
+Moral:
+1. Never call GC in the middle of building a complex data structure — use a disable flag.
+2. Object registry is simpler and safer than epochs: adds no fields, gives complete control.
+3. RAII is your best friend: the guard guarantees state restoration even with exceptions.
+4. Tests must be aggressive: 300 iterations of creating/destroying objects revealed a problem that, with "optimal" code, might have gone unnoticed.
+5. Architecture must support invariants: the pool must not contain nodes with value_idx = -1, and the GC must not run until initialization is complete.
+
+P.S.
+The bug was multi-layered, but a systematic approach (registry + GC disabling + rewritten GC) solved the problem definitively.
+
+---
+
+LESSON 12: AN ISOLATED TEST PASSES, BUT IN THE FULL RUN IT HANGS — A SIGN OF GLOBAL CONTAMINATION
+
+Symptom:
+The EagerPowRationalExponent test (eager computations of power with rational exponent) hangs when run after hundreds of other tests, but completes successfully if only the RationalPowTest suite is run.
+
+Analysis:
+The hang is not reproducible in isolation → the problem is not in the logic of eager_pow itself, but in inter-test interaction. After dozens of other tests are executed, the global state becomes "contaminated".
+
+Main suspects:
+- thread_local registry g_clean_rationals
+- pi_cache or other internal caches
+- default_eps — the global default precision value
+- Node pool
+
+Root of the problem:
+The global state in the library is well-designed and works correctly (overall). The problem is in the tests, which do not isolate their side effects from each other. If development were done by different people, one could say: "Well, go and properly configure and isolate your test suites yourselves." But the project has one developer, and there is no one to yell at.
+
+Why this problem is hard to catch:
+- The hang/slowdown reproduces only with a specific order of test execution.
+- In an isolated environment, the global state is pristine → the test flies through in milliseconds.
+- Different tests affect the global state in different ways.
+
+Conclusions:
+- Global state is not evil, it is a tool. Like a knife: you can cut sausage, or you can kill a person (but better not).
+- In the library, the global state is 90% ideally thought out (according to the developer). The problem is not in it, but in the test framework/culture, where tests are not required to isolate their changes to global settings from each other.
+- The existence of set_default_eps() implies the existence of reset_default_eps() — for symmetry and testing convenience.
+
+Solution (adopted in current version):
+- Added reset_default_eps() to return the default precision value to the original (1e-30).
+- For tests sensitive to global state, added a reset in SetUp/TearDown.
+- reset_pool() does NOT reset default_eps (these are different semantic entities: pool is memory management, default_eps is computation policy). Resetting policy is the responsibility of the tests.
+
+Priority: low (it does not interfere with real library usage, and tests are already protected).
+
+Moral:
+- If I had a team, I would yell at the testers.
+- But there is no team, so go and fix it yourself.
+
+Date: 2026-04-26
+Author: random-dude@delta-team (aka developer, aka tester, aka QA, aka reaper, aka jack-of-all-trades)
+
+---
+
+EVENT: FULL VALIDATION — (ALMOST) EVERYTHING WORKS (99%), CAN BREATHE
+
+On April 26, 2026, a full run of all library tests was performed (175 tests, release build, single thread).
+Result: 174 passed, 1 skipped (intentionally), 3 disabled (diagnostic). No crashed or hung tests.
+
+Benchmarks confirmed:
+- LazyRational is 2–6 times faster than Boost with et_on on random rational numbers and the harmonic series.
+- Rational (immediate) is on par with Boost et_off or faster in several scenarios.
+- Transcendental functions (sin, cos, exp, log, sqrt, pi, e, acos, pow) are correct and accurate to eps = 1e-80.
+- Algebraic simplifications (Exp(Log(x)) -> x, folding sums/products, distributivity) work correctly.
+- Garbage collector, clean object registry, reset_pool, and global state reset (reset_default_eps()) isolate tests from each other.
+
+Where we yielded to a naive implementation via series:
+- sqrt for eps <= 1e-40 is 1.5–2x slower.
+  Reason: In our library, before running the series, there is a check for an exact integer root, which adds an extra delay. This is the price for the possibility of exact results (e.g., sqrt(4) = 2 without error).
+- exp at extremely high precision (1e-80) is 15% slower (and not always).
+Where we yielded to Boost:
+- Arbitrary rationals with large denominators (powers of two) — lag only in lazy mode.
+  Explanation: building a lazy tree takes time for node creation and canonicalization. In absolute terms, the lag is milliseconds, which is not critical. In eager mode, there is no lag because we use exactly the same Boost::multiprecision under the hood.
+
+Conclusion:
+The library is ready for release. All critical bugs (hangs, crashes, memory leaks) are fixed. Heisenbugs (careless handling of global state in end-user code) are discovered and documented. Performance in target scenarios (computing huge sums/products, complex expressions, lazy transcendentals, algebraic reductions, ...) exceeds Boost. Isolated lags are explained either by safety or by overhead from laziness, or by MINOR, LOCALLY FIXABLE implementation shortcomings — they do not prevent using the library in production.
+
+Moral:
+A systematic approach (eliminating global contamination, RAII guards, object registry, thorough testing) pays off. When it's green, you can sleep soundly.
+
+Date: 2026-04-26
+Status: ✅ Release candidate.
+
+---
+
+P.S. Overall picture
+
+The delta::rational library comprises 6150 lines of C++ (excluding tests).
+
+In these 6150 lines:
+- eager/lazy dualism,
+- rational arithmetic with arbitrary precision (boost::multiprecision),
+- transcendental functions (sin, cos, exp, log, sqrt, pi, e, acos, pow) with unlimited precision,
+- algebraic simplifications (Exp/Log, distributivity, folding sums/products),
+- garbage collector with clean object registry,
+- RAII protection of global state,
+- full set of tests (175 of them) and benchmarks.
+- A thousand other architectural decisions, features, and optimizations.
+
+Comparing with Boost is a thankless task. Boost does not support transcendentals with arbitrary precision. Comparing with CGAL or SymEngine is possible, but those are systems with tens and hundreds of thousands of lines under different architectural assumptions. We do not claim to be the "only ones on the planet." We claim something else: 6150 lines that fit in one developer's head, do exactly what is stated, and contain not a single line of ballast.
+
+Isolated lags behind a naive implementation of transcendentals are low-priority technical debt. Not bugs, not performance regressions relative to competitors (we have no competitors with the same set of features), but rather documented points for possible improvement. Whether we will live to see the moment when this debt becomes relevant at all is an open question. Given current usage scenarios — probably no rather than yes.
+
+The library is ready for release. No critical bugs. Performance in target scenarios exceeds Boost. Next: operation, feedback, and perhaps, someday, that very moment when 15% becomes important to someone.
+
+April 26, 2026. You can breathe out.
+
+---
+
+P.P.S. UNRAVELING THE MATRYOSHKA (FULL DETECTIVE STORY)
+
+The story of RepeatingSubgraphInterning is a classic example of how one symptom can have multiple causes, and they lie on different levels.
+
+What we saw: the test hangs. Not a line of output, not a clue.
+
+What we suspected: reset_pool(). It had been indirectly associated with hangs before (Lessons 1-11). In that benchmark, pool resets were called at every turn — the concerns were more than justified. That was an educated guess.
+
+What we did: started simulating scenarios with reset_pool() — created a separate test suite.
+
+Chronology of hell:
+1. We see the benchmark hanging.
+2. The main suspect is reset_pool().
+3. We start simulating scenarios with reset_pool() — write a separate test suite.
+4. The GCAndResetInteraction test from that suite catches a crash (vector subscript out of range).
+5. That is a bug, it needs to be fixed. We fix it. A day and a half.
+6. We commit the changes: registry, gc_disabled, CanonicalizeGuard, placement new, rewritten GC.
+7. The reset_pool() tests become green. The architecture is strengthened.
+8. We return to the main hanging benchmark RepeatingSubgraphInterning.
+9. It STILL hangs, dammit.
+
+This is where the next act begins: simplify, distributivity, heuristics, grouping by hashes — we think the problem is the lack of collapsing repeating subtrees. And only then — the discovery of default_eps and the addition of reset_default_eps().
+
+What turned out to be actually true: there were several guilty parties, and they lay on different levels:
+1. reset_pool() was guilty, but not of what we thought. We created a complex test scenario that created a problem for itself and failed, and under that failure we fixed the architecture.
+2. default_eps had likely been changed by another test to a monstrously small value (1e-100). After reset_pool(), the pool became clean, but default_eps remained super-small.
+3. Lack of distributivity and collapsing of repeating subtrees — simplify could not reduce the tree enough, and it remained large. For transcendental terms, this has a significant impact. A good transcendental is one that can be factored out. The best transcendental is one that need not be computed at all.
+4. Super-small default_eps + a large tree of transcendentals that would not reduce without distributivity handling = computation required monstrous precision and time. The test was not hanging — it was HONESTLY computing The Truth until the heat death of the universe.
+
+Conclusion:
+- The GCAndResetInteraction test was not the cause, but an incidental find along the way.
+- Fixing reset_pool() and GC was not in vain — those are correct features that the library needs on its own.
+- Adding distributivity and collapsing was not in vain — those are also correct features.
+- But the main benchmark required all of this PLUS a precision reset.
+
+The main lesson:
+- An educated guess is good. But hypothesis testing should be fast and cheap.
+- If you have a hanging test, be prepared to find three more bugs along the way, two of which will turn out to be unrelated to the original symptom, and only the last, fourth, will be the real one. And you will fix the rest along the way because you now know how to do it.
+- Before rewriting the architecture for a suspect, make sure they are actually guilty. Or at least that they are the only guilty one.
+- The method of exclusion, printing global variables, temporarily replacing parameters — these are your friends. Do not guess. Verify.
+
+Date of realization: April 26, 2026, deep night.
+State: tired but satisfied.
+Release status: ✅ Release candidate.
+Mental state: requires reboot.
+
+Bugs are fixed. Architecture strengthened. Tests green. Can sleep.
+
+---
+
+LESSON 13: ZERO PRECISION IS A HEISENBUG THAT TURNS YOUR HAIR GRAY
+
+Symptom:
+The ContinuityModulusTest.SqrtFailsWithLinearModulus test hangs. Always reproducible. No errors, no warnings — just infinite execution.
+
+Diagnosis:
+default_eps = 0, AND THEREFORE THE SQUARE ROOT DECIDED TO COMPUTE WITH INFINITE PRECISION UNTIL THE HEAT DEATH OF THE UNIVERSE. Because:
+
+inline thread_local Value default_eps_value = []() -> Value {
+    dumb_int denom("1000000000000000000000000000000");
+    return Value(1) / Value(denom);
+}();
+
+Apparently, the lambda did not execute in the worker thread. The variable remained zero.
+
+Why this is a Heisenbug:
+Up to this point, hundreds of tests passed, apparently because they either:
+- did not use precision at all,
+- did not use default_eps (passed precision explicitly),
+- or used default precision but a silent eps = 0 did not lead to a hang in their scenario (e.g., fast constant folding or early exit due to other conditions).
+
+And this test is the first one to brazenly go into series with eps = 0 in broad daylight. And it hung.
+
+The scariest part:
+The problem had been sitting there since one of the core refactorings.
+We rewrote the GC, canonicalization, simplify, introduced the registry and distributivity — we fixed real bugs that existed and added real features.
+But this bug remained. It was not related to them. It was just waiting for its moment.
+
+What is the takeaway about testing:
+- Passing 174 out of 175 tests does not mean the library is working.
+- If one test fails, it could be the tip of the iceberg.
+- Or it could be the only test that verifies what the others did not verify.
+- And that test will point to a problem that had been there from day one.
+- FOOL-PROOFING (the scenario with eps=0) IS NOT OVERHEAD BUT A REAL NECESSITY.
+
+How I fixed it:
+1. Removed thread_local — default precision is now single for the whole program.
+2. Removed the lambda — direct initialization with a string.
+3. Added reset_default_eps() in the test fixture's SetUp.
+
+inline Value default_eps_value = Value("1/1000000000000000000000000000000");
+
+Now tests always start with a known precision.
+
+Moral for everyone (and for myself in the future):
+1. Never trust thread_local initialization with a lambda. Especially for global settings.
+2. If a test hangs, the first thing to check is eps. Print it as a string, do not trust cout.
+3. Reset precision in every test's SetUp. Even if the test does not use it. Better safe than sorry.
+4. Heisenbugs are not a myth. They live among us. And they kill time.
+5. When you fix a bug, fix it to the end. If after the fix the test still hangs — it is a different bug. Keep searching without rewriting what you already fixed.
+
+Date of realization: April 27, 2026, when it became clear that the week was not wasted, but could have been shorter.
+
+Status: Bug closed. Precision is not zero. Tests are green.
+
+---
+
+LESSON 14: PADE (6,6) IS NOT PRECISION, IT IS A SENTENCE
+
+Symptom:
+The SquareRootConsistency test fails. Persistently. We set default_eps = 1e-30 — it fails. We lower the required tolerance to 1e-5 — it still fails. The logarithm honestly computes the series to convergence by eps, but the composition exp(0.5 * log(M)) still does not fit even into 1e-5. This looked like a conspiracy.
+
+Diagnosis:
+matrix_exp used a fixed Padé (6,6). Six. Terms. Always. Regardless of what eps you passed — 1e-6, 1e-30, or 1e-100. Because:
+
+// Old code:
+const Scalar b[] = {
+    Scalar(1) / Scalar(2),      // b1 = 1/2
+    Scalar(1) / Scalar(12),     // b2 = 1/12
+    Scalar(1) / Scalar(120),    // b3 = 1/120
+    Scalar(1) / Scalar(1680),   // b4 = 1/1680
+    Scalar(1) / Scalar(30240),  // b5 = 1/30240
+    Scalar(1) / Scalar(665280)  // b6 = 1/665280
+};
+
+The error of Padé (6,6) for ||A|| <= 0.5 is about 1e-9. After squaring and multiplication sqrtM * sqrtM, the error accumulated to about 1e-8 — and that is the CEILING. No eps passed by the user could improve the result. We twiddled the knobs of eps and tolerance, and the exponential spat on them from a great height.
+
+Why this is both funny and sad:
+- We designed the entire library around the idea of "the user specifies precision, and the library achieves it."
+- The logarithm (matrix_log) honestly sums the Gregory series to convergence by eps.
+- And the exponential — bam! — a fixed approximation that does not even look at eps.
+- For a long time, we could not understand why the test was failing because we assumed that eps worked everywhere. But it did not work in the most important place.
+
+How we fixed it:
+Replaced the fixed Padé (6,6) with an adaptive Padé with order depending on eps:
+
+// Helper function to determine Padé order
+template<typename Scalar>
+static int pade_order(const Scalar& eps) {
+    double eps_d = eps.to_double();
+    if (eps_d <= 0) return 16;
+    
+    if (eps_d >= 1e-3) return 4;
+    if (eps_d >= 1e-7) return 6;
+    if (eps_d >= 1e-12) return 8;
+    if (eps_d >= 1e-17) return 10;
+    if (eps_d >= 1e-22) return 12;
+    if (eps_d >= 1e-27) return 14;
+    return 16;
+}
+
+Now:
+- At eps = 1e-6, order 6 is used (as before, fast)
+- At eps = 1e-30, order 16 is used (slower, but honestly achieves the required precision)
+
+Coefficients are computed recursively:
+c[0] = Scalar(1);
+for (int j = 1; j <= m; ++j) {
+    c[j] = c[j - 1] * Scalar(m - j + 1) / Scalar((2 * m - j + 1) * j);
+}
+
+Result:
+The SquareRootConsistency test passes with a tolerance of 1e-25 at eps = 1e-30. All 100 tests are green.
+
+Moral:
+1. If a function takes an eps, it MUST use it. Ignoring the precision parameter is a contract violation, no matter how fast the fixed method is.
+2. Fixed constants are always wrong. Especially if they are masquerading as a "good enough approximation." For some it is enough, for others it is not, and you will not know until you write a test.
+3. When a test fails and you have tried everything — check whether someone is ignoring your parameters. Seriously. Just walk through the call chain and make sure that eps actually reaches the place where computation occurs.
+4. Adaptivity is not a luxury, it is an architectural principle. If a library claims "precision to eps", every component must adapt to that eps.
+5. Do not bury yourself in debugging complex hypotheses if you have not checked the simple ones. We spent time analyzing rational numbers, overflows, GC, registry, global state — and the problem was that six terms of a series are not precision, they are a sentence.
+
+Date of realization: April 28, 2026, when it suddenly dawned that the eps in the matrix_exp signature is there, but in the body it is not used.
+
+Status: Bug closed. Exponential respects user eps. Tests are green. Shame and laughter in equal proportions.
+
+----
+
+
+Here is the English translation of the provided text:
+
+---
+
+We conducted a series of experiments optimizing `sqrt` and `exp` in the Delta library. During this work, several issues arose, which we are documenting along with conclusions and lessons learned.
+
+## 1. Exponential (`series_exp`)
+
+**Problem:**  
+An attempt to speed up `exp` for typical arguments (e.g., x=1.23) by lowering the reduction threshold from 2.0 to 1.0.
+
+**Observation:**  
+- With threshold 2.0: x ≤ 2 → no reduction applied, result `exp(x)` has a compact rational representation.  
+- With threshold 1.0: x > 1 → reduction with k=1, result `exp(x)` becomes a giant fraction (numerator/denominator in the thousands of bits).  
+- Subsequent operations, especially `log(exp(x))` (correctness tests), slowed down catastrophically (from 11 sec to 50+ sec).
+
+**Cause:**  
+Scaling of `internal_eps` (necessary to guarantee absolute error after squaring), combined with reduction for small x, produces ultra-precise results with huge integers. Although the numerical value is correct, the rational form is bloated to the point of being unusable.
+
+**Lesson:**  
+When optimizing transcendental functions, you cannot consider a function in isolation. One must account for the impact of the result's representation on subsequent operations. In this case, a win in a micro-benchmark (a slightly faster `exp`) turned into a loss in real-world scenarios. The reduction threshold remains 2.0.
+
+## 2. Square root (`series_sqrt` and `try_exact_nth_root`)
+
+**Problem 1:**  
+`sqrt` in Delta was 1.5–2.5 times slower than a naive implementation due to:
+- Checking for exact squares (`try_exact_nth_root`) with binary search (many exponentiations).
+- Unnecessary conversions between `Value` ↔ `double` and `std::sqrt`.
+- Complex scaling logic even for ordinary numbers.
+
+**Optimization attempt 1:**  
+Replaced binary search with integer Newton's method and added fast filters (`mod256`, `mod10`).  
+**Result:** speedup from 59→54 µs (at 1e-80), but the gap with naive (26 µs) remained.
+
+**Problem 2:**  
+Temporarily disabled the exact root check to measure pure `series_sqrt` time.  
+**Result:** `sqrt` was still slower than naive (56 vs 31 µs at 1e-80). This meant the problem was inside `series_sqrt`.
+
+**Optimization attempt 2:**  
+Simplified `series_sqrt`: for ordinary numbers, removed `double` and `std::sqrt`, made initial guess `x/2`.  
+**Result:** speed caught up with naive, but unexpectedly the `PiSinConsistency` test (computing `sin(π)` for high precision) hung.
+
+**Cause:**  
+To compute π in the test, `series_sqrt(10005, eps)` is used (required for the Chudnovsky formula). With the initial guess `x/2` and high precision (eps=1e-30), the number of Newton iterations increased, and more importantly, the numerators and denominators of intermediate rational numbers grew enormously. This caused π itself to be represented as a giant fraction, and the subsequent computation of `sin(π)` (which uses this π for argument reduction) slowed down catastrophically (the test hung).
+
+**Lesson:**  
+Even for `sqrt`, you need a good initial approximation (e.g., via `double`) to keep the result compact. A "bare" Newton method with a crude start generates huge rational numbers, making any further computations with this result impossible. An optimization that speeds up an isolated `sqrt` at the cost of approximation quality is unacceptable.
+
+**Final solution for `series_sqrt`:**  
+Revert to using `std::sqrt(to_double(x))` for the initial approximation in the fast path, while:
+- Removing all unnecessary scaling checks for typical numbers (fast and slow paths separated by `log2x` estimate).
+- Keeping `to_double` and `std::sqrt` only in the fast path, yielding a compact result in 2–3 iterations.
+- For extreme numbers (rare case), keep scaling, but there `to_double` will be needed anyway.
+
+## 3. General conclusions
+
+1. **Micro-benchmarks lie.** Measuring the time of an isolated function (especially if the result is unused) does not reflect real performance in the context of a chain of operations. Always verify the impact on typical usage scenarios (`exp` → `log`, `sqrt` → `sin`, etc.).
+
+2. **Rational arithmetic is not free.** The size of the numerator and denominator is critical. An optimization that leads to bloated fractions, even while preserving numerical accuracy, can render the library impractical for real-world use.
+
+3. **A good initial approximation for iterative methods (Newton) is not just about speed, but also about representation quality.** A crude initial approximation generates more iterations and larger intermediate integers, which can catastrophically affect any subsequent operations.
+
+4. **"Clever" checks (exact root) must be either very fast or optional.** If you cannot make the check cheap (e.g., via 64-bit `std::sqrt` and squaring comparison), it's better to provide a separate `exact_sqrt` function and not call it in the main `sqrt`.
+
+5. **Architectural decisions should be documented along with their consequences.** The comment for `series_exp` now explains why the threshold is 2.0, not 1.0. The comment for `series_sqrt` should explain why `std::sqrt` is used for the initial approximation and warn about the risks of replacing it.
+
+## 4. Next steps
+
+- Restore `series_sqrt` using `std::sqrt` for the fast path with a clear separation between normal/extreme numbers.
+- Keep the exact root check (`try_exact_nth_root`) in `eager_sqrt` only after a fast 64-bit path and cheap filters are implemented. For now – comment it out.
+- Add a check in `series_sqrt` that if `k == 0` and the number requires no scaling, use the initial approximation via `double` and do not execute scaling loops.
+- Update tests, ensure `PiSinConsistency` and `Sqrt2PrecisionBenchmark` run quickly.
+- Document all these lessons in the code and in this note.
+
+Thus, we not only fix the problems but also capture knowledge about which optimizations are dangerous and why.

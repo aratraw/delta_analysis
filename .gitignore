@@ -12,6 +12,9 @@ vcpkg-configuration.json
 *.sln
 *.vcxproj*
 
+# Generated documentation
+docs/doxygen/
+
 #local dev crutch-tools
 devjournal.md
 concat_codebase_to_txt.bat

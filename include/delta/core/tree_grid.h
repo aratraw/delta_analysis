@@ -1,3 +1,6 @@
+// (c) 2026 Timofey Ishimtsev.
+// Licensed under PolyForm Small Business License 1.0.0
+
 // include/delta/core/tree_grid.h
 #pragma once
 
@@ -71,6 +74,11 @@ namespace delta {
 
         /// Returns the comparator used for ordering.
         const Compare& comparator() const noexcept { return comp_; }
+
+        /// Returns a flat vector of all nodes (all addresses in the tree).
+        std::vector<value_type> collect_points() const {
+            return nodes_;   // nodes_ is std::vector<std::string>
+        }
 
         // -------------------------------------------------------------------------
         // Tree-specific methods
@@ -161,6 +169,5 @@ namespace delta {
     };
 
     // Verify that TreeGrid satisfies the GridConcept with std::string addresses.
-    static_assert(GridConcept<TreeGrid<>, std::string>);
-
+    static_assert(OrderedGrid<TreeGrid<>>);
 } // namespace delta

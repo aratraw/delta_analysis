@@ -36,7 +36,7 @@ endif()
 find_package(Boost REQUIRED)          # Boost libraries (headers mostly)
 find_package(Eigen3 REQUIRED)         # Eigen3 for linear algebra
 find_package(fmt CONFIG REQUIRED)     # fmtlib for formatting
-
+find_package(absl CONFIG REQUIRED)    # migration from pure multiprecision.
 # 4. Google Test (included once for the whole project)
 include(FetchContent)
 set(gtest_force_shared_crt ON CACHE BOOL "" FORCE)   # Ensure consistent CRT with MSVC
@@ -58,6 +58,8 @@ target_link_libraries(delta_core INTERFACE
     Eigen3::Eigen
     OpenMP::OpenMP_CXX
     fmt::fmt
+    absl::int128
+    absl::strings 
 )
 
 if(MSVC)
@@ -67,19 +69,34 @@ if(MSVC)
     target_compile_definitions(delta_core INTERFACE EIGEN_HAS_OPENMP)
 endif()
 
-# Option to select static vs dynamic rational backend (see delta/core/rational.h)
-option(DELTA_USE_STATIC_RATIONAL "Use static rational with fixed bit width" OFF)
-if(DELTA_USE_STATIC_RATIONAL)
-    target_compile_definitions(delta_core INTERFACE DELTA_RATIONAL_BITS=256)
-endif()
 
 # Helper variable: directory containing the MSVC compiler (used for DLL discovery in tests)
 get_filename_component(MSVC_BIN_DIR ${CMAKE_CXX_COMPILER} DIRECTORY CACHE INTERNAL "")
 
+
+
+# Явно указываем стандарт C++20 для всех таргетов
+set(CMAKE_CXX_STANDARD 20)
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
+set(CMAKE_CXX_EXTENSIONS OFF)
+
+# Для MSVC включаем /std:c++20 и /permissive- для строгого соответствия стандарту
+#if(MSVC)
+#    add_compile_options(/std:c++20 /permissive-)
+#        add_compile_options(/showIncludes-)
+#        set(CMAKE_MSVC_SHOW_INCLUDES OFF CACHE BOOL "" FORCE)
+#endif()
+
+# Добавляем определение макроса для тестов
+add_compile_definitions($<$<CONFIG:Debug>:_DEBUG>)
+
 # Add subdirectories for tests, examples, and benchmarks
+add_subdirectory("tests/rational")
 add_subdirectory("tests/basic")
 add_subdirectory("tests/calculus")
 add_subdirectory("tests/regulative_ideas")
+add_subdirectory("tests/geometry")
 add_subdirectory("tests/numerical")
-add_subdirectory("examples/arbitrary_regulative_ideas")
+#add_subdirectory("tests/solvers")
+#add_subdirectory("examples/arbitrary_regulative_ideas")
 add_subdirectory("benchmarks")

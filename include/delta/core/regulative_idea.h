@@ -1,8 +1,13 @@
+// (c) 2026 Timofey Ishimtsev.
+// Licensed under PolyForm Small Business License 1.0.0
+
 // include/delta/core/regulative_idea.h
 #pragma once
 
 #include <concepts>
 #include <functional>
+#include <array>
+#include <cmath>
 #include <Eigen/Dense>
 #include "rational.h"
 
@@ -152,18 +157,58 @@ namespace delta {
 
     /**
      * @struct EuclideanMetric
-     * @brief Euclidean (absolute) distance: `|a - b|`.
-     *
-     * Uses `std::abs` and works for arithmetic types.
+     * @brief Euclidean (absolute) distance: |a - b| for scalars, norm for vectors/matrices.
      */
     struct EuclideanMetric {
+        // Для арифметических типов (int, size_t, double и т.д.)
         template<typename T>
-        auto operator()(const T& a, const T& b) const {
+        std::enable_if_t<std::is_arithmetic_v<T>, T>
+            operator()(const T& a, const T& b) const {
             using std::abs;
             return abs(a - b);
         }
+
+        // Для Rational
+        Rational operator()(const Rational& a, const Rational& b) const {
+            using delta::abs;
+            return abs(a - b);
+        }
+
+        // Для Eigen-векторов и матриц
+        template<typename Derived>
+        typename Derived::Scalar operator()(const Eigen::MatrixBase<Derived>& a,
+            const Eigen::MatrixBase<Derived>& b) const {
+            return (a - b).norm();
+        }
+
+        // Для std::array<T, N>, где T — арифметический тип
+        template<typename T, std::size_t N>
+        std::enable_if_t<std::is_arithmetic_v<T>, T>
+            operator()(const std::array<T, N>& a, const std::array<T, N>& b) const {
+            T sum_sq{ 0 };
+            for (std::size_t i = 0; i < N; ++i) {
+                T diff = a[i] - b[i];
+                sum_sq = sum_sq + diff * diff;
+            }
+            using std::sqrt;
+            return sqrt(sum_sq);
+        }
+
+        // Для std::array<Rational, N> (специализация для Rational)
+        template<std::size_t N>
+        Rational operator()(const std::array<Rational, N>& a, const std::array<Rational, N>& b) const {
+            Rational sum_sq{ 0 };
+            for (std::size_t i = 0; i < N; ++i) {
+                Rational diff = a[i] - b[i];
+                sum_sq = sum_sq + diff * diff;
+            }
+            using delta::sqrt;
+            return sqrt(sum_sq);
+        }
     };
     static_assert(Metric<EuclideanMetric, int>);
+    static_assert(Metric<EuclideanMetric, Rational>);
+    static_assert(Metric<EuclideanMetric, Eigen::Vector2d>);
 
     /**
      * @struct LinearBetweenness
@@ -206,7 +251,7 @@ namespace delta {
     };
 
     // -----------------------------------------------------------------------------
-    // Metrics
+    // Additional metrics
     // -----------------------------------------------------------------------------
 
     /**
@@ -229,11 +274,11 @@ namespace delta {
      * the length of the longest common prefix.
      */
     struct StringUltrametric {
-        double operator()(const std::string& a, const std::string& b) const {
-            if (a == b) return 0.0;
+        Rational operator()(const std::string& a, const std::string& b) const {
+            if (a == b) return Rational(0);
             size_t common = 0;
             while (common < a.size() && common < b.size() && a[common] == b[common]) ++common;
-            return std::pow(2.0, -static_cast<double>(common));
+            return Rational(1) / delta::pow(Rational(2), static_cast<int>(common));
         }
     };
 
@@ -252,16 +297,16 @@ namespace delta {
     template<int p>
     struct PAdicMetric {
         static_assert(p >= 2, "p must be a prime");
-        double operator()(const Rational& a, const Rational& b) const {
+        Rational operator()(const Rational& a, const Rational& b) const {
             Rational diff = a - b;
-            if (diff == 0) return 0.0;
+            if (diff == 0) return Rational(0);
             int v = 0;
             Rational r = diff;
             while (r % p == 0) {
                 ++v;
                 r /= p;
             }
-            return std::pow(static_cast<double>(p), -v);
+            return Rational(1) / delta::pow(Rational(p), v);
         }
     };
 
@@ -271,12 +316,28 @@ namespace delta {
      */
     struct DiscreteMetric {
         template<typename T>
-        double operator()(const T& a, const T& b) const {
-            return (a == b) ? 0.0 : 1.0;
+        Rational operator()(const T& a, const T& b) const {
+            return (a == b) ? Rational(0) : Rational(1);
         }
     };
 
-    // Compile‑time checks that the provided types satisfy the required concepts.
+    // -----------------------------------------------------------------------------
+    // Convenience functions
+    // -----------------------------------------------------------------------------
+
+    template<typename RI, typename Addr>
+    auto distance(const RI& idea, const Addr& a, const Addr& b) {
+        return idea.metric(a, b);
+    }
+
+    template<typename RI, typename Addr>
+    bool between(const RI& idea, const Addr& x, const Addr& y, const Addr& z) {
+        return idea.betweenness(x, y, z);
+    }
+
+    // -----------------------------------------------------------------------------
+    // Compile-time checks
+    // -----------------------------------------------------------------------------
     static_assert(Betweenness<TreeBetweenness, std::string>);
     static_assert(Metric<FrobeniusMetric, Eigen::MatrixXd>);
     static_assert(Metric<StringUltrametric, std::string>);
