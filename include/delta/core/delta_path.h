@@ -2,6 +2,79 @@
 // Licensed under PolyForm Small Business License 1.0.0
 
 // include/delta/core/delta_path.h
+// =============================================================================
+// ON THE NECESSITY OF NON‑MIDPOINT STRATEGIES (e.g. λ = 1/3)
+// =============================================================================
+//
+// Δ‑analysis does not prescribe *how* a new point is inserted into an interval,
+// only *that* it is done in a way consistent with the chosen betweenness.
+// The ubiquitous choice λ = 1/2 (dyadic refinement) is an engineering
+// compromise: it guarantees uniform grids (if the initial grid is uniform),
+// keeps indexing trivial (powers of two), and distributes information
+// symmetrically.  For the vast majority of applications this is perfectly
+// sufficient.
+//
+// However, there are narrow but high‑value niches where a fixed λ ≠ 1/2
+// (or even a λ that varies from level to level) is not a luxury but a
+// practical necessity:
+//
+// 1.  **Suppression of spurious oscillations**
+//     Symmetric dyadic refinement can interact with the discrete operators
+//     (gradient, Laplacian) and excite non‑physical “ringing” on coarse
+//     grids.  Inserting points closer to the left (λ = 1/3) or right
+//     (λ = 2/3) end of the interval acts as a numerical damper, breaking
+//     the artificial symmetry that feeds the instability.  In computational
+//     fluid dynamics and financial option pricing such an asymmetric stencil
+//     may be the only way to obtain a clean solution without resorting to
+//     unphysical artificial viscosity.
+//
+// 2.  **Specialised quadrature rules**
+//     The standard Riemann sums with dyadic spacing converge algebraically
+//     with the grid spacing.  For certain classes of integrands (those with
+//     boundary singularities, rapidly oscillating phases, or specific
+//     algebraic decay) the convergence order can be improved dramatically
+//     by aligning the grid points with the roots of orthogonal polynomials
+//     (Gauss–Lobatto, Chebyshev nodes).  A refinement operator with
+//     λ = (√5‑1)/2 (golden ratio) or λ = 1/3 produces a grid that is
+//     “tuned” to the integrand’s behaviour, approaching the exact integral
+//     with far fewer points.
+//
+// 3.  **Breaking artificial lattice symmetry**
+//     In solid‑state physics and quantum chemistry the regular dyadic grid
+//     imposes a cubic (or hyper‑cubic) symmetry that does not exist in the
+//     physical system.  This artificial symmetry introduces false level
+//     degeneracies and spurious resonances.  A seemingly innocent shift of
+//     the insertion point (e.g. λ = cos(π/7)) destroys the unwanted
+//     symmetry and restores the correct spectral structure of the
+//     Hamiltonian, often at a fraction of the cost of a full non‑uniform
+//     mesh adaptation.
+//
+// ⚠️  **Key property: grids are always nested**
+//     The refinement algorithm **never removes** old addresses; it only
+//     inserts new points between existing ones.  As a result, for *any*
+//     choice of λ (including irrational values), the sequence of grids is
+//     strictly nested:  S₀ ⊂ S₁ ⊂ S₂ ⊂ … .  Old function values remain
+//     valid and do not need to be re‑computed; only values at the newly
+//     inserted points must be evaluated.
+//
+//     The distinction between λ = 1/2 and λ ≠ 1/2 is therefore **not** about
+//     nesting but about **uniformity** of the resulting grids.  A λ ≠ 1/2
+//     generally produces non‑uniform grids, which complicates the
+//     construction of finite‑difference operators (e.g., the five‑point
+//     Laplacian requires a modified stencil).  For this reason the default
+//     operator is MidpointOperator, which preserves uniformity and allows
+//     simple, fast stencils.
+//
+// BOTTOM LINE
+//   The architecture of DeltaPath intentionally leaves the refinement
+//   operator as a template parameter (via the Strategy).  The library
+//   ships with MidpointOperator as a safe, fast, and mathematically
+//   convenient default, but **deliberately does not prohibit** the user
+//   from plugging in FixedLambdaOperator, DynamicLambdaOperator, or a
+//   custom operator.  This is not an accidental flexibility – it is a
+//   first‑class design decision that acknowledges that “the middle” is
+//   not always the most informative place to look.
+// =============================================================================
 #pragma once
 
 #include <vector>

@@ -63,11 +63,12 @@ namespace delta {
      * @tparam Addr      Address type.
      * @tparam Value     Function value type.
      * @tparam Grid      Grid type (must satisfy GridConcept<Grid, Addr>).
-     * @tparam Compare   Comparison functor for addresses (default std::less<Addr>).
+     * @tparam Compare   Comparison functor for addresses (default typename Grid::comparator_type).
      */
     template<typename Addr, typename Value, typename Grid,
-        typename Compare = std::less<Addr>>
+        typename Compare = typename Grid::comparator_type>
         class OperationalFunction {
+            //DEV NOTE: IF WE DEFAULT TO GRID-PROVIDED COMPARATOR, DO WE STILL NEED TO PASS IT TO OpFunc AS TEPLATE PARAMETER?
         public:
             /// Type of the interpolation callable: (left, right, f(left), f(right)) -> value at midpoint.
             using Interpolator = std::function<Value(const Addr&, const Addr&,

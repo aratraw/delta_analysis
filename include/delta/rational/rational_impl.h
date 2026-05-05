@@ -67,6 +67,7 @@
 #include <vector>
 #include <algorithm>
 #include <functional>
+#include <cmath> 
 
 namespace delta {
 
@@ -218,6 +219,79 @@ namespace delta {
     }
 
     inline Rational::Rational(internal::Value val) : storage_(std::move(val)) {}
+    // ---------------------------------------------------------------------------
+    // Smart Conversion double -> Rational Value through continued fraction
+    // ---------------------------------------------------------------------------
+    // ---------------------------------------------------------------------------
+    // Rational(double) – a pragmatic exception to the "no doubles" rule
+    // ---------------------------------------------------------------------------
+    //
+    // The library's core philosophy is that exact rational arithmetic must never
+    // be compromised by floating‑point noise.  Hence we deliberately avoid
+    // implicit conversions from double in all user‑facing APIs.
+    //
+    // HOWEVER, deep Eigen integration (beyond simple matrix storage) occasionally
+    // requires a scalar type to be constructible from double — some internal Eigen
+    // routines initialise temporary values as 0.0 or 1.0, and certain solvers
+    // (e.g. SparseLU) insist on this capability.  Without this constructor those
+    // components fail to compile.
+    //
+    // The constructor uses a *continued‑fraction algorithm* with early stopping
+    // at a deliberately coarse tolerance (~1e‑5).  Why so coarse?
+    //
+    //   • Eigen only ever feeds us trivial values — 0.0, 1.0, 0.5 — numbers that
+    //     any sane person would instantly recognise as rational.
+    //   • We TRUST that nobody in their right mind would use this constructor to
+    //     convert 0.142857142857… into a rational.  If you possess a complicated
+    //     decimal, use a string literal ("0.1"_r, "1/7"_r) — that guarantees
+    //     exact representation and keeps your intentions clear.
+    //   • Stopping early means we never chase the garbage bits that IEEE 754
+    //     doubles inevitably accumulate for decimal fractions.  Those trailing
+    //     digits are noise, not signal, and a faithful conversion would produce
+    //     a hideous 10⁵⁸‑digit fraction that poisons every subsequent arithmetic
+    //     operation.
+    //
+    // In short: the constructor is an emergency exit for Eigen.  It will cleanly
+    // recognise 0.0, 1.0, 0.5, and equally simple values.  For everything else
+    // there is the string literal.  Keep it that way.
+    // ---------------------------------------------------------------------------
+    inline internal::Value Rational::convert_smart(double val, double eps) {
+        using internal::dumb_int;
+        if (std::isnan(val) || std::isinf(val))
+            return internal::Value(0);
+
+        double x = val;
+        double a = std::floor(x);
+
+        dumb_int h_prev = 1, h_curr = static_cast<long long>(a);
+        dumb_int k_prev = 0, k_curr = 1;
+
+        while (std::abs(val - static_cast<double>(h_curr) / static_cast<double>(k_curr)) > eps) {
+            double diff = x - a;
+            if (std::abs(diff) < 1e-12) break;   // практически целое число
+
+            x = 1.0 / diff;
+            a = std::floor(x);
+
+            // защита от переполнения разрядности long long
+            if (a > 1e15) break;
+
+            dumb_int h_next = static_cast<long long>(a) * h_curr + h_prev;
+            dumb_int k_next = static_cast<long long>(a) * k_curr + k_prev;
+
+            h_prev = h_curr;
+            h_curr = h_next;
+            k_prev = k_curr;
+            k_curr = k_next;
+
+            // дополнительная страховка от неограниченного роста
+            if (k_curr > dumb_int("1000000000000000")) break;
+        }
+
+        // rational_adaptor сам сократит дробь
+        return internal::Value(h_curr, k_curr);
+    }
+    inline Rational::Rational(double v) : storage_(convert_smart(v)) {}
 
     // ----------------------------------------------------------------------------
     // Copy, move, destructor

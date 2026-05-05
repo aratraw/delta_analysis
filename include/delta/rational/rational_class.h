@@ -70,7 +70,7 @@ namespace delta {
         // Throws if denominator == 0.
         explicit Rational(long long num, long long den);
 
-        // Constructors from Boost.Multiprecision cpp_int.
+        // Constructors from Boost.Multiprecision cpp_int.//actually should ban these to not tempt fate...
         explicit Rational(const boost::multiprecision::cpp_int& num);
         explicit Rational(const boost::multiprecision::cpp_int& num, const boost::multiprecision::cpp_int& den);
 
@@ -83,7 +83,7 @@ namespace delta {
 
         // Internal constructor from Value (used by eager transcendental functions).
         explicit Rational(internal::Value val);
-
+        Rational(double v);
         // Copy and move
         Rational(const Rational&);
         Rational(Rational&&) noexcept;
@@ -162,7 +162,7 @@ namespace delta {
 
     private:
         internal::Value storage_;   // the actual rational data
-
+        static internal::Value convert_smart(double val, double eps = 1e-5);
         // Friends that need access to storage_ for eager transcendentals
         friend Rational eager_sqrt(const Rational& x, const Rational& eps);
         friend Rational eager_exp(const Rational& x, const Rational& eps);
