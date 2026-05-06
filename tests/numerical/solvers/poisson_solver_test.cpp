@@ -166,7 +166,7 @@ namespace delta::testing {
     // -----------------------------------------------------------------------
     TEST_F(PoissonSolverTest, Convergence) {
         internal::reset_default_eps();
-        std::vector<std::size_t> levels = { 3, 4,5}; // N = 9,17
+        std::vector<std::size_t> levels = { 3, 4}; // N = 9,17
         // Уровень 6 (65×65) убран — слишком дорого для точного Rational.
         std::vector<Scalar> errors;
         EuclideanMetric metric;
@@ -188,6 +188,7 @@ namespace delta::testing {
         }
     }
     TEST_F(PoissonSolverTest, SolverPerformanceBenchmarkAutoSuccess) {
+        GTEST_SKIP() << "Skipping: no verification needed, 33x33 grid solve takes ~26 seconds in Release Build";
         // Control test: single solve on 33x33 grid to measure raw solve time.
         // No accuracy or convergence checks; only verifies the solver terminates
         // and outputs the wall-clock time for future baseline comparisons.

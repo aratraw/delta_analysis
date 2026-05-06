@@ -10,7 +10,7 @@ add_executable(delta_tests_numerical
 #    cotangent_laplacian_test.cpp
 # "boundary_conditions_test.cpp" 
  "solvers/poisson_solver_test.cpp"
-)
+ "solvers/heat_solver_test.cpp")
 
 target_include_directories(delta_tests_numerical PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/..)
 

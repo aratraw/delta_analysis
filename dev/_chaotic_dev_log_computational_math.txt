@@ -530,3 +530,4 @@ Indirect evidence was that all **other** tests on forms (`d²=0`, `WedgeProductO
 
 **Entry made:** 30.04.2026  
 **Context:** Completion of stage 2 (discrete forms and DEC) for 0‑forms and 1‑forms on the barycentric dual.
+---
