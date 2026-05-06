@@ -45,6 +45,37 @@
 //    - Temporal convergence of Implicit Euler (first‑order, error dominated
 //      by time even on a 9×9 grid).
 //    - Spatial convergence (CN with very fine Δt, varying spatial resolution).
+//    - Explicit Euler with a stable step (sanity check).
+//    - Long‑time decay to zero (qualitative behaviour).
+//
+// ---------------------------------------------------------------------------
+// CRITICAL NOTE ON TRANSCENDENTAL PRECISION AND RATIONAL NUMBER SIZE
+// ---------------------------------------------------------------------------
+// The library computes transcendental functions (sin, exp, pi) with a
+// controllable absolute error bound (default 1e-30).  This determines the
+// number of terms in the series or the internal working precision.
+//
+//   • High precision (1e-30) → initial condition and exact solution are very
+//     faithful → discretisation error dominates, but the *difference* between
+//     numerical and exact solution is small → the fractions that appear in
+//     the L2 error remain compact → error calculation is fast.
+//
+//   • Lower precision (e.g. 1e-12) → transcendental approximations are
+//     coarser → the discretisation error gets “polluted” by a larger
+//     approximation error → the difference sol − u_ex becomes larger and,
+//     crucially, involves fractions with huge numerators/denominators once
+//     squared and summed.  The subsequent GCD reductions and sqrt cause
+//     *dramatic* slowdown (we observed 25 s → 150 s for SpatialConvergence).
+//
+// Therefore:
+//   – Tests that compute a quantitative L2 error (TemporalConvergenceImplicitEuler,
+//     SpatialConvergence) MUST keep the default high precision to avoid
+//     pathological growth of rational numbers.  Do NOT lower the precision
+//     in these tests.
+//   – Tests that only need a rough bound (ExplicitEulerStableStep: < 0.05,
+//     DecayToZero: < 0.1) CAN use a coarser precision because the error
+//     value is not used further and the rational numbers stay small enough
+//     for a single comparison.
 //
 // ---------------------------------------------------------------------------
 // GUARANTEE
@@ -76,6 +107,9 @@ namespace delta::testing {
         using Path1D = UniformDeltaPath<Scalar>;
         using Path2D = geometry::ProductDeltaPath<Path1D, Path1D>;
 
+        // -------------------------------------------------------------------
+        //  Grid & exact solution infrastructure
+        // -------------------------------------------------------------------
         Path2D make_uniform_path(std::size_t m) {
             Path1D path1d(0_r, 1_r, 2);
             for (std::size_t i = 0; i < m; ++i) path1d.advance();
@@ -83,9 +117,12 @@ namespace delta::testing {
         }
 
         Scalar pi_val() const {
-            static Scalar pi = delta::pi(delta::default_eps());
-            return pi;
+            // Uses the currently active default epsilon.
+            // When we need high accuracy, we do NOT call set_precision,
+            // so the original 1e-30 is used and pi is computed accordingly.
+            return delta::pi(delta::default_eps());
         }
+
         Scalar u0_func(const std::array<Scalar, 2>& pt) const {
             return delta::sin(pi_val() * pt[0]) * delta::sin(pi_val() * pt[1]);
         }
@@ -136,10 +173,22 @@ namespace delta::testing {
             }
             return delta::sqrt(error_sq);
         }
+
+        // -------------------------------------------------------------------
+        //  Precision constants (used only where safe – see test comments)
+        // -------------------------------------------------------------------
+        static inline const Scalar COARSE_PRECISION = Scalar(1, 1000000000000);   // 1e-12
+        static inline const Scalar DECAY_PRECISION = Scalar(1LL, 10000000000000000LL); // 1e-16 (safe for small grid)
     };
 
     // -----------------------------------------------------------------------
     // Temporal convergence – Implicit Euler (error must decrease with smaller dt)
+    //
+    // WHY NO set_precision HERE:
+    //   This test computes a quantitative L2 error and compares values.
+    //   Lowering the precision would inflate the discretisation error and
+    //   cause gigantic rational numbers in error_sq, slowing down the test
+    //   from ~1 s to tens of seconds.  We keep the default 1e-30.
     // -----------------------------------------------------------------------
     TEST_F(HeatSolverTest, TemporalConvergenceImplicitEuler) {
         const std::size_t m = 3;               // N = 9
@@ -169,6 +218,11 @@ namespace delta::testing {
     // -----------------------------------------------------------------------
     // Spatial convergence (Crank‑Nicolson with very fine Δt)
     // Error must be smaller on finer grid
+    //
+    // WHY NO set_precision HERE:
+    //   Same reason as above – computing L2 error on a 17×17 grid with
+    //   deflated precision causes catastrophic growth of rational numbers.
+    //   We keep the default high precision.
     // -----------------------------------------------------------------------
     TEST_F(HeatSolverTest, SpatialConvergence) {
         const Scalar T = Scalar(2, 100);        // 0.02
@@ -190,6 +244,58 @@ namespace delta::testing {
 
         // finer grid must yield smaller error
         EXPECT_LT(errors[1], errors[0]);
+    }
+
+    // -----------------------------------------------------------------------
+    // Explicit Euler with small stable step – basic sanity check
+    //
+    // WHY WE CAN USE COARSE PRECISION HERE:
+    //   We only check that the error is < 0.05.  The error value itself
+    //   is not used in further arithmetic, and the small grid (9×9) and
+    //   small number of steps keep the rational numbers manageable even
+    //   with a less accurate initial condition.
+    //   Lowering the precision speeds up the transcendental evaluations,
+    //   which is beneficial since this test is run on every commit.
+    // -----------------------------------------------------------------------
+    TEST_F(HeatSolverTest, ExplicitEulerStableStep) {
+        set_precision(COARSE_PRECISION);
+        const std::size_t m = 3;               // N = 9
+        const Scalar h = 1_r / 8_r;
+        const Scalar dt = (h * h) / 8_r;      // well below stability limit
+        const Scalar T = Scalar(1, 20);        // 0.05
+        auto path = make_uniform_path(m);
+        auto u0 = make_u0(path.current_grid());
+        auto bc = make_zero_dirichlet(path);
+        EuclideanMetric metric;
+
+        auto sol = solve_heat(path, u0, 1_r, dt, T, metric, bc, TimeScheme::EXPLICIT_EULER);
+        Scalar err = compute_L2_error(sol, path, T);
+        EXPECT_LT(err, Scalar(5, 100));         // < 0.05 – explicit works
+    }
+
+    // -----------------------------------------------------------------------
+    // Long-time decay (Implicit Euler to T=1.0) – solution must be near zero
+    //
+    // WHY WE CAN USE DECAY_PRECISION HERE:
+    //   We only check that the error is < 0.1.  The grid is small (9×9) and
+    //   the number of time steps is moderate.  Even with a slightly less
+    //   accurate initial condition, the error stays below the bound and the
+    //   rational numbers do not explode.  This test is a qualitative check
+    //   that the solution decays to zero, not a high‑precision benchmark.
+    // -----------------------------------------------------------------------
+    TEST_F(HeatSolverTest, DecayToZero) {
+        set_precision(DECAY_PRECISION);
+        const std::size_t m = 3;               // N = 9
+        const Scalar T = 1_r;                  // large time
+        const Scalar dt = Scalar(5, 100);      // 0.05, 20 steps
+        auto path = make_uniform_path(m);
+        auto u0 = make_u0(path.current_grid());
+        auto bc = make_zero_dirichlet(path);
+        EuclideanMetric metric;
+
+        auto sol = solve_heat(path, u0, 1_r, dt, T, metric, bc, TimeScheme::IMPLICIT_EULER);
+        Scalar err = compute_L2_error(sol, path, T);
+        EXPECT_LT(err, Scalar(1, 10));   // < 0.1
     }
 
 } // namespace delta::testing
