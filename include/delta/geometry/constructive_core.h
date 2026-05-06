@@ -244,7 +244,7 @@ namespace delta::geometry {
          * @param other Expression convertible to vector_type.
          */
         template<typename OtherDerived>
-        Vector(const Eigen::MatrixBase<OtherDerived>& other) : data_(other) {}
+        explicit Vector(const Eigen::MatrixBase<OtherDerived>& other) : data_(other) {}
 
         /**
          * @brief Construct from scalar components.
@@ -418,8 +418,9 @@ namespace delta::geometry {
      * @param b Second point.
      * @return Vector from b to a.
      */
-    template<typename Scalar, int Dim>
-    Vector<Scalar, Dim> operator-(const Point<Scalar, Dim>& a, const Point<Scalar, Dim>& b) {
+    template<typename Scalar, int Dim,
+        std::enable_if_t<(Dim > 0), int> = 0>
+        Vector<Scalar, Dim> operator-(const Point<Scalar, Dim>& a, const Point<Scalar, Dim>& b) {
         return Vector<Scalar, Dim>(a.array() - b.array());
     }
 
