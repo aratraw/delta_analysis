@@ -129,6 +129,26 @@
 
 namespace delta {
 
+    //quality-of-life utils. Не трансцендентная но лучше места для этой свободной функции пока не нашлось
+    inline Rational floor(const Rational& x) {
+        using internal::dumb_int;
+        // Если число уже целое (знаменатель = 1) — возвращаем его же
+        if (internal::is_integer(x.value())) {
+            return x;
+        }
+        dumb_int num = internal::numerator(x.value());
+        dumb_int den = internal::denominator(x.value());
+        if (num >= 0) {
+            // Положительное: просто отбрасываем дробную часть
+            return Rational(num / den);
+        }
+        else {
+            // Отрицательное: floor(-3/2) = -2  (а не -1)
+            // Классическая формула: (num - den + 1) / den
+            return Rational((num - den + 1) / den);
+        }
+    }
+
     // ----------------------------------------------------------------------------
     // Eager версии (возвращают Rational)
     // ----------------------------------------------------------------------------
