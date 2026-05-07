@@ -15,6 +15,7 @@ set(GEOMETRY_CORE_SOURCES
 
 set(GEOMETRY_ADVANCED_SOURCES
     main_tests_geometry.cpp
+    discrete_action_test.cpp
     dual_complex_test.cpp
     hat_basis_test.cpp
  discrete_forms_test.cpp

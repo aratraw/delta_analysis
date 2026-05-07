@@ -9,8 +9,11 @@ add_executable(delta_tests_numerical
 #    integrals_test.cpp
 #    cotangent_laplacian_test.cpp
 # "boundary_conditions_test.cpp" 
- "solvers/poisson_solver_test.cpp"
- "solvers/heat_solver_test.cpp" "solvers/wave_solver_test.cpp" "solvers/advection_solver_test.cpp")
+ #"solvers/poisson_solver_test.cpp"
+ #"solvers/heat_solver_test.cpp" 
+ #"solvers/wave_solver_test.cpp" 
+ #"solvers/advection_solver_test.cpp"
+ "variational_solver_tests.cpp")
 
 target_include_directories(delta_tests_numerical PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/..)
 

@@ -243,4 +243,18 @@ namespace delta::numerical::solvers {
         return M;
     }
 
+    template<typename Scalar>
+    Eigen::SparseMatrix<Scalar> assemble_laplacian_1d(std::size_t n) {
+        Eigen::SparseMatrix<Scalar> L(n, n);
+        std::vector<Eigen::Triplet<Scalar>> triplets;
+        triplets.reserve(3 * n);
+        for (std::size_t i = 0; i < n; ++i) {
+            if (i > 0)     triplets.emplace_back(i, i - 1, -1_r);
+            triplets.emplace_back(i, i, 2_r);
+            if (i + 1 < n) triplets.emplace_back(i, i + 1, -1_r);
+        }
+        L.setFromTriplets(triplets.begin(), triplets.end());
+        return L;
+    }
+
 } // namespace delta::numerical::solvers

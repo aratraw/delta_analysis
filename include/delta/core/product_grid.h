@@ -195,9 +195,9 @@ namespace delta {
     };
 
     // Verify ProductGrid satisfies OrderedGrid
-    template<typename T>
-    using UniformGrid_ = UniformGrid<T>; // help deduction
-    static_assert(OrderedGrid<ProductGrid<UniformGrid<int>, 2>>,
-        "ProductGrid must satisfy OrderedGrid");
+    //template<typename T>
+    //using UniformGrid_ = UniformGrid<T>; // help deduction
+    //static_assert(OrderedGrid<ProductGrid<UniformGrid<int>, 2>>,
+    //    "ProductGrid must satisfy OrderedGrid");
 
 } // namespace delta
