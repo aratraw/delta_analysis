@@ -23,7 +23,7 @@
 #include "delta/geometry/simplicial_complex.h"
 #include "delta/geometry/dual_complex.h"
 #include "delta/core/regulative_idea.h"
-#include "../test_fixtures_geometry_numerical.h"
+#include "../../test_fixtures_geometry_numerical.h"
 
 namespace delta::testing {
 

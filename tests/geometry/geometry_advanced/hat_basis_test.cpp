@@ -19,7 +19,7 @@
 
 #include <gtest/gtest.h>
 #include "delta/geometry/hat_basis.h"
-#include "../test_fixtures_geometry_numerical.h"
+#include "../../test_fixtures_geometry_numerical.h"
 
 namespace delta::testing {
 

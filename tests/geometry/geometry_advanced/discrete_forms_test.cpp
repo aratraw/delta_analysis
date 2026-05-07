@@ -237,7 +237,7 @@
 #include "delta/geometry/discrete_forms.h"
 #include "delta/geometry/dual_complex.h"
 #include "delta/numerical/cotangent_laplacian.h"
-#include "../test_fixtures_geometry_numerical.h"
+#include "../../test_fixtures_geometry_numerical.h"
 
 namespace delta::testing {
 

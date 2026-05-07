@@ -103,7 +103,7 @@
 #include "delta/geometry/discrete_action.h"
 #include "delta/numerical/variational_solvers.h"
 #include "delta/numerical/boundary_conditions.h"
-#include "../test_fixtures_geometry_numerical.h"
+#include "../../test_fixtures_geometry_numerical.h"
 
 namespace delta::testing {
     class DiscreteActionTest : public GeometryNumericalTest {
