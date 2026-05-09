@@ -326,11 +326,13 @@
 // Main Rational and LazyRational classses and implementation
 #include "delta/rational/rational_class.h"
 #include "delta/rational/lazy_rational.h"
+#include "delta/rational/gauss_qi.h" //gauss extension for complex numbers
 // Custom Literal (_r)
 #include "delta/rational/literals.h"
 
 // Transcendental functions (sqrt, exp, log, sin, cos, acos, pi, e, pow)
 #include "delta/rational/transcendentals.h"
+#include "delta/rational/gauss_qi_transcendentals.h"
 #include "delta/rational/context.h"
 // Eigen Integration
 #include "delta/rational/eigen_integration.h"

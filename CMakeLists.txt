@@ -88,15 +88,22 @@ set(CMAKE_CXX_EXTENSIONS OFF)
 #endif()
 
 # Добавляем определение макроса для тестов
-add_compile_definitions($<$<CONFIG:Debug>:_DEBUG>)
+#add_compile_definitions($<$<CONFIG:Debug>:_DEBUG>)
 
 # Add subdirectories for tests, examples, and benchmarks
-#add_subdirectory("tests/rational")
+add_subdirectory("tests/rational")
 #add_subdirectory("tests/basic")
 #add_subdirectory("tests/calculus")
 #add_subdirectory("tests/regulative_ideas")
-add_subdirectory("tests/geometry")
-add_subdirectory("tests/numerical")
+#add_subdirectory("tests/geometry")
+#add_subdirectory("tests/numerical")
 #add_subdirectory("tests/solvers")
 #add_subdirectory("examples/arbitrary_regulative_ideas")
 #add_subdirectory("benchmarks")
+
+
+#For speeding up performance, add the following flags to CMakePresets on Windows Release Build:
+#        "CMAKE_CXX_FLAGS_RELEASE": "/O2 /Oi /Ot /Gy /DNDEBUG /GL /Gw /arch:AVX2",
+#       "CMAKE_EXE_LINKER_FLAGS_RELEASE": "/OPT:REF /OPT:ICF /LTCG"
+# Elaboration: /GL and /LTCG flags are removed for now because 
+# building Eigen integration with them takes forever due to Eigen Expression Templates.
