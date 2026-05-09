@@ -1,151 +1,86 @@
 // (c) 2026 Timofey Ishimtsev.
 // Licensed under PolyForm Small Business License 1.0.0
 // ============================================================================
-// MATRIX TRANSCENDENTAL FUNCTIONS FOR RATIONAL AND GAUSSQI
-// ============================================================================
-// This header provides *genuine* matrix transcendental functions for
-// delta::Rational and delta::GaussQi as scalar types for Eigen::Matrix.
-//
-//   DO NOT CONFUSE WITH ELEMENT-WISE FUNCTIONS!
-//   - A.array().exp()   → element-wise exponential (uses delta::exp for each element)
-//   - delta::exp(A)     → matrix exponential (series: e^A = I + A + A²/2! + ...)
-//
-// ----------------------------------------------------------------------------
-//  SUPPORTED FUNCTIONS
-// ----------------------------------------------------------------------------
-//   exp(A)  – matrix exponential (scaling-and-squaring + Padé approximant)
-//   log(A)  – matrix logarithm (inverse scaling + Gregory series via artanh)
-//   sin(A)  – matrix sine (via exp(iA) for GaussQi, Taylor series for Rational)
-//   cos(A)  – matrix cosine (via exp(iA) for GaussQi, Taylor series for Rational)
-//   sqrt(A) – matrix square root (Denman‑Beavers iteration)
-//
-// All functions take an optional epsilon parameter of type delta::Rational.
-// Defaults to delta::default_eps() (global value, initially 1e‑30).
-//
-// ============================================================================
-//  DESIGN RATIONALE – WHY THINGS ARE DONE THIS WAY (AND NO OTHER)
+// EXPERT COMMENTARY: DESIGN TRADE-OFFS IN EIGEN INTEGRATION
 // ============================================================================
 //
-// 1. OVERLOAD DISPATCH VIA std::enable_if_t
-// ----------------------------------------------------------------------------
-//    Problem: A single sin template for all types causes the compiler to find
-//             the scalar overload (delta::sin(const Rational&)) when called
-//             with a matrix, because it's a better match.
-//    Solution: Separate overloads for Rational and GaussQi using enable_if_t.
-//              NOT in the return type (MSVC fails with C2995 – duplicate definition).
-//              Correct approach: add a dummy default template parameter:
-//                template<typename Derived, typename = std::enable_if_t<...>>
+// The code below uses a deliberate type‑erasure technique: all Eigen expressions
+// are immediately converted to dynamic matrices (DynMatRational / DynMatGaussQi)
+// before any non‑trivial computation.  This is a conscious departure from the
+// typical Eigen style of writing heavily templated functions that accept any
+// `MatrixBase<Derived>`.
 //
-// 2. FORWARD DECLARATIONS – A NECESSITY, NOT A LUXURY
-// ----------------------------------------------------------------------------
-//    Inside sin(RationalMatrix) we call cos(M/2). If the cos overload for
-//    matrices hasn't been seen yet, the compiler only finds scalar cos(Rational).
-//    Result: C2664 (cannot convert matrix to Rational).
-//    **Rule**: All sin/cos overloads for MatrixBase must be declared BEFORE
-//    they are used. Hence forward declarations after #includes.
+// ----------------------------- REASONING ---------------------------------
+// 1. Compilation time explosion
+//    Eigen's expression templates generate a distinct type for almost every
+//    arithmetic operation (sum, product, unary op, block, etc.).  When a
+//    transcendental function (exp, sin, cos) is implemented as a template
+//    that operates directly on `MatrixBase<Derived>`, the compiler must
+//    instantiate the entire algorithm for each unique expression type.
+//    For a test suite that exercises matrices of different sizes (2x2, 3x3,
+//    5x5, 10x10) and different expression forms (A, A*B, A+2*B, etc.), the
+//    number of instantiations grows combinatorially.  In practice, this
+//    leads to compilation times of several minutes for even a few source
+//    files – an unacceptable cost for iterative development.
 //
-// 3. WRAPPERS FOR ANY EIGEN EXPRESSION (EigenBase)
-// ----------------------------------------------------------------------------
-//    Users may write delta::sin(A / 2), where A/2 is a CwiseBinaryOp, not a
-//    MatrixBase. Our primary overload takes MatrixBase and cannot be selected.
-//    A wrapper is needed that accepts any EigenBase, calls .eval() (evaluates
-//    the expression into a concrete matrix), and forwards to the primary overload.
-//    **Important**: These wrappers must be declared AFTER forward declarations
-//    of the primary functions but BEFORE their implementations, so that the call
-//    to delta::sin(expr) inside the wrapper resolves to the MatrixBase overload.
+// 2. Symbolic / rational arithmetic is not a typical Eigen use case
+//    Eigen is optimised for high‑performance floating‑point linear algebra,
+//    where small fixed‑size matrices are inlined and vectorised.  Rational
+//    numbers (represented via Boost.Multiprecision) do not benefit from
+//    these optimisations; any performance gain from fixed‑size templates is
+//    dwarfed by the cost of arbitrary‑precision integer arithmetic.
+//    Moreover, rational computations often occur on matrices that are
+//    moderately large (≥ 5×5) or even dynamically sized (e.g., from physical
+//    problems, finite‑difference schemes).  The runtime overhead of dynamic
+//    allocation is negligible compared to the cost of exact arithmetic.
 //
-// 4. FAST PATH FOR DIAGONAL MATRICES
-// ----------------------------------------------------------------------------
-//    For exp and log, fast diagonal paths existed from the start (calling scalar
-//    functions). For sin/cos, it had to be added after tests revealed that
-//    Taylor series for large diagonal entries (e.g., 5) produces monstrous
-//    fractions and fails to achieve 1e-19 precision in reasonable iterations.
-//    The diagonal path calls scalar delta::sin / delta::cos (which are correct
-//    for any precision) and zeroes out off-diagonal entries.
+// 3. Code maintainability
+//    The template‑heavy approach forces the entire algorithm to be placed
+//    in headers, exposing every implementation detail and severely slowing
+//    downstream compilation.  Type‑erased implementations can be moved to
+//    regular functions, which are faster to compile and easier to debug.
+//    The only remaining template layer is a thin wrapper that converts the
+//    incoming expression to a dynamic matrix and dispatches to the concrete
+//    implementation.  This wrapper is compiled once per scalar type, not per
+//    expression.
 //
-// 5. PADÉ APPROXIMANT FOR exp (NOT TAYLOR SERIES)
-// ----------------------------------------------------------------------------
-//    Taylor series for matrix exponential requires many terms for large norms.
-//    Scaling‑and‑squaring reduces the norm to ≤0.5, then Padé (m,m) gives
-//    much better accuracy per term. Order m is chosen adaptively based on epsilon.
-//    This is the standard algorithm (Higham, 2005).
+// ----------------------------- TRADE-OFFS ---------------------------------
+// + Significantly faster compilation (but still sort of slow)
+// + Easier maintenance (algorithms written once for `DynMatRational`)
+// + Still fully generic – works with any Eigen expression because `.eval()`
+//   converts it to a dynamic matrix.
 //
-// 6. GREGORY SERIES FOR log (VIA artanh)
-// ----------------------------------------------------------------------------
-//    After reducing the matrix close to identity (X ≈ I), compute
-//    Z = (X-I)*(X+I)^{-1}, then log(X) = 2 * Σ Z^{2n+1}/(2n+1).
-//    This is equivalent to the series for arctanh and converges faster than
-//    the direct Mercator series for log. Termination criterion: absolute AND
-//    relative (prevents infinite loops when the sum is near zero).
+// – Loss of stack allocation for small fixed‑size matrices (2x2, 3x3).
+//   All matrices become heap‑allocated after conversion.
+// – Extra copy of data (the input expression must be evaluated into the
+//   dynamic matrix).  For large matrices this cost is negligible; for tiny
+//   matrices it may be measurable but still far lower than the cost of
+//   exact rational arithmetic.
+// – Cannot leverage Eigen's vectorisation for small fixed sizes (irrelevant
+//   for rational numbers).
 //
-// 7. DENMAN‑BEAVERS FOR sqrt
-// ----------------------------------------------------------------------------
-//    Iterations Y_{k+1} = (Y_k + Z_k^{-1})/2, Z_{k+1} = (Z_k + Y_k^{-1})/2
-//    converge quadratically, preserving rationality. This is preferable over
-//    eigenvalue decomposition (which would require algebraic extensions for
-//    rational arithmetic). Diagonal path uses scalar sqrt.
+// ----------------------------- APPLICABILITY -------------------------------
+// This design is highly recommended when:
+//   • The scalar type is arbitrary‑precision (rational, big integers, etc.)
+//   • Matrix sizes are not known at compile time or are moderately large
+//   • Compilation time is a critical resource (typical in CI, template‑heavy
+//     libraries, or shared codebases)
 //
-// ----------------------------------------------------------------------------
-//  CRITICAL MISTAKES WE MADE (AND HOW TO AVOID THEM)
-// ----------------------------------------------------------------------------
+// The traditional Eigen style (heavy templating) remains the best choice for:
+//   • Built‑in floating‑point types (float, double)
+//   • Very small, fixed‑size matrices (2x2, 3x3) where stack allocation and
+//     compiler optimisation matter
+//   • Performance‑critical code that must avoid any dynamic allocation
+//     overhead.
 //
-// █ Error C2664 (cannot convert Eigen expression to Rational)
-//   Cause: inside sin(RationalMatrix) we called cos(M/2), but the cos overload
-//          for matrices wasn't visible yet.
-//   Fix: Forward declarations.
+// ----------------------------- CONCLUSION ---------------------------------
+// For the `delta` library – which provides exact rational arithmetic and
+// matrix transcendental functions – the type‑erased approach is the correct
+// engineering trade‑off.  It prioritises developer productivity and
+// compilation speed over marginal runtime gains that are irrelevant for the
+// intended use cases.  The code below follows this philosophy consistently.
 //
-// █ Error C2995 (template already defined)
-//   Cause: Two sin overloads with identical signatures (both without enable_if,
-//          or both with enable_if in the return type, which MSVC treats as
-//          nondistinct).
-//   Fix: Use enable_if_t in a separate default template parameter.
-//
-// █ Error C2678 (no operator != between GaussQi and int)
-//   Cause: In is_diagonal we compared M(i,j) != 0, where 0 is int, and GaussQi's
-//          constructor from int is explicit. In rational arithmetic, zero is
-//          Scalar{} (default-constructed value).
-//   Fix: Write M(i,j) != Scalar{}.
-//
-// █ Error C1128 (too many sections) in MSVC
-//   Cause: Excessive number of COFF sections due to template instantiations.
-//   Fix: Add /bigobj compiler flag. Additionally, use precompiled headers (PCH)
-//        for Eigen and GTest.
-//
-// █ Taylor series convergence failure for sin/cos
-//   Cause: First version accumulated the denominator in a factorial variable `fact`,
-//          which grew factorially, but term was not updated recurrently.
-//   Fix: term = term * A2 / ((2k+2)*(2k+3)) – each iteration divides by the next
-//        two factors. This gives O(1) per iteration and exact fractions.
-//
-// █ Cannot pass expression like delta::sin(A / 2)
-//   Cause: A/2 is a CwiseBinaryOp, not a MatrixBase.
-//   Fix: Add wrappers for EigenBase that call .eval().
-//
-// ----------------------------------------------------------------------------
-//  INCLUSION ORDER AND MACROS (SACRED)
-// ----------------------------------------------------------------------------
-//   1. #includes (Eigen, type_traits, our headers)
-//   2. namespace delta {
-//   3.   namespace detail { ... }        // helper functions
-//   4.   // FORWARD DECLARATIONS         // exp, log, sin, cos, sqrt
-//   5.   // EigenBase wrappers
-//   6.   // IMPLEMENTATIONS              // same order as declarations
-//   7.   // (EigenBase wrappers are already declared; implemented after impls)
-//   8. }
-//
-//   Violating this order WILL cause compilation errors.
-// ----------------------------------------------------------------------------
-//  DO NOT CHANGE ANY OF THESE UNLESS YOU KNOW WHAT YOU'RE DOING
-// ----------------------------------------------------------------------------
-//   - Do NOT change the order of declarations.
-//   - Do NOT remove enable_if_t – dispatch will break.
-//   - Do NOT add implicit conversions between GaussQi and int.
-//   - Do NOT try to "speed up" sin/cos for Rational by calling exp(iA) – that
-//     would pull in complex arithmetic and be 10x slower.
-//   - Do NOT remove the fast diagonal path – tests will fail.
-//   - Do NOT replace Padé for exp with Taylor series – accuracy will suffer.
-//   - Do NOT remove the relative convergence criterion in Gregory series –
-//     it may loop forever.
+// ============================================================================
 #pragma once
 
 #include <Eigen/Dense>
@@ -158,29 +93,59 @@
 
 namespace delta {
 
-    // ------------------------------------------------------------------------
-    // Helpers
-    // ------------------------------------------------------------------------
+    // ========================================================================
+    // TYPE-ERASED IMPLEMENTATIONS
+    // ========================================================================
     namespace detail {
-        template<typename Matrix>
-        Rational matrix_max_norm(const Matrix& M) {
+
+        using DynMatRational = Eigen::Matrix<Rational, Eigen::Dynamic, Eigen::Dynamic>;
+        using DynMatGaussQi = Eigen::Matrix<GaussQi, Eigen::Dynamic, Eigen::Dynamic>;
+
+        // --------------------------------------------------------------------
+        // Helpers for Rational
+        // --------------------------------------------------------------------
+        inline Rational matrix_max_norm(const DynMatRational& M) {
             Rational max_abs = 0;
             for (int i = 0; i < M.rows(); ++i)
-                for (int j = 0; j < M.cols(); ++j)
-                    max_abs = std::max(max_abs, delta::abs(M(i, j)));
+                for (int j = 0; j < M.cols(); ++j) {
+                    Rational val = delta::abs(M(i, j));
+                    if (max_abs < val) max_abs = val;
+                }
             return max_abs;
         }
 
-        template<typename Matrix>
-        bool is_diagonal(const Matrix& M) {
-            using Scalar = typename Matrix::Scalar;
+        inline bool is_diagonal(const DynMatRational& M) {
             const int n = M.rows();
             for (int i = 0; i < n; ++i)
                 for (int j = 0; j < n; ++j)
-                    if (i != j && M(i, j) != Scalar{}) return false;
+                    if (i != j && M(i, j) != Rational{}) return false;
             return true;
         }
 
+        // --------------------------------------------------------------------
+        // Helpers for GaussQi
+        // --------------------------------------------------------------------
+        inline Rational matrix_max_norm(const DynMatGaussQi& M) {
+            Rational max_abs = 0;
+            for (int i = 0; i < M.rows(); ++i)
+                for (int j = 0; j < M.cols(); ++j) {
+                    Rational val = delta::abs(M(i, j));
+                    if (max_abs < val) max_abs = val;
+                }
+            return max_abs;
+        }
+
+        inline bool is_diagonal(const DynMatGaussQi& M) {
+            const int n = M.rows();
+            for (int i = 0; i < n; ++i)
+                for (int j = 0; j < n; ++j)
+                    if (i != j && M(i, j) != GaussQi{}) return false;
+            return true;
+        }
+
+        // --------------------------------------------------------------------
+        // Common
+        // --------------------------------------------------------------------
         inline int pade_order(const Rational& eps) {
             double d = eps.to_double();
             if (d <= 0) return 16;
@@ -193,338 +158,441 @@ namespace delta {
             return 16;
         }
 
-        template<typename Matrix>
-        Matrix exp_diagonal(const Matrix& M, const Rational& eps) {
-            Matrix R = Matrix::Zero(M.rows(), M.cols());
-            for (int i = 0; i < M.rows(); ++i)
-                R(i, i) = delta::exp(M(i, i), eps);
-            return R;
+        // ================================================================
+        // RATIONAL — forward declarations for mutual recursion
+        // ================================================================
+        DynMatRational sin_rational(const DynMatRational& A, const Rational& eps);
+        DynMatRational cos_rational(const DynMatRational& A, const Rational& eps);
+
+        // ================================================================
+        // RATIONAL
+        // ================================================================
+
+        inline DynMatRational exp_rational(const DynMatRational& A, const Rational& eps) {
+            DynMatRational M = A;
+            if (is_diagonal(M)) {
+                DynMatRational R = DynMatRational::Zero(M.rows(), M.cols());
+                for (int i = 0; i < M.rows(); ++i)
+                    R(i, i) = delta::exp(M(i, i), eps);
+                return R;
+            }
+
+            Rational normM = matrix_max_norm(M);
+            int k = 0;
+            Rational two_pow_k = 1;
+            const Rational half = Rational(1, 2);
+            while (normM / two_pow_k > half) {
+                two_pow_k *= 2;
+                ++k;
+            }
+            DynMatRational A_scaled = (M / two_pow_k).eval();
+
+            int m = pade_order(eps);
+            std::vector<Rational> c(m + 1);
+            c[0] = 1;
+            for (int j = 1; j <= m; ++j)
+                c[j] = c[j - 1] * Rational(m - j + 1) / Rational((2 * m - j + 1) * j);
+
+            DynMatRational A_pow = DynMatRational::Identity(M.rows(), M.cols());
+            DynMatRational P = DynMatRational::Zero(M.rows(), M.cols());
+            DynMatRational Q = DynMatRational::Zero(M.rows(), M.cols());
+
+            for (int j = 0; j <= m; ++j) {
+                if (c[j] != 0) {
+                    P += c[j] * A_pow;
+                    Q += ((j % 2 == 0) ? c[j] : -c[j]) * A_pow;
+                }
+                if (j < m) A_pow = (A_pow * A_scaled).eval();
+            }
+
+            DynMatRational E = Q.partialPivLu().solve(P);
+            for (int i = 0; i < k; ++i) E = (E * E).eval();
+            return E;
         }
 
-        template<typename Matrix>
-        Matrix log_diagonal(const Matrix& M, const Rational& eps) {
-            Matrix R = Matrix::Zero(M.rows(), M.cols());
-            for (int i = 0; i < M.rows(); ++i)
-                R(i, i) = delta::log(M(i, i), eps);
-            return R;
+        inline DynMatRational log_rational(const DynMatRational& A, const Rational& eps) {
+            DynMatRational M = A;
+            if (M.determinant() == Rational{})
+                throw std::domain_error("matrix::log: singular matrix");
+            if (is_diagonal(M)) {
+                DynMatRational R = DynMatRational::Zero(M.rows(), M.cols());
+                for (int i = 0; i < M.rows(); ++i)
+                    R(i, i) = delta::log(M(i, i), eps);
+                return R;
+            }
+
+            Rational log2 = delta::log(Rational(2), eps);
+            DynMatRational X = M;
+            int k = 0;
+            const int max_scale = 100;
+            DynMatRational I = DynMatRational::Identity(M.rows(), M.cols());
+            const Rational half = Rational(1, 2);
+
+            while (true) {
+                DynMatRational diff = (X - I).eval();
+                Rational norm_diff = matrix_max_norm(diff);
+                if (!(norm_diff > half)) break;
+                X = (X / 2).eval();
+                ++k;
+                if (k > max_scale)
+                    throw std::runtime_error("matrix::log: scaling did not converge");
+            }
+
+            DynMatRational X_minus_I = (X - I).eval();
+            DynMatRational X_plus_I = (X + I).eval();
+            DynMatRational Z = (X_minus_I * X_plus_I.partialPivLu().inverse()).eval();
+
+            DynMatRational Z2 = (Z * Z).eval();
+            DynMatRational Z_pow = Z;
+            DynMatRational sum = Z_pow;
+            for (int n = 1; n <= 1000000; ++n) {
+                Z_pow = (Z_pow * Z2).eval();
+                DynMatRational term = (Z_pow / Rational(2 * n + 1)).eval();
+                sum += term;
+                Rational norm_term = matrix_max_norm(term);
+                Rational norm_sum = matrix_max_norm(sum);
+                if (!(norm_term > eps) && !(norm_term > eps * (norm_sum + 1)))
+                    break;
+            }
+            sum = (sum * 2).eval();
+            return (I * Rational(k) * log2 + sum).eval();
         }
-    }
+
+        inline DynMatRational sin_rational(const DynMatRational& A, const Rational& eps) {
+            DynMatRational M = A;
+            if (is_diagonal(M)) {
+                DynMatRational R = DynMatRational::Zero(M.rows(), M.cols());
+                for (int i = 0; i < M.rows(); ++i)
+                    R(i, i) = delta::sin(M(i, i), eps);
+                return R;
+            }
+            Rational pi = delta::pi(eps);
+            Rational normM = matrix_max_norm(M);
+
+            if (normM > pi) {
+                DynMatRational half_M = (M / 2).eval();
+                DynMatRational half_sin = sin_rational(half_M, eps);
+                DynMatRational half_cos = cos_rational(half_M, eps);
+                return (2 * half_sin * half_cos).eval();
+            }
+
+            DynMatRational result = DynMatRational::Zero(M.rows(), M.cols());
+            DynMatRational term = M;
+            DynMatRational A2 = (M * M).eval();
+            Rational sign = 1;
+            const int max_iter = 10000;
+
+            for (int k = 0; k < max_iter; ++k) {
+                result += sign * term;
+                Rational norm_term = matrix_max_norm(term);
+                Rational norm_result = matrix_max_norm(result);
+                if (norm_term <= eps && norm_term <= eps * (norm_result + 1))
+                    break;
+
+                sign = -sign;
+                // Рекуррентный знаменатель для следующего члена: (2k+2)*(2k+3)
+                Rational denom = Rational(2 * k + 2) * Rational(2 * k + 3);
+                term = (term * A2 / denom).eval();
+            }
+            return result;
+        }
+
+        inline DynMatRational cos_rational(const DynMatRational& A, const Rational& eps) {
+            DynMatRational M = A;
+            if (is_diagonal(M)) {
+                DynMatRational R = DynMatRational::Zero(M.rows(), M.cols());
+                for (int i = 0; i < M.rows(); ++i)
+                    R(i, i) = delta::cos(M(i, i), eps);
+                return R;
+            }
+            Rational pi = delta::pi(eps);
+            Rational normM = matrix_max_norm(M);
+
+            if (normM > pi) {
+                DynMatRational half_M = (M / 2).eval();
+                DynMatRational half_sin = sin_rational(half_M, eps);
+                DynMatRational half_cos = cos_rational(half_M, eps);
+                return (half_cos * half_cos - half_sin * half_sin).eval();
+            }
+
+            DynMatRational result = DynMatRational::Identity(M.rows(), M.cols());
+            DynMatRational term = DynMatRational::Identity(M.rows(), M.cols());
+            DynMatRational A2 = (M * M).eval();
+            Rational sign = -1;
+            const int max_iter = 10000;
+
+            for (int k = 1; k <= max_iter; ++k) {
+                // Рекуррентный знаменатель для члена с k: (2k-1)*(2k)
+                Rational denom = Rational(2 * k - 1) * Rational(2 * k);
+                term = (term * A2 / denom).eval();
+                result += sign * term;
+
+                Rational norm_term = matrix_max_norm(term);
+                Rational norm_result = matrix_max_norm(result);
+                if (norm_term <= eps && norm_term <= eps * (norm_result + 1))
+                    break;
+
+                sign = -sign;
+            }
+            return result;
+        }
+        inline DynMatRational sqrt_rational(const DynMatRational& A, const Rational& eps) {
+            DynMatRational M = A;
+            if (is_diagonal(M)) {
+                DynMatRational R = DynMatRational::Zero(M.rows(), M.cols());
+                for (int i = 0; i < M.rows(); ++i)
+                    R(i, i) = delta::sqrt(M(i, i), eps);
+                return R;
+            }
+
+            DynMatRational Y = M;
+            DynMatRational Z = DynMatRational::Identity(M.rows(), M.cols());
+            const int max_iter = 1000;
+            for (int iter = 0; iter < max_iter; ++iter) {
+                DynMatRational Y_inv = Y.partialPivLu().inverse();
+                DynMatRational Z_inv = Z.partialPivLu().inverse();
+                DynMatRational Y_new = ((Y + Z_inv) / 2).eval();
+                DynMatRational Z_new = ((Z + Y_inv) / 2).eval();
+                Rational diffY = matrix_max_norm((Y_new - Y).eval());
+                Rational diffZ = matrix_max_norm((Z_new - Z).eval());
+                if (!(diffY > eps) && !(diffZ > eps))
+                    return Y_new;
+                Y = std::move(Y_new);
+                Z = std::move(Z_new);
+            }
+            throw std::runtime_error("matrix::sqrt: iteration did not converge");
+        }
+
+        // ================================================================
+        // GAUSSQI
+        // ================================================================
+
+        inline DynMatGaussQi exp_gaussqi(const DynMatGaussQi& A, const Rational& eps) {
+            DynMatGaussQi M = A;
+            if (is_diagonal(M)) {
+                DynMatGaussQi R = DynMatGaussQi::Zero(M.rows(), M.cols());
+                for (int i = 0; i < M.rows(); ++i)
+                    R(i, i) = delta::exp(M(i, i), eps);
+                return R;
+            }
+
+            Rational normM = matrix_max_norm(M);
+            int k = 0;
+            Rational two_pow_k = 1;
+            const Rational half = Rational(1, 2);
+            while (normM / two_pow_k > half) {
+                two_pow_k *= 2;
+                ++k;
+            }
+            DynMatGaussQi A_scaled = (M / GaussQi(two_pow_k)).eval();
+
+            int m = pade_order(eps);
+            std::vector<Rational> c(m + 1);
+            c[0] = 1;
+            for (int j = 1; j <= m; ++j)
+                c[j] = c[j - 1] * Rational(m - j + 1) / Rational((2 * m - j + 1) * j);
+
+            DynMatGaussQi A_pow = DynMatGaussQi::Identity(M.rows(), M.cols());
+            DynMatGaussQi P = DynMatGaussQi::Zero(M.rows(), M.cols());
+            DynMatGaussQi Q = DynMatGaussQi::Zero(M.rows(), M.cols());
+
+            for (int j = 0; j <= m; ++j) {
+                if (c[j] != 0) {
+                    P += c[j] * A_pow;
+                    Q += ((j % 2 == 0) ? c[j] : -c[j]) * A_pow;
+                }
+                if (j < m) A_pow = (A_pow * A_scaled).eval();
+            }
+
+            DynMatGaussQi E = Q.partialPivLu().solve(P);
+            for (int i = 0; i < k; ++i) E = (E * E).eval();
+            return E;
+        }
+
+        inline DynMatGaussQi log_gaussqi(const DynMatGaussQi& A, const Rational& eps) {
+            DynMatGaussQi M = A;
+            if (M.determinant() == GaussQi{})
+                throw std::domain_error("matrix::log: singular matrix");
+            if (is_diagonal(M)) {
+                DynMatGaussQi R = DynMatGaussQi::Zero(M.rows(), M.cols());
+                for (int i = 0; i < M.rows(); ++i)
+                    R(i, i) = delta::log(M(i, i), eps);
+                return R;
+            }
+
+            Rational log2 = delta::log(Rational(2), eps);
+            DynMatGaussQi X = M;
+            int k = 0;
+            const int max_scale = 100;
+            DynMatGaussQi I = DynMatGaussQi::Identity(M.rows(), M.cols());
+            const Rational half = Rational(1, 2);
+
+            while (true) {
+                DynMatGaussQi diff = (X - I).eval();
+                Rational norm_diff = matrix_max_norm(diff);
+                if (!(norm_diff > half)) break;
+                X = (X / GaussQi(2)).eval();
+                ++k;
+                if (k > max_scale)
+                    throw std::runtime_error("matrix::log: scaling did not converge");
+            }
+
+            DynMatGaussQi X_minus_I = (X - I).eval();
+            DynMatGaussQi X_plus_I = (X + I).eval();
+            DynMatGaussQi Z = (X_minus_I * X_plus_I.partialPivLu().inverse()).eval();
+
+            DynMatGaussQi Z2 = (Z * Z).eval();
+            DynMatGaussQi Z_pow = Z;
+            DynMatGaussQi sum = Z_pow;
+            for (int n = 1; n <= 1000000; ++n) {
+                Z_pow = (Z_pow * Z2).eval();
+                DynMatGaussQi term = (Z_pow / GaussQi(Rational(2 * n + 1))).eval();
+                sum += term;
+                Rational norm_term = matrix_max_norm(term);
+                Rational norm_sum = matrix_max_norm(sum);
+                if (!(norm_term > eps) && !(norm_term > eps * (norm_sum + 1)))
+                    break;
+            }
+            sum = (sum * GaussQi(2)).eval();
+            return (I * GaussQi(Rational(k) * log2) + sum).eval();
+        }
+
+        inline DynMatGaussQi sin_gaussqi(const DynMatGaussQi& A, const Rational& eps) {
+            GaussQi i(0, 1);
+            DynMatGaussQi iA = (A * i).eval();
+            DynMatGaussQi neg_iA = (-iA).eval();
+            DynMatGaussQi exp_iA = exp_gaussqi(iA, eps);
+            DynMatGaussQi exp_neg_iA = exp_gaussqi(neg_iA, eps);
+            return ((exp_iA - exp_neg_iA) / (GaussQi(2) * i)).eval();
+        }
+
+        inline DynMatGaussQi cos_gaussqi(const DynMatGaussQi& A, const Rational& eps) {
+            GaussQi i(0, 1);
+            DynMatGaussQi iA = (A * i).eval();
+            DynMatGaussQi neg_iA = (-iA).eval();
+            DynMatGaussQi exp_iA = exp_gaussqi(iA, eps);
+            DynMatGaussQi exp_neg_iA = exp_gaussqi(neg_iA, eps);
+            return ((exp_iA + exp_neg_iA) / GaussQi(2)).eval();
+        }
+
+        inline DynMatGaussQi sqrt_gaussqi(const DynMatGaussQi& A, const Rational& eps) {
+            DynMatGaussQi M = A;
+            if (is_diagonal(M)) {
+                DynMatGaussQi R = DynMatGaussQi::Zero(M.rows(), M.cols());
+                for (int i = 0; i < M.rows(); ++i)
+                    R(i, i) = delta::sqrt(M(i, i), eps);
+                return R;
+            }
+
+            DynMatGaussQi Y = M;
+            DynMatGaussQi Z = DynMatGaussQi::Identity(M.rows(), M.cols());
+            const int max_iter = 1000;
+            for (int iter = 0; iter < max_iter; ++iter) {
+                DynMatGaussQi Y_inv = Y.partialPivLu().inverse();
+                DynMatGaussQi Z_inv = Z.partialPivLu().inverse();
+                DynMatGaussQi Y_new = ((Y + Z_inv) / GaussQi(2)).eval();
+                DynMatGaussQi Z_new = ((Z + Y_inv) / GaussQi(2)).eval();
+                Rational diffY = matrix_max_norm((Y_new - Y).eval());
+                Rational diffZ = matrix_max_norm((Z_new - Z).eval());
+                if (!(diffY > eps) && !(diffZ > eps))
+                    return Y_new;
+                Y = std::move(Y_new);
+                Z = std::move(Z_new);
+            }
+            throw std::runtime_error("matrix::sqrt: iteration did not converge");
+        }
+
+    } // namespace detail
 
     // ========================================================================
-    // FORWARD DECLARATIONS
-    // ========================================================================
-    template<typename Derived>
-    Eigen::Matrix<typename Derived::Scalar, Derived::RowsAtCompileTime, Derived::ColsAtCompileTime>
-        exp(const Eigen::MatrixBase<Derived>& A, const Rational& eps = default_eps());
-
-    template<typename Derived>
-    Eigen::Matrix<typename Derived::Scalar, Derived::RowsAtCompileTime, Derived::ColsAtCompileTime>
-        log(const Eigen::MatrixBase<Derived>& A, const Rational& eps = default_eps());
-
-    template<typename Derived>
-    auto sin(const Eigen::MatrixBase<Derived>& A, const Rational& eps = default_eps())
-        -> std::enable_if_t<std::is_same_v<typename Derived::Scalar, GaussQi>,
-        Eigen::Matrix<typename Derived::Scalar, Derived::RowsAtCompileTime, Derived::ColsAtCompileTime>>;
-
-    template<typename Derived>
-    auto sin(const Eigen::MatrixBase<Derived>& A, const Rational& eps = default_eps())
-        -> std::enable_if_t<std::is_same_v<typename Derived::Scalar, Rational>,
-        Eigen::Matrix<typename Derived::Scalar, Derived::RowsAtCompileTime, Derived::ColsAtCompileTime>>;
-
-    template<typename Derived>
-    auto cos(const Eigen::MatrixBase<Derived>& A, const Rational& eps = default_eps())
-        -> std::enable_if_t<std::is_same_v<typename Derived::Scalar, GaussQi>,
-        Eigen::Matrix<typename Derived::Scalar, Derived::RowsAtCompileTime, Derived::ColsAtCompileTime>>;
-
-    template<typename Derived>
-    auto cos(const Eigen::MatrixBase<Derived>& A, const Rational& eps = default_eps())
-        -> std::enable_if_t<std::is_same_v<typename Derived::Scalar, Rational>,
-        Eigen::Matrix<typename Derived::Scalar, Derived::RowsAtCompileTime, Derived::ColsAtCompileTime>>;
-
-    template<typename Derived>
-    Eigen::Matrix<typename Derived::Scalar, Derived::RowsAtCompileTime, Derived::ColsAtCompileTime>
-        sqrt(const Eigen::MatrixBase<Derived>& A, const Rational& eps = default_eps());
-
-    // Обёртки для любых Eigen выражений
-    template<typename Derived>
-    auto sin(const Eigen::EigenBase<Derived>& expr, const Rational& eps = default_eps())
-        -> decltype(delta::sin(expr.derived().eval(), eps));
-
-    template<typename Derived>
-    auto cos(const Eigen::EigenBase<Derived>& expr, const Rational& eps = default_eps())
-        -> decltype(delta::cos(expr.derived().eval(), eps));
-
-    // ========================================================================
-    // РЕАЛИЗАЦИИ
+    // THIN WRAPPERS
     // ========================================================================
 
-    // ------------------------------------------------------------------------
-    // Matrix exponential
-    // ------------------------------------------------------------------------
     template<typename Derived>
-    Eigen::Matrix<typename Derived::Scalar, Derived::RowsAtCompileTime, Derived::ColsAtCompileTime>
-        exp(const Eigen::MatrixBase<Derived>& A, const Rational& eps) {
-        using Matrix = Eigen::Matrix<typename Derived::Scalar, Derived::RowsAtCompileTime, Derived::ColsAtCompileTime>;
+    auto exp(const Eigen::MatrixBase<Derived>& A, const Rational& eps = default_eps())
+        -> Eigen::Matrix<typename Derived::Scalar, Derived::RowsAtCompileTime, Derived::ColsAtCompileTime>
+    {
+        using Scalar = typename Derived::Scalar;
         static_assert(Derived::RowsAtCompileTime == Derived::ColsAtCompileTime, "exp: square matrix required");
 
-        Matrix M = A.derived();
-        if (detail::is_diagonal(M))
-            return detail::exp_diagonal(M, eps);
-
-        Rational normM = detail::matrix_max_norm(M);
-        int k = 0;
-        Rational two_pow_k = 1;
-        while (normM / two_pow_k > Rational(1, 2)) {
-            two_pow_k *= 2;
-            ++k;
+        if constexpr (std::is_same_v<Scalar, Rational>) {
+            detail::DynMatRational dyn = A.derived();
+            return detail::exp_rational(dyn, eps);
         }
-        Matrix A_scaled = M / two_pow_k;
-
-        int m = detail::pade_order(eps);
-        std::vector<Rational> c(m + 1);
-        c[0] = 1;
-        for (int j = 1; j <= m; ++j)
-            c[j] = c[j - 1] * Rational(m - j + 1) / Rational((2 * m - j + 1) * j);
-
-        Matrix A_pow = Matrix::Identity(M.rows(), M.cols());
-        Matrix P = Matrix::Zero(M.rows(), M.cols());
-        Matrix Q = Matrix::Zero(M.rows(), M.cols());
-
-        for (int j = 0; j <= m; ++j) {
-            if (c[j] != 0) {
-                P += c[j] * A_pow;
-                Q += ((j % 2 == 0) ? c[j] : -c[j]) * A_pow;
-            }
-            if (j < m) A_pow = A_pow * A_scaled;
+        else if constexpr (std::is_same_v<Scalar, GaussQi>) {
+            detail::DynMatGaussQi dyn = A.derived();
+            return detail::exp_gaussqi(dyn, eps);
         }
-
-        Matrix E = Q.partialPivLu().solve(P);
-        for (int i = 0; i < k; ++i) E = E * E;
-        return E;
     }
 
-    // ------------------------------------------------------------------------
-    // Matrix logarithm
-    // ------------------------------------------------------------------------
     template<typename Derived>
-    Eigen::Matrix<typename Derived::Scalar, Derived::RowsAtCompileTime, Derived::ColsAtCompileTime>
-        log(const Eigen::MatrixBase<Derived>& A, const Rational& eps) {
-        using Matrix = Eigen::Matrix<typename Derived::Scalar, Derived::RowsAtCompileTime, Derived::ColsAtCompileTime>;
+    auto log(const Eigen::MatrixBase<Derived>& A, const Rational& eps = default_eps())
+        -> Eigen::Matrix<typename Derived::Scalar, Derived::RowsAtCompileTime, Derived::ColsAtCompileTime>
+    {
+        using Scalar = typename Derived::Scalar;
         static_assert(Derived::RowsAtCompileTime == Derived::ColsAtCompileTime, "log: square matrix required");
 
-        Matrix M = A.derived();
-        if (M.determinant() == 0)
-            throw std::domain_error("matrix::log: singular matrix");
-        if (detail::is_diagonal(M))
-            return detail::log_diagonal(M, eps);
-
-        Rational log2 = delta::log(Rational(2), eps);
-        Matrix X = M;
-        int k = 0;
-        const int max_scale = 100;
-        Matrix I = Matrix::Identity(M.rows(), M.cols());
-
-        while (detail::matrix_max_norm(X - I) > Rational(1, 2)) {
-            X = X / 2;
-            ++k;
-            if (k > max_scale)
-                throw std::runtime_error("matrix::log: scaling did not converge");
+        if constexpr (std::is_same_v<Scalar, Rational>) {
+            detail::DynMatRational dyn = A.derived();
+            return detail::log_rational(dyn, eps);
         }
-
-        Matrix X_minus_I = X - I;
-        Matrix X_plus_I = X + I;
-        Matrix X_plus_I_inv = X_plus_I.partialPivLu().inverse();
-        Matrix Z = X_minus_I * X_plus_I_inv;
-
-        Matrix Z2 = Z * Z;
-        Matrix Z_pow = Z;
-        Matrix sum = Z_pow;
-        for (int n = 1; n <= 1000000; ++n) {
-            Z_pow = Z_pow * Z2;
-            Matrix term = Z_pow / Rational(2 * n + 1);
-            sum += term;
-            if (detail::matrix_max_norm(term) <= eps &&
-                detail::matrix_max_norm(term) <= eps * (detail::matrix_max_norm(sum) + 1))
-                break;
+        else if constexpr (std::is_same_v<Scalar, GaussQi>) {
+            detail::DynMatGaussQi dyn = A.derived();
+            return detail::log_gaussqi(dyn, eps);
         }
-        sum = sum * 2;
-        Matrix result = I * (Rational(k) * log2) + sum;
-        return result;
     }
 
-    // ------------------------------------------------------------------------
-    // Matrix sine for GaussQi
-    // ------------------------------------------------------------------------
     template<typename Derived>
-    auto sin(const Eigen::MatrixBase<Derived>& A, const Rational& eps)
-        -> std::enable_if_t<std::is_same_v<typename Derived::Scalar, GaussQi>,
-        Eigen::Matrix<typename Derived::Scalar, Derived::RowsAtCompileTime, Derived::ColsAtCompileTime>>
+    auto sin(const Eigen::MatrixBase<Derived>& A, const Rational& eps = default_eps())
+        -> Eigen::Matrix<typename Derived::Scalar, Derived::RowsAtCompileTime, Derived::ColsAtCompileTime>
     {
-        using Scalar = GaussQi;
-        using Matrix = Eigen::Matrix<Scalar, Derived::RowsAtCompileTime, Derived::ColsAtCompileTime>;
-        static_assert(Derived::RowsAtCompileTime == Derived::ColsAtCompileTime, "sin: square matrix required");
-
-        Scalar i(0, 1);
-        Matrix iA = A.derived() * i;
-        Matrix exp_iA = delta::exp(iA, eps);
-        Matrix exp_neg_iA = delta::exp(-iA, eps);
-        return (exp_iA - exp_neg_iA) / (Scalar(2) * i);
-    }
-
-    // ------------------------------------------------------------------------
-    // Matrix sine for Rational (Fixed: increased max_iter, improved convergence)
-    // ------------------------------------------------------------------------
-    // Matrix sine for Rational (с быстрым диагональным путём)
-    template<typename Derived>
-    auto sin(const Eigen::MatrixBase<Derived>& A, const Rational& eps)
-        -> std::enable_if_t<std::is_same_v<typename Derived::Scalar, Rational>,
-        Eigen::Matrix<typename Derived::Scalar, Derived::RowsAtCompileTime, Derived::ColsAtCompileTime>>
-    {
-        using Scalar = Rational;
-        using Matrix = Eigen::Matrix<Scalar, Derived::RowsAtCompileTime, Derived::ColsAtCompileTime>;
-        static_assert(Derived::RowsAtCompileTime == Derived::ColsAtCompileTime, "sin: square matrix required");
-
-        Matrix M = A.derived();
-
-        // Fast path for diagonal matrices
-        if (detail::is_diagonal(M)) {
-            Matrix result = Matrix::Zero(M.rows(), M.cols());
-            for (int i = 0; i < M.rows(); ++i) {
-                result(i, i) = delta::sin(M(i, i), eps);
-            }
-            return result;
-        }
-
-        Rational pi = delta::pi(eps);
-        if (detail::matrix_max_norm(M) > pi) {
-            Matrix half_sin = delta::sin(M / Scalar(2), eps);
-            Matrix half_cos = delta::cos(M / Scalar(2), eps);
-            return Scalar(2) * half_sin * half_cos;
-        }
-
-        Matrix result = Matrix::Zero(M.rows(), M.cols());
-        Matrix term = M;
-        Matrix A2 = M * M;
-        Scalar sign = 1;
-        const int max_iter = 10000;
-        for (int k = 0; k < max_iter; ++k) {
-            result += sign * term;
-            Rational norm_term = detail::matrix_max_norm(term);
-            if (norm_term <= eps && norm_term <= eps * (detail::matrix_max_norm(result) + 1))
-                break;
-            sign = -sign;
-            Rational denom = Rational(2 * k + 2) * Rational(2 * k + 3);
-            term = term * A2 / denom;
-        }
-        return result;
-    }
-    // ------------------------------------------------------------------------
-    // Matrix cosine for GaussQi
-    // ------------------------------------------------------------------------
-    template<typename Derived>
-    auto cos(const Eigen::MatrixBase<Derived>& A, const Rational& eps)
-        -> std::enable_if_t<std::is_same_v<typename Derived::Scalar, GaussQi>,
-        Eigen::Matrix<typename Derived::Scalar, Derived::RowsAtCompileTime, Derived::ColsAtCompileTime>>
-    {
-        using Scalar = GaussQi;
-        using Matrix = Eigen::Matrix<Scalar, Derived::RowsAtCompileTime, Derived::ColsAtCompileTime>;
-        static_assert(Derived::RowsAtCompileTime == Derived::ColsAtCompileTime, "cos: square matrix required");
-
-        Scalar i(0, 1);
-        Matrix iA = A.derived() * i;
-        Matrix exp_iA = delta::exp(iA, eps);
-        Matrix exp_neg_iA = delta::exp(-iA, eps);
-        return (exp_iA + exp_neg_iA) / Scalar(2);
-    }
-
-    // ------------------------------------------------------------------------
-    // Matrix cosine for Rational (Fixed: increased max_iter, improved convergence)
-    // ------------------------------------------------------------------------
-// Matrix cosine for Rational (с быстрым диагональным путём)
-    template<typename Derived>
-    auto cos(const Eigen::MatrixBase<Derived>& A, const Rational& eps)
-        -> std::enable_if_t<std::is_same_v<typename Derived::Scalar, Rational>,
-        Eigen::Matrix<typename Derived::Scalar, Derived::RowsAtCompileTime, Derived::ColsAtCompileTime>>
-    {
-        using Scalar = Rational;
-        using Matrix = Eigen::Matrix<Scalar, Derived::RowsAtCompileTime, Derived::ColsAtCompileTime>;
-        static_assert(Derived::RowsAtCompileTime == Derived::ColsAtCompileTime, "cos: square matrix required");
-
-        Matrix M = A.derived();
-
-        // Fast path for diagonal matrices
-        if (detail::is_diagonal(M)) {
-            Matrix result = Matrix::Zero(M.rows(), M.cols());
-            for (int i = 0; i < M.rows(); ++i) {
-                result(i, i) = delta::cos(M(i, i), eps);
-            }
-            return result;
-        }
-
-        Rational pi = delta::pi(eps);
-        if (detail::matrix_max_norm(M) > pi) {
-            Matrix half_sin = delta::sin(M / Scalar(2), eps);
-            Matrix half_cos = delta::cos(M / Scalar(2), eps);
-            return half_cos * half_cos - half_sin * half_sin;
-        }
-
-        Matrix result = Matrix::Identity(M.rows(), M.cols());
-        Matrix term = Matrix::Identity(M.rows(), M.cols());
-        Matrix A2 = M * M;
-        Scalar sign = -1;
-        const int max_iter = 10000;
-        for (int k = 1; k <= max_iter; ++k) {
-            Rational denom = Rational(2 * k - 1) * Rational(2 * k);
-            term = term * A2 / denom;
-            result += sign * term;
-            Rational norm_term = detail::matrix_max_norm(term);
-            Rational norm_res = detail::matrix_max_norm(result);
-            if (norm_term <= eps && norm_term <= eps * (norm_res + 1))
-                break;
-            sign = -sign;
-        }
-        return result;
-    }
-
-    // ------------------------------------------------------------------------
-    // Matrix square root
-    // ------------------------------------------------------------------------
-    template<typename Derived>
-    Eigen::Matrix<typename Derived::Scalar, Derived::RowsAtCompileTime, Derived::ColsAtCompileTime>
-        sqrt(const Eigen::MatrixBase<Derived>& A, const Rational& eps) {
         using Scalar = typename Derived::Scalar;
-        using Matrix = Eigen::Matrix<Scalar, Derived::RowsAtCompileTime, Derived::ColsAtCompileTime>;
+        static_assert(Derived::RowsAtCompileTime == Derived::ColsAtCompileTime, "sin: square matrix required");
+
+        if constexpr (std::is_same_v<Scalar, Rational>) {
+            detail::DynMatRational dyn = A.derived();
+            return detail::sin_rational(dyn, eps);
+        }
+        else if constexpr (std::is_same_v<Scalar, GaussQi>) {
+            detail::DynMatGaussQi dyn = A.derived();
+            return detail::sin_gaussqi(dyn, eps);
+        }
+    }
+
+    template<typename Derived>
+    auto cos(const Eigen::MatrixBase<Derived>& A, const Rational& eps = default_eps())
+        -> Eigen::Matrix<typename Derived::Scalar, Derived::RowsAtCompileTime, Derived::ColsAtCompileTime>
+    {
+        using Scalar = typename Derived::Scalar;
+        static_assert(Derived::RowsAtCompileTime == Derived::ColsAtCompileTime, "cos: square matrix required");
+
+        if constexpr (std::is_same_v<Scalar, Rational>) {
+            detail::DynMatRational dyn = A.derived();
+            return detail::cos_rational(dyn, eps);
+        }
+        else if constexpr (std::is_same_v<Scalar, GaussQi>) {
+            detail::DynMatGaussQi dyn = A.derived();
+            return detail::cos_gaussqi(dyn, eps);
+        }
+    }
+
+    template<typename Derived>
+    auto sqrt(const Eigen::MatrixBase<Derived>& A, const Rational& eps = default_eps())
+        -> Eigen::Matrix<typename Derived::Scalar, Derived::RowsAtCompileTime, Derived::ColsAtCompileTime>
+    {
+        using Scalar = typename Derived::Scalar;
         static_assert(Derived::RowsAtCompileTime == Derived::ColsAtCompileTime, "sqrt: square matrix required");
 
-        Matrix M = A.derived();
-        if (detail::is_diagonal(M)) {
-            Matrix R = Matrix::Zero(M.rows(), M.cols());
-            for (int i = 0; i < M.rows(); ++i)
-                R(i, i) = delta::sqrt(M(i, i), eps);
-            return R;
+        if constexpr (std::is_same_v<Scalar, Rational>) {
+            detail::DynMatRational dyn = A.derived();
+            return detail::sqrt_rational(dyn, eps);
         }
-
-        Matrix Y = M;
-        Matrix Z = Matrix::Identity(M.rows(), M.cols());
-        const int max_iter = 1000;
-        for (int iter = 0; iter < max_iter; ++iter) {
-            Matrix Y_inv = Y.partialPivLu().inverse();
-            Matrix Z_inv = Z.partialPivLu().inverse();
-            Matrix Y_new = (Y + Z_inv) / Scalar(2);
-            Matrix Z_new = (Z + Y_inv) / Scalar(2);
-            if (detail::matrix_max_norm(Y_new - Y) < eps &&
-                detail::matrix_max_norm(Z_new - Z) < eps) {
-                return Y_new;
-            }
-            Y = std::move(Y_new);
-            Z = std::move(Z_new);
+        else if constexpr (std::is_same_v<Scalar, GaussQi>) {
+            detail::DynMatGaussQi dyn = A.derived();
+            return detail::sqrt_gaussqi(dyn, eps);
         }
-        throw std::runtime_error("matrix::sqrt: iteration did not converge");
     }
 
-    // ------------------------------------------------------------------------
-    // Универсальные обёртки для любых выражений Eigen
-    // ------------------------------------------------------------------------
     template<typename Derived>
     auto sin(const Eigen::EigenBase<Derived>& expr, const Rational& eps)
         -> decltype(delta::sin(expr.derived().eval(), eps))

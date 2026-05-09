@@ -26,7 +26,12 @@
 //   algorithms where possible.
 // -----------------------------------------------------------------------------
 #pragma once
-
+#ifndef EIGEN_DONT_VECTORIZE
+#define EIGEN_DONT_VECTORIZE
+#endif
+#ifndef EIGEN_DONT_ALIGN_STATICALLY
+#define EIGEN_DONT_ALIGN_STATICALLY
+#endif
 #include <Eigen/Core>
 #include "rational_class.h"
 #include "gauss_qi.h"
@@ -53,9 +58,9 @@ namespace Eigen {
             IsSigned = 1,
             IsComplex = 0,
             RequireInitialization = 1,
-            ReadCost = 1,
-            AddCost = 1,
-            MulCost = 1
+            ReadCost = 10,
+            AddCost = 20,
+            MulCost = 100
         };
     };
 
@@ -82,14 +87,15 @@ namespace Eigen {
         static inline Real epsilon() { return delta::default_eps(); }
         static inline Real dummy_precision() { return delta::default_eps(); }
 
+        // Для GaussQi
         enum {
             IsInteger = 0,
             IsSigned = 1,
-            IsComplex = 1,          // Eigen recognises this as a complex type
+            IsComplex = 1,
             RequireInitialization = 1,
-            ReadCost = 1,
-            AddCost = 1,
-            MulCost = 1
+            ReadCost = 10,
+            AddCost = 20,
+            MulCost = 100
         };
     };
 

@@ -334,8 +334,9 @@
 #include "delta/rational/transcendentals.h"
 #include "delta/rational/gauss_qi_transcendentals.h"
 #include "delta/rational/context.h"
-// Eigen Integration
-#include "delta/rational/eigen_integration.h"
+// Eigen Integration NOT INCLUDED HERE IN THE MAIN AGGREGATING HEADER.
+// for eigen integration, explicitly #include "eigen_integration.h"! 
+// This is intentional, in order not to bloat heavy dependencies
 
 
 // =========================================================================================================

@@ -6,6 +6,7 @@
 #include <gtest/gtest.h>
 #include <Eigen/Dense>
 #include "delta/core/rational.h"
+#include "delta/core/eigen_integration.h"
 #include "test_utils.h"
 
 using namespace delta;
@@ -417,5 +418,161 @@ namespace delta::testing {
                 if (i != j) EXPECT_EQ(result(i, j), 0_r);
         }
     }
+    // ============================================================================
+// ADDITIONAL TESTS FOR MATRIX TRANSCENDENTALS
+// ============================================================================
 
+    TEST_F(EigenRationalTest, ExpZeroMatrix) {
+        Mat2x2 Z = Mat2x2::Zero();
+        auto E = delta::exp(Z, EPS);
+        for (int i = 0; i < 2; ++i)
+            for (int j = 0; j < 2; ++j)
+                EXPECT_EQ(E(i, j), (i == j) ? 1_r : 0_r);
+    }
+
+    TEST_F(EigenRationalTest, LogIdentity) {
+        Mat2x2 I = Mat2x2::Identity();
+        auto L = delta::log(I, EPS);
+        for (int i = 0; i < 2; ++i)
+            for (int j = 0; j < 2; ++j)
+                EXPECT_EQ(L(i, j), 0_r);
+    }
+
+    TEST_F(EigenRationalTest, SinZeroMatrix) {
+        Mat2x2 Z = Mat2x2::Zero();
+        auto S = delta::sin(Z, EPS);
+        for (int i = 0; i < 2; ++i)
+            for (int j = 0; j < 2; ++j)
+                EXPECT_EQ(S(i, j), 0_r);
+    }
+
+    TEST_F(EigenRationalTest, CosZeroMatrix) {
+        Mat2x2 Z = Mat2x2::Zero();
+        auto C = delta::cos(Z, EPS);
+        for (int i = 0; i < 2; ++i)
+            for (int j = 0; j < 2; ++j)
+                EXPECT_EQ(C(i, j), (i == j) ? 1_r : 0_r);
+    }
+
+    TEST_F(EigenRationalTest, SinSqPlusCosSq) {
+        // non‑diagonal matrix
+        Mat2x2 A;
+        A << 1_r, 2_r, 3_r, 4_r;
+        auto S = delta::sin(A, EPS);
+        auto C = delta::cos(A, EPS);
+        auto Identity = S * S + C * C;
+        for (int i = 0; i < 2; ++i)
+            for (int j = 0; j < 2; ++j) {
+                Rational expected = (i == j) ? 1_r : 0_r;
+                EXPECT_RATIONAL_NEAR(Identity(i, j), expected, LOOSE_EPS);
+            }
+
+        // another matrix (smaller values)
+        Mat2x2 B;
+        B << Rational(1, 2), Rational(1, 4), Rational(1, 4), Rational(1, 2);
+        auto S2 = delta::sin(B, EPS);
+        auto C2 = delta::cos(B, EPS);
+        auto Identity2 = S2 * S2 + C2 * C2;
+        for (int i = 0; i < 2; ++i)
+            for (int j = 0; j < 2; ++j) {
+                Rational expected = (i == j) ? 1_r : 0_r;
+                EXPECT_RATIONAL_NEAR(Identity2(i, j), expected, LOOSE_EPS);
+            }
+    }
+
+    TEST_F(EigenRationalTest, MatrixExpTimesExpMinus) {
+        Mat2x2 A;
+        A << 1_r, 2_r, 3_r, 4_r;
+        auto expA = delta::exp(A, EPS);
+        auto expMinusA = delta::exp(-A, EPS);
+        auto product = expA * expMinusA;
+        for (int i = 0; i < 2; ++i)
+            for (int j = 0; j < 2; ++j) {
+                Rational expected = (i == j) ? 1_r : 0_r;
+                EXPECT_RATIONAL_NEAR(product(i, j), expected, LOOSE_EPS);
+            }
+
+        Mat2x2 B;
+        B << Rational(1, 2), Rational(1, 4), Rational(1, 4), Rational(1, 2);
+        auto expB = delta::exp(B, EPS);
+        auto expMinusB = delta::exp(-B, EPS);
+        auto product2 = expB * expMinusB;
+        for (int i = 0; i < 2; ++i)
+            for (int j = 0; j < 2; ++j) {
+                Rational expected = (i == j) ? 1_r : 0_r;
+                EXPECT_RATIONAL_NEAR(product2(i, j), expected, LOOSE_EPS);
+            }
+    }
+
+    TEST_F(EigenRationalTest, SinCosForLargeNormMatrix) {
+        // diagonal matrix with elements = 2 (norm = 2 > π ≈ 3.14? Actually 2 < π, so need > π)
+        // Let's use 4, so that sin(4) and cos(4) are not trivial, but the fast path will be taken.
+        Mat2x2 D = Mat2x2::Zero();
+        D(0, 0) = Rational(4);
+        D(1, 1) = Rational(4);
+        auto sinD = delta::sin(D, EPS);
+        auto cosD = delta::cos(D, EPS);
+        Rational expected_sin = delta::sin(4_r, EPS);
+        Rational expected_cos = delta::cos(4_r, EPS);
+        EXPECT_RATIONAL_NEAR(sinD(0, 0), expected_sin, EPS);
+        EXPECT_RATIONAL_NEAR(sinD(1, 1), expected_sin, EPS);
+        EXPECT_RATIONAL_NEAR(cosD(0, 0), expected_cos, EPS);
+        EXPECT_RATIONAL_NEAR(cosD(1, 1), expected_cos, EPS);
+        EXPECT_EQ(sinD(0, 1), 0_r);
+        EXPECT_EQ(cosD(0, 1), 0_r);
+    }
+
+    TEST_F(EigenRationalTest, SinDoubleAngleIdentity) {
+        // diagonal matrix (so that sin/cos commute)
+        Mat2x2 D = Mat2x2::Zero();
+        D(0, 0) = Rational(1);
+        D(1, 1) = Rational(2);
+        auto sinA = delta::sin(D, EPS);
+        auto cosA = delta::cos(D, EPS);
+        auto sin2A = delta::sin(2 * D, EPS);
+        auto computed = 2 * sinA * cosA;
+        for (int i = 0; i < 2; ++i)
+            for (int j = 0; j < 2; ++j)
+                EXPECT_RATIONAL_NEAR(sin2A(i, j), computed(i, j), LOOSE_EPS);
+    }
+
+    TEST_F(EigenRationalTest, CosDoubleAngleIdentity) {
+        Mat2x2 D = Mat2x2::Zero();
+        D(0, 0) = Rational(1);
+        D(1, 1) = Rational(2);
+        auto cosA = delta::cos(D, EPS);
+        auto cos2A = delta::cos(2 * D, EPS);
+        auto computed = 2 * cosA * cosA - Mat2x2::Identity().cast<Rational>();
+        for (int i = 0; i < 2; ++i)
+            for (int j = 0; j < 2; ++j) {
+                // Вывод текущих значений для отладки
+                std::cout << "[" << i << "," << j << "] "
+                    << "cos2A: " << cos2A(i, j)
+                    << " | computed: " << computed(i, j)
+                    << " | diff: " << (cos2A(i, j) - computed(i, j))
+                    << std::endl;
+
+                EXPECT_RATIONAL_NEAR(cos2A(i, j), computed(i, j), LOOSE_EPS);
+            }
+    }
+
+    TEST_F(EigenRationalTest, SqrtSquare) {
+        // non‑diagonal matrix that is positive definite (but rational exact)
+        Mat2x2 A;
+        A << 5_r, 2_r, 2_r, 5_r;
+        auto sqrtA = delta::sqrt(A, EPS);
+        auto square = sqrtA * sqrtA;
+        for (int i = 0; i < 2; ++i)
+            for (int j = 0; j < 2; ++j)
+                EXPECT_RATIONAL_NEAR(square(i, j), A(i, j), LOOSE_EPS);
+
+        // another non‑diagonal matrix
+        Mat2x2 B;
+        B << 4_r, 1_r, 1_r, 4_r;
+        auto sqrtB = delta::sqrt(B, EPS);
+        auto squareB = sqrtB * sqrtB;
+        for (int i = 0; i < 2; ++i)
+            for (int j = 0; j < 2; ++j)
+                EXPECT_RATIONAL_NEAR(squareB(i, j), B(i, j), LOOSE_EPS);
+    }
 } // namespace delta::testing

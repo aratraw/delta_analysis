@@ -4,9 +4,11 @@ cmake_minimum_required(VERSION 3.15)   # Require CMake 3.15+ for proper FetchCon
 # 1. MSVC debug information format policy (CMP0141)
 if (POLICY CMP0141)
   cmake_policy(SET CMP0141 NEW)
-  set(CMAKE_MSVC_DEBUG_INFORMATION_FORMAT "ProgramDatabase")
+  set(CMAKE_MSVC_DEBUG_INFORMATION_FORMAT "Embedded")
 endif()
-
+if(POLICY CMP0167)
+    cmake_policy(SET CMP0167 NEW)
+endif()
 project("delta_analysis" LANGUAGES CXX)
 
 set(CMAKE_CXX_STANDARD 20)
@@ -33,7 +35,7 @@ endif()
 
 
 # 3. External dependencies (centralised)
-find_package(Boost REQUIRED)          # Boost libraries (headers mostly)
+find_package(Boost CONFIG REQUIRED)          # Boost libraries (headers mostly)
 find_package(Eigen3 REQUIRED)         # Eigen3 for linear algebra
 find_package(fmt CONFIG REQUIRED)     # fmtlib for formatting
 find_package(absl CONFIG REQUIRED)    # migration from pure multiprecision.
@@ -63,10 +65,14 @@ target_link_libraries(delta_core INTERFACE
 )
 
 if(MSVC)
+    add_compile_options(/d2cgsummary)
     # MSVC‑specific compile options: enable C++ exceptions, set __cplusplus correctly.
     target_compile_options(delta_core INTERFACE /EHsc /Zc:__cplusplus)
     # Define EIGEN_HAS_OPENMP to let Eigen use OpenMP.
-    target_compile_definitions(delta_core INTERFACE EIGEN_HAS_OPENMP)
+    target_compile_definitions(delta_core INTERFACE EIGEN_HAS_OPENMP
+    EIGEN_DONT_ALIGN_STATICALLY
+    EIGEN_DONT_VECTORIZE
+    )
 endif()
 
 

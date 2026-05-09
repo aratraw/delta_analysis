@@ -11,7 +11,7 @@
         "CMAKE_C_COMPILER": "cl.exe",
         "CMAKE_CXX_COMPILER": "cl.exe",
         "CMAKE_MSVC_SHOW_INCLUDES": "OFF",
-        "CMAKE_DEPENDS_USE_COMPILER": "OFF",
+        "CMAKE_DEPENDS_USE_COMPILER": "ON",
         "CMAKE_NINJA_FORCE_RESPONSE_FILE": "ON",
         "CMAKE_TOOLCHAIN_FILE": "$env{VCPKG_ROOT}/scripts/buildsystems/vcpkg.cmake",
         "VCPKG_TARGET_TRIPLET": "x64-windows",
@@ -45,8 +45,8 @@
       },
       "cacheVariables": {
         "CMAKE_BUILD_TYPE": "Release",
-        "CMAKE_CXX_FLAGS_RELEASE": "/O2 /Oi /Ot /Gy /DNDEBUG /Gw /arch:AVX2",
-        "CMAKE_EXE_LINKER_FLAGS_RELEASE": "/OPT:REF /OPT:ICF"
+        "CMAKE_CXX_FLAGS_RELEASE": "/O2 /Oi /Ot /Gy /DNDEBUG /GL /Gw /arch:AVX2",
+        "CMAKE_EXE_LINKER_FLAGS_RELEASE": "/OPT:REF /OPT:ICF /LTCG"
       }
     },
     {

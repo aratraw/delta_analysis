@@ -208,24 +208,27 @@ namespace delta::internal {
             integer_part = integer_part.substr(1);
         }
 
-        // Strip leading zeros
+        // Strip leading zeros from integer part
         size_t non_zero = integer_part.find_first_not_of('0');
         if (non_zero != std::string::npos) integer_part = integer_part.substr(non_zero);
         else integer_part = "0";
-        if (negative && integer_part != "0") integer_part = "-" + integer_part;
 
         // Build numerator string (integer_part + fractional_part)
         std::string num_str;
-        if (integer_part == "0" || integer_part == "-0") {
+        if (integer_part == "0") {
+            // The value is purely fractional (e.g., -0.416...).
+            // We must preserve the sign in the numerator.
             num_str = fractional_part;
-            if (num_str.empty()) num_str = "0";
+            if (negative) num_str = "-" + num_str;
         }
         else {
+            // Integer part is nonzero; sign is part of integer_part if negative.
+            if (negative && integer_part != "0") integer_part = "-" + integer_part;
             num_str = integer_part + fractional_part;
         }
 
-        // Remove leading zeros from the combined number
-        if (num_str.size() > 1 && num_str[0] == '0') {
+        // Remove leading zeros from the combined number (except a single leading zero or minus sign)
+        if (num_str.size() > 1 && num_str[0] == '0' && num_str[1] != '.') {
             size_t first_nonzero = num_str.find_first_not_of('0');
             if (first_nonzero != std::string::npos) num_str = num_str.substr(first_nonzero);
             else num_str = "0";
@@ -239,7 +242,6 @@ namespace delta::internal {
         num /= g; den /= g;
         return Value(num, den);
     }
-
     // ------------------------------------------------------------------------
     // Float implementations for functions where they give speedup for coarse eps.
     // IMPORTANT: for sin and cos we handle sign to guarantee odd/even symmetry
