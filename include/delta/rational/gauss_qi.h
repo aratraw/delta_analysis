@@ -120,6 +120,10 @@ namespace delta {
         GaussQi(const GaussQi&) = default;
         GaussQi(GaussQi&&) = default;
 
+        // as much as I'd like to make it implicit - 
+        // Rational class already contains implicit operations with integers
+        // adding implicit conversions int=>GaussQi suffers from ambiguity on compile-time.
+        // Solution is not so much convenient but operational: add explicit arithmetic overloads to type pair GaussQi-int.
         explicit GaussQi(long long re);
         GaussQi(long long re, long long im);
         explicit GaussQi(const std::string& str);

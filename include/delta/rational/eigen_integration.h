@@ -58,9 +58,18 @@ namespace Eigen {
             IsSigned = 1,
             IsComplex = 0,
             RequireInitialization = 1,
-            ReadCost = 10,
-            AddCost = 20,
-            MulCost = 100
+            // 64 байта — это 8 полноценных double. 
+            // Eigen должен понимать, что просто "переложить" это число 
+            // из ячейки в ячейку — это уже работа.
+            ReadCost = 8,
+
+            // Сложение: Общий знаменатель + GCD + потенциальные аллокации в cpp_int.
+            // Это чудовищно дорого.
+            AddCost = 250,
+
+            // Умножение: ac/bd + GCD. 
+            // Чуть дешевле сложения, но всё равно за пределами добра и зла.
+            MulCost = 200
         };
     };
 
@@ -93,9 +102,14 @@ namespace Eigen {
             IsSigned = 1,
             IsComplex = 1,
             RequireInitialization = 1,
-            ReadCost = 10,
-            AddCost = 20,
-            MulCost = 100
+            // 128 байт данных! Это два кэш-лайна.
+            ReadCost = 16,
+
+            // Комплексная арифметика на базе рациональных:
+            // (a+bi)+(c+di) = (a+c) + (b+d)i
+            AddCost = 500,
+            // (a+bi)(c+di) = (ac-bd) + (ad+bc)i -> 4 Mul + 2 Add + 1 Sub
+            MulCost = 1200
         };
     };
 

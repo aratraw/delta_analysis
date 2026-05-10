@@ -17,6 +17,7 @@ namespace delta::testing {
     // Общие алиасы типов для GaussQi
     namespace gaussqi_aliases {
         using Mat2x2 = Eigen::Matrix<GaussQi, 2, 2>;
+        using Mat5x5 = Eigen::Matrix<GaussQi, 5, 5>;
         using Array2x2 = Eigen::Array<GaussQi, 2, 2>;
     }
 
@@ -134,6 +135,157 @@ namespace delta::testing {
         EXPECT_RATIONAL_NEAR(E(0, 0).imag(), sin1, LOOSE_EPS);
         EXPECT_RATIONAL_NEAR(E(1, 1).real(), cos1, LOOSE_EPS);
         EXPECT_RATIONAL_NEAR(E(1, 1).imag(), -sin1, LOOSE_EPS);
+    }
+
+    // ============================================================================
+    // ADDITIONAL TESTS FOR GAUSSQI MATRIX TRANSCENDENTALS
+    // ============================================================================
+
+    TEST_F(EigenGaussQiTest, ExpZeroMatrix) {
+        Mat2x2 Z = Mat2x2::Zero();
+        auto E = delta::exp(Z, EPS);
+        for (int i = 0; i < 2; ++i)
+            for (int j = 0; j < 2; ++j)
+                EXPECT_EQ(E(i, j), (i == j) ? GaussQi(1, 0) : GaussQi(0, 0));
+    }
+
+    TEST_F(EigenGaussQiTest, LogIdentity) {
+        Mat2x2 I = Mat2x2::Identity();
+        auto L = delta::log(I, EPS);
+        for (int i = 0; i < 2; ++i)
+            for (int j = 0; j < 2; ++j)
+                EXPECT_EQ(L(i, j), (i == j) ? GaussQi(0, 0) : GaussQi(0, 0));
+    }
+
+    TEST_F(EigenGaussQiTest, SinZeroMatrix) {
+        Mat2x2 Z = Mat2x2::Zero();
+        auto S = delta::sin(Z, EPS);
+        for (int i = 0; i < 2; ++i)
+            for (int j = 0; j < 2; ++j)
+                EXPECT_EQ(S(i, j), (i == j) ? GaussQi(0, 0) : GaussQi(0, 0));
+    }
+
+    TEST_F(EigenGaussQiTest, CosZeroMatrix) {
+        Mat2x2 Z = Mat2x2::Zero();
+        auto C = delta::cos(Z, EPS);
+        for (int i = 0; i < 2; ++i)
+            for (int j = 0; j < 2; ++j)
+                EXPECT_EQ(C(i, j), (i == j) ? GaussQi(1, 0) : GaussQi(0, 0));
+    }
+
+    TEST_F(EigenGaussQiTest, ExpTimesExpMinus) {
+        Mat2x2 A;
+        A << GaussQi(1, 2), GaussQi(3, 4),
+            GaussQi(5, 6), GaussQi(7, 8);
+        auto expA = delta::exp(A, EPS);
+        auto expMinusA = delta::exp(-A, EPS);
+        auto product = expA * expMinusA;
+        for (int i = 0; i < 2; ++i)
+            for (int j = 0; j < 2; ++j) {
+                GaussQi expected = (i == j) ? GaussQi(1, 0) : GaussQi(0, 0);
+                EXPECT_LT(delta::abs(product(i, j).real() - expected.real()), LOOSE_EPS);
+                EXPECT_LT(delta::abs(product(i, j).imag() - expected.imag()), LOOSE_EPS);
+            }
+    }
+
+    TEST_F(EigenGaussQiTest, SinSqPlusCosSq) {
+        Mat2x2 A;
+        A << GaussQi(1, 2), GaussQi(3, 4),
+            GaussQi(5, 6), GaussQi(7, 8);
+        auto S = delta::sin(A, EPS);
+        auto C = delta::cos(A, EPS);
+        auto Identity = S * S + C * C;
+        for (int i = 0; i < 2; ++i)
+            for (int j = 0; j < 2; ++j) {
+                GaussQi expected = (i == j) ? GaussQi(1, 0) : GaussQi(0, 0);
+                EXPECT_LT(delta::abs(Identity(i, j).real() - expected.real()), LOOSE_EPS);
+                EXPECT_LT(delta::abs(Identity(i, j).imag() - expected.imag()), LOOSE_EPS);
+            }
+    }
+
+    TEST_F(EigenGaussQiTest, DiagonalMatrixExp) {
+        Mat5x5 D = Mat5x5::Zero();
+        for (int i = 0; i < 5; ++i) D(i, i) = GaussQi(i + 1, 0);
+        auto result = delta::exp(D, EPS);
+        for (int i = 0; i < 5; ++i) {
+            GaussQi expected = delta::exp(D(i, i), EPS);
+            EXPECT_LT(delta::abs(result(i, i).real() - expected.real()), EPS);
+            EXPECT_LT(delta::abs(result(i, i).imag() - expected.imag()), EPS);
+            for (int j = 0; j < 5; ++j)
+                if (i != j) EXPECT_EQ(result(i, j), GaussQi(0, 0));
+        }
+    }
+
+    TEST_F(EigenGaussQiTest, DiagonalMatrixLog) {
+        Mat5x5 D = Mat5x5::Zero();
+        for (int i = 0; i < 5; ++i) D(i, i) = GaussQi(i + 2, 0);
+        auto result = delta::log(D, EPS);
+        for (int i = 0; i < 5; ++i) {
+            GaussQi expected = delta::log(D(i, i), EPS);
+            EXPECT_LT(delta::abs(result(i, i).real() - expected.real()), EPS);
+            EXPECT_LT(delta::abs(result(i, i).imag() - expected.imag()), EPS);
+            for (int j = 0; j < 5; ++j)
+                if (i != j) EXPECT_EQ(result(i, j), GaussQi(0, 0));
+        }
+    }
+
+    TEST_F(EigenGaussQiTest, DiagonalMatrixSin) {
+        Mat5x5 D = Mat5x5::Zero();
+        for (int i = 0; i < 5; ++i) D(i, i) = GaussQi(i + 1, 0);
+        auto result = delta::sin(D, EPS);
+        for (int i = 0; i < 5; ++i) {
+            GaussQi expected = delta::sin(D(i, i), EPS);
+            EXPECT_LT(delta::abs(result(i, i).real() - expected.real()), EPS);
+            EXPECT_LT(delta::abs(result(i, i).imag() - expected.imag()), EPS);
+            for (int j = 0; j < 5; ++j)
+                if (i != j) EXPECT_EQ(result(i, j), GaussQi(0, 0));
+        }
+    }
+
+    TEST_F(EigenGaussQiTest, DiagonalMatrixCos) {
+        Mat5x5 D = Mat5x5::Zero();
+        for (int i = 0; i < 5; ++i) D(i, i) = GaussQi(i + 1, 0);
+        auto result = delta::cos(D, EPS);
+        for (int i = 0; i < 5; ++i) {
+            GaussQi expected = delta::cos(D(i, i), EPS);
+            EXPECT_LT(delta::abs(result(i, i).real() - expected.real()), EPS);
+            EXPECT_LT(delta::abs(result(i, i).imag() - expected.imag()), EPS);
+            for (int j = 0; j < 5; ++j)
+                if (i != j) EXPECT_EQ(result(i, j), GaussQi(0, 0));
+        }
+    }
+
+    TEST_F(EigenGaussQiTest, SqrtSquarePositiveDefinite) {
+        Mat2x2 A;
+        A << GaussQi(5, 0), GaussQi(2, 0),
+            GaussQi(2, 0), GaussQi(5, 0);
+        auto sqrtA = delta::sqrt(A, EPS);
+        auto square = sqrtA * sqrtA;
+        for (int i = 0; i < 2; ++i)
+            for (int j = 0; j < 2; ++j) {
+                EXPECT_LT(delta::abs(square(i, j).real() - A(i, j).real()), LOOSE_EPS);
+                EXPECT_LT(delta::abs(square(i, j).imag() - A(i, j).imag()), LOOSE_EPS);
+            }
+    }
+
+    TEST_F(EigenGaussQiTest, LogSingularThrows) {
+        Mat2x2 singular;
+        singular << GaussQi(1, 0), GaussQi(2, 0),
+            GaussQi(2, 0), GaussQi(4, 0);
+        EXPECT_THROW(delta::log(singular, EPS), std::domain_error);
+    }
+
+    TEST_F(EigenGaussQiTest, MatrixExpWithExpression) {
+        Mat2x2 A, B;
+        A << GaussQi(1, 0), GaussQi(0, 0),
+            GaussQi(0, 0), GaussQi(1, 0);
+        B << GaussQi(0, 1), GaussQi(1, 0),
+            GaussQi(1, 0), GaussQi(0, 0);
+        auto expr = (3_r * A + 2_r * B).eval();
+        auto E = delta::exp(expr, EPS);
+        EXPECT_EQ(E.rows(), 2);
+        EXPECT_EQ(E.cols(), 2);
+        EXPECT_TRUE(E(0, 0) != GaussQi(0, 0));
     }
 
 } // namespace delta::testing

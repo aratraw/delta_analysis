@@ -226,7 +226,61 @@ namespace delta {
     inline GaussQi operator-(const GaussQi& z) {
         return GaussQi(-z.re_, -z.im_);
     }
+    // ----------------------------------------------------------------------------
+// Операторы с целыми типами (int, long long) – явное использование explicit конструктора
+// ----------------------------------------------------------------------------
+    inline GaussQi operator+(long long lhs, const GaussQi& rhs) {
+        return GaussQi(lhs) + rhs;
+    }
+    inline GaussQi operator-(long long lhs, const GaussQi& rhs) {
+        return GaussQi(lhs) - rhs;
+    }
+    inline GaussQi operator*(long long lhs, const GaussQi& rhs) {
+        return GaussQi(lhs) * rhs;
+    }
+    inline GaussQi operator/(long long lhs, const GaussQi& rhs) {
+        return GaussQi(lhs) / rhs;
+    }
 
+    inline GaussQi operator+(const GaussQi& lhs, long long rhs) {
+        return lhs + GaussQi(rhs);
+    }
+    inline GaussQi operator-(const GaussQi& lhs, long long rhs) {
+        return lhs - GaussQi(rhs);
+    }
+    inline GaussQi operator*(const GaussQi& lhs, long long rhs) {
+        return lhs * GaussQi(rhs);
+    }
+    inline GaussQi operator/(const GaussQi& lhs, long long rhs) {
+        return lhs / GaussQi(rhs);
+    }
+
+    // Для int – через long long
+    inline GaussQi operator+(int lhs, const GaussQi& rhs) {
+        return GaussQi(static_cast<long long>(lhs)) + rhs;
+    }
+    inline GaussQi operator-(int lhs, const GaussQi& rhs) {
+        return GaussQi(static_cast<long long>(lhs)) - rhs;
+    }
+    inline GaussQi operator*(int lhs, const GaussQi& rhs) {
+        return GaussQi(static_cast<long long>(lhs)) * rhs;
+    }
+    inline GaussQi operator/(int lhs, const GaussQi& rhs) {
+        return GaussQi(static_cast<long long>(lhs)) / rhs;
+    }
+
+    inline GaussQi operator+(const GaussQi& lhs, int rhs) {
+        return lhs + GaussQi(static_cast<long long>(rhs));
+    }
+    inline GaussQi operator-(const GaussQi& lhs, int rhs) {
+        return lhs - GaussQi(static_cast<long long>(rhs));
+    }
+    inline GaussQi operator*(const GaussQi& lhs, int rhs) {
+        return lhs * GaussQi(static_cast<long long>(rhs));
+    }
+    inline GaussQi operator/(const GaussQi& lhs, int rhs) {
+        return lhs / GaussQi(static_cast<long long>(rhs));
+    }
     // ----------------------------------------------------------------------------
     // Comparisons
     // ----------------------------------------------------------------------------

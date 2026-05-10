@@ -4,11 +4,9 @@ cmake_minimum_required(VERSION 3.15)   # Require CMake 3.15+ for proper FetchCon
 # 1. MSVC debug information format policy (CMP0141)
 if (POLICY CMP0141)
   cmake_policy(SET CMP0141 NEW)
-  set(CMAKE_MSVC_DEBUG_INFORMATION_FORMAT "Embedded")
+  set(CMAKE_MSVC_DEBUG_INFORMATION_FORMAT "ProgramDatabase")
 endif()
-if(POLICY CMP0167)
-    cmake_policy(SET CMP0167 NEW)
-endif()
+
 project("delta_analysis" LANGUAGES CXX)
 
 set(CMAKE_CXX_STANDARD 20)
@@ -35,7 +33,7 @@ endif()
 
 
 # 3. External dependencies (centralised)
-find_package(Boost CONFIG REQUIRED)          # Boost libraries (headers mostly)
+find_package(Boost REQUIRED)          # Boost libraries (headers mostly)
 find_package(Eigen3 REQUIRED)         # Eigen3 for linear algebra
 find_package(fmt CONFIG REQUIRED)     # fmtlib for formatting
 find_package(absl CONFIG REQUIRED)    # migration from pure multiprecision.
@@ -65,13 +63,13 @@ target_link_libraries(delta_core INTERFACE
 )
 
 if(MSVC)
-    add_compile_options(/d2cgsummary)
     # MSVC‑specific compile options: enable C++ exceptions, set __cplusplus correctly.
     target_compile_options(delta_core INTERFACE /EHsc /Zc:__cplusplus)
     # Define EIGEN_HAS_OPENMP to let Eigen use OpenMP.
-    target_compile_definitions(delta_core INTERFACE EIGEN_HAS_OPENMP
+    target_compile_definitions(delta_core INTERFACE 
+    EIGEN_HAS_OPENMP
+    EIGEN_DONT_VECTORIZE 
     EIGEN_DONT_ALIGN_STATICALLY
-    EIGEN_DONT_VECTORIZE
     )
 endif()
 
@@ -94,7 +92,7 @@ set(CMAKE_CXX_EXTENSIONS OFF)
 #endif()
 
 # Добавляем определение макроса для тестов
-#add_compile_definitions($<$<CONFIG:Debug>:_DEBUG>)
+add_compile_definitions($<$<CONFIG:Debug>:_DEBUG>)
 
 # Add subdirectories for tests, examples, and benchmarks
 add_subdirectory("tests/rational")
@@ -106,10 +104,3 @@ add_subdirectory("tests/rational")
 #add_subdirectory("tests/solvers")
 #add_subdirectory("examples/arbitrary_regulative_ideas")
 #add_subdirectory("benchmarks")
-
-
-#For speeding up performance, add the following flags to CMakePresets on Windows Release Build:
-#        "CMAKE_CXX_FLAGS_RELEASE": "/O2 /Oi /Ot /Gy /DNDEBUG /GL /Gw /arch:AVX2",
-#       "CMAKE_EXE_LINKER_FLAGS_RELEASE": "/OPT:REF /OPT:ICF /LTCG"
-# Elaboration: /GL and /LTCG flags are removed for now because 
-# building Eigen integration with them takes forever due to Eigen Expression Templates.

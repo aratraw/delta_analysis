@@ -188,18 +188,32 @@ namespace delta::internal {
         HighPrecFloat eps_f = to_high_prec(eps);
         if (eps_f <= 0) throw std::domain_error("Epsilon must be positive");
 
+        // Fast paths for exact values
+        if (f == 0) return Value(0);
+        else if (f == 1) return Value(1);
+        else if (f == -1) return Value(-1);
+
         // Determine how many decimal digits we need to represent to guarantee error < eps
         int digits_needed = static_cast<int>(-log10(eps_f.convert_to<double>())) + extra_digits;
         if (digits_needed < 1) digits_needed = 1;
-        if (digits_needed > 100) digits_needed = 100;
+        else if (digits_needed > 100) digits_needed = 100;
 
         // Convert to fixed-point string with required digits
         std::string s = f.str(digits_needed, std::ios_base::fixed);
+
         size_t dot = s.find('.');
+        if (dot == std::string::npos) {
+            // Integer value - return directly
+            return Value(dumb_int(s));
+        }
+
         std::string integer_part = s.substr(0, dot);
         std::string fractional_part = s.substr(dot + 1);
-        if (fractional_part.size() > static_cast<size_t>(digits_needed))
-            fractional_part = fractional_part.substr(0, digits_needed);
+
+        // Trim trailing zeros from fractional_part
+        while (!fractional_part.empty() && fractional_part.back() == '0') {
+            fractional_part.pop_back();
+        }
 
         // Handle sign
         bool negative = false;
@@ -210,36 +224,67 @@ namespace delta::internal {
 
         // Strip leading zeros from integer part
         size_t non_zero = integer_part.find_first_not_of('0');
-        if (non_zero != std::string::npos) integer_part = integer_part.substr(non_zero);
-        else integer_part = "0";
+        if (non_zero != std::string::npos) {
+            integer_part = integer_part.substr(non_zero);
+        }
+        else {
+            integer_part = "0";
+        }
 
         // Build numerator string (integer_part + fractional_part)
         std::string num_str;
-        if (integer_part == "0") {
-            // The value is purely fractional (e.g., -0.416...).
-            // We must preserve the sign in the numerator.
+        if (integer_part == "0" && fractional_part.empty()) {
+            return Value(0);
+        }
+
+        if (integer_part == "0" && !fractional_part.empty()) {
+            // Pure fractional (e.g., -0.416...)
             num_str = fractional_part;
             if (negative) num_str = "-" + num_str;
         }
         else {
-            // Integer part is nonzero; sign is part of integer_part if negative.
-            if (negative && integer_part != "0") integer_part = "-" + integer_part;
+            // Has integer part
+            if (negative && integer_part != "0") {
+                integer_part = "-" + integer_part;
+            }
             num_str = integer_part + fractional_part;
         }
 
         // Remove leading zeros from the combined number (except a single leading zero or minus sign)
-        if (num_str.size() > 1 && num_str[0] == '0' && num_str[1] != '.') {
+        if (!num_str.empty() && num_str[0] == '-') {
+            if (num_str.size() > 1 && num_str[1] == '0') {
+                size_t first_nonzero = num_str.find_first_not_of('0', 1);
+                if (first_nonzero != std::string::npos) {
+                    num_str = "-" + num_str.substr(first_nonzero);
+                }
+                else {
+                    num_str = "0";
+                }
+            }
+        }
+        else {
             size_t first_nonzero = num_str.find_first_not_of('0');
-            if (first_nonzero != std::string::npos) num_str = num_str.substr(first_nonzero);
-            else num_str = "0";
+            if (first_nonzero != std::string::npos) {
+                num_str = num_str.substr(first_nonzero);
+            }
+            else {
+                num_str = "0";
+            }
         }
 
         // Create fraction: numerator = integer, denominator = 10^(fractional_part length)
         dumb_int num(num_str);
         dumb_int den(1);
-        for (size_t i = 0; i < fractional_part.size(); ++i) den *= 10;
-        dumb_int g = boost::multiprecision::gcd(num, den);
-        num /= g; den /= g;
+        for (size_t i = 0; i < fractional_part.size(); ++i) {
+            den *= 10;
+        }
+
+        if (den != 1) {
+            dumb_int g = boost::multiprecision::gcd(num, den);
+            num /= g;
+            den /= g;
+        }
+
         return Value(num, den);
     }
     // ------------------------------------------------------------------------

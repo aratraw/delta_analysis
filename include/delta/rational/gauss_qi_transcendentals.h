@@ -140,7 +140,66 @@ namespace delta {
         }
         return result;
     }
+    // ============================================================================
+// Trigonometric functions for GaussQi
+// ============================================================================
 
+    inline GaussQi sin(const GaussQi& z, const Rational& eps = default_eps()) {
+        // sin(a+bi) = sin(a)*cosh(b) + i*cos(a)*sinh(b)
+        Rational a = z.real();
+        Rational b = z.imag();
+        Rational sin_a = delta::sin(a, eps);
+        Rational cos_a = delta::cos(a, eps);
+        Rational sinh_b = (delta::exp(b, eps) - delta::exp(-b, eps)) / 2_r;
+        Rational cosh_b = (delta::exp(b, eps) + delta::exp(-b, eps)) / 2_r;
+        return GaussQi(sin_a * cosh_b, cos_a * sinh_b);
+    }
+
+    inline GaussQi cos(const GaussQi& z, const Rational& eps = default_eps()) {
+        // cos(a+bi) = cos(a)*cosh(b) - i*sin(a)*sinh(b)
+        Rational a = z.real();
+        Rational b = z.imag();
+        Rational sin_a = delta::sin(a, eps);
+        Rational cos_a = delta::cos(a, eps);
+        Rational sinh_b = (delta::exp(b, eps) - delta::exp(-b, eps)) / 2_r;
+        Rational cosh_b = (delta::exp(b, eps) + delta::exp(-b, eps)) / 2_r;
+        return GaussQi(cos_a * cosh_b, -sin_a * sinh_b);
+    }
+
+    inline GaussQi tan(const GaussQi& z, const Rational& eps = default_eps()) {
+        GaussQi s = sin(z, eps);
+        GaussQi c = cos(z, eps);
+        if (c.real() == 0_r && c.imag() == 0_r)
+            throw std::domain_error("tan(z): cos(z) is zero");
+        return s / c;
+    }
+
+    inline GaussQi asin(const GaussQi& z, const Rational& eps = default_eps()) {
+        // asin(z) = -i * log(i*z + sqrt(1 - z^2))
+        GaussQi i(0, 1);
+        GaussQi one(1, 0);
+        GaussQi iz = i * z;
+        GaussQi sqrt_term = delta::sqrt(one - z * z, eps);
+        GaussQi log_arg = iz + sqrt_term;
+        GaussQi log_val = delta::log(log_arg, eps);
+        return -i * log_val;
+    }
+
+    inline GaussQi acos(const GaussQi& z, const Rational& eps = default_eps()) {
+        // acos(z) = π/2 - asin(z)
+        GaussQi half_pi(delta::pi(eps) / 2_r, 0);
+        return half_pi - asin(z, eps);
+    }
+
+    inline GaussQi atan(const GaussQi& z, const Rational& eps = default_eps()) {
+        // atan(z) = (i/2) * (log(1 - i*z) - log(1 + i*z))
+        GaussQi i(0, 1);
+        GaussQi one(1, 0);
+        GaussQi iz = i * z;
+        GaussQi log1 = delta::log(one - iz, eps);
+        GaussQi log2 = delta::log(one + iz, eps);
+        return (i / 2_r) * (log1 - log2);
+    }
 } // namespace delta
 
 #endif // DELTA_COMPLEX_GAUSS_QI_TRANSCENDENTALS_H

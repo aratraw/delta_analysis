@@ -83,7 +83,8 @@
 // ============================================================================
 #pragma once
 
-#include <Eigen/Dense>
+#include <Eigen/Core>
+#include <Eigen/LU>
 #include <type_traits>
 #include "rational_class.h"
 #include "gauss_qi.h"
@@ -423,7 +424,7 @@ namespace delta {
             Rational log2 = delta::log(Rational(2), eps);
             DynMatGaussQi X = M;
             int k = 0;
-            const int max_scale = 100;
+            const int max_scale = 500;
             DynMatGaussQi I = DynMatGaussQi::Identity(M.rows(), M.cols());
             const Rational half = Rational(1, 2);
 
