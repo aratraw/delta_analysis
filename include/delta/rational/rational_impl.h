@@ -60,6 +60,7 @@
 #include "lazy_rational.h"
 #include "literals.h"
 #include "interval.h"
+#include "utils.h"
 #include <boost/multiprecision/cpp_int.hpp>
 #include <stdexcept>
 #include <string>
@@ -324,6 +325,13 @@ namespace delta {
 
     inline Rational Rational::denominator() const {
         return Rational(internal::denominator(storage_));
+    }
+    inline internal::dumb_int Rational::numerator_raw() const {
+        return internal::numerator(storage_);
+    }
+
+    inline internal::dumb_int Rational::denominator_raw() const {
+        return internal::denominator(storage_);
     }
 
     // ----------------------------------------------------------------------------

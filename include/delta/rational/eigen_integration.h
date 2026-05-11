@@ -2,11 +2,12 @@
 // Licensed under PolyForm Small Business License 1.0.0
 // eigen_integration.h
 // -----------------------------------------------------------------------------
-// Integration of delta::Rational and delta::GaussQi with Eigen3.
+// Integration of delta::Rational, delta::GaussQi and delta::dumb_int with Eigen3.
 //
 // This header provides the necessary specializations for Eigen to treat
-// delta::Rational and delta::GaussQi as valid scalar types. It enables using
-// these types in Eigen::Matrix, Eigen::Array, and standard Eigen algorithms.
+// delta::Rational, delta::GaussQi and delta::dumb_int as valid scalar types.
+// It enables using these types in Eigen::Matrix, Eigen::Array, and standard
+// Eigen algorithms.
 //
 // ARCHITECTURE & USAGE:
 //   1. ELEMENT-WISE TRANSCENDENTALS (automatic via ADL):
@@ -32,13 +33,17 @@
 #ifndef EIGEN_DONT_ALIGN_STATICALLY
 #define EIGEN_DONT_ALIGN_STATICALLY
 #endif
+
 #include <Eigen/Core>
 #include "rational_class.h"
 #include "gauss_qi.h"
 #include "transcendentals.h"
 #include "gauss_qi_transcendentals.h"
 #include "context.h"            // for delta::default_eps()
+#include "utils.h"              // for dumb_int (et_off)
 
+// Делаем dumb_int доступным в текущем пространстве имён
+using delta::internal::dumb_int;
 namespace Eigen {
 
     // ========================================================================
@@ -64,7 +69,7 @@ namespace Eigen {
             ReadCost = 8,
 
             // Сложение: Общий знаменатель + GCD + потенциальные аллокации в cpp_int.
-            // Это чудовищно дорого.
+            // Это чудовищно дорого. 
             AddCost = 250,
 
             // Умножение: ac/bd + GCD. 
@@ -146,10 +151,36 @@ namespace Eigen {
         // you can add them back, but they are not needed for standard matrix operations.
     } // namespace internal
 
+    // ========================================================================
+    // Part 3: Integration for delta::dumb_int (целое произвольной точности, et_off)
+    // ========================================================================
+    template<>
+    struct NumTraits<dumb_int> : GenericNumTraits<dumb_int> {
+        using Real = dumb_int;
+        using NonInteger = dumb_int;   // нет нецелых, но так требуется
+        using Literal = dumb_int;
+
+        static inline Real epsilon() { return Real(0); }
+        static inline Real dummy_precision() { return Real(0); }
+
+        enum {
+            IsInteger = 1,
+            IsSigned = 1,
+            IsComplex = 0,
+            RequireInitialization = 1,       // cpp_int требует динамической инициализации
+            ReadCost = 4,                    // аналогично long long (но на самом деле больше)
+            AddCost = 50,                    // сложение cpp_int, нет GCD
+            MulCost = 100                    // умножение cpp_int (Karatsuba/FFT для больших)
+        };
+    };
+
+    // Для dumb_int не требуется real_impl/imag_impl, так как это не комплексный тип.
+    // При необходимости можно добавить, но это не используется в наших алгоритмах.
+
 } // namespace Eigen
 
 // ========================================================================
-// Part 3: Matrix transcendental functions
+// Part 4: Matrix transcendental functions
 // ========================================================================
 // True matrix functions (exp(A), log(A), sin(A), cos(A), sqrt(A)) where
 // the series/algorithm is applied to the matrix as a whole operator.

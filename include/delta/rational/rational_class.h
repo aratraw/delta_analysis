@@ -44,7 +44,6 @@
 
 #include "rational_fwd.h"
 #include "storage.h"
-
 #include <boost/multiprecision/cpp_int.hpp>
 #include <string>
 #include <vector>
@@ -101,6 +100,8 @@ namespace delta {
         // ------------------------------------------------------------------------
         Rational numerator() const;     // returns a Rational with denominator 1
         Rational denominator() const;   // always positive
+        internal::dumb_int numerator_raw() const;     // returns a Rational with denominator 1
+        internal::dumb_int denominator_raw() const;   // always positive
 
         // ------------------------------------------------------------------------
         // Conversions to double and string

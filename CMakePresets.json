@@ -31,13 +31,25 @@
         "value": "x64",
         "strategy": "external"
       },
+      "cacheVariables": { "CMAKE_BUILD_TYPE": "Debug" }
+    },
+    {
+      "name": "x64-release-dev",
+      "displayName": "x64 Release (Fast Link)",
+      "inherits": "windows-base",
+      "architecture": {
+        "value": "x64",
+        "strategy": "external"
+      },
       "cacheVariables": {
-        "CMAKE_BUILD_TYPE": "Debug"
+        "CMAKE_BUILD_TYPE": "Release",
+        "CMAKE_CXX_FLAGS_RELEASE": "/O2 /Oi /Ot /Gy /DNDEBUG /Gw /arch:AVX2",
+        "CMAKE_EXE_LINKER_FLAGS_RELEASE": "/DEBUG:FASTLINK /INCREMENTAL /OPT:NOREF /OPT:NOICF"
       }
     },
     {
       "name": "x64-release",
-      "displayName": "x64 Release",
+      "displayName": "x64 Release (Final)",
       "inherits": "windows-base",
       "architecture": {
         "value": "x64",

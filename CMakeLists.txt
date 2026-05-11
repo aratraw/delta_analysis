@@ -104,3 +104,16 @@ add_subdirectory("tests/rational")
 #add_subdirectory("tests/solvers")
 #add_subdirectory("examples/arbitrary_regulative_ideas")
 #add_subdirectory("benchmarks")
+
+# РЕЖИМ БЫСТРОЙ РАЗРАБОТКИ (RELEASE):
+# 1. Отключены /GL и /LTCG: линковка быстрее для циклов разработки (для топ-перформанса — вернуть).
+# 2. /DEBUG:FASTLINK: GTest требует наличия PDB, но этот флаг делает его мгновенно.
+# 3. /INCREMENTAL: заменяет /OPT:REF для ускорения линковки ценой размера бинарника.
+
+# TOP PERFORMANCE CMakePreset Release Setup:
+#        "CMAKE_CXX_FLAGS_RELEASE": "/O2 /Oi /Ot /Gy /DNDEBUG /GL /Gw /arch:AVX2",
+#        "CMAKE_EXE_LINKER_FLAGS_RELEASE": "/OPT:REF /OPT:ICF /LTCG"
+
+# MIXED PERFORMANCE SETUP FOR OPTIMAL DEVELOPMENT CYCLES ON RELEASE BUILD:
+#"CMAKE_CXX_FLAGS_RELEASE": "/O2 /Oi /Ot /Gy /DNDEBUG /Gw /arch:AVX2", 
+#"CMAKE_EXE_LINKER_FLAGS_RELEASE": "/DEBUG:FASTLINK /INCREMENTAL /OPT:NOREF /OPT:NOICF"

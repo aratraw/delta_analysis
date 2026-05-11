@@ -2,6 +2,12 @@
 // ============================================================================
 // EIGEN INTEGRATION TESTS FOR GAUSSQI (COMPLEX MATRIX TRANSCENDENTALS)
 // ============================================================================
+//
+// UPDATED 2026-05-11: HONEST TOLERANCES
+// All comparisons now use the requested tolerance EPS multiplied by a
+// small factor (10, 100) when identities or inverse operations are tested,
+// reflecting the actual error propagation in exact rational arithmetic.
+// ============================================================================
 
 #include <gtest/gtest.h>
 #include <Eigen/Dense>
@@ -36,7 +42,6 @@ namespace delta::testing {
     };
 
     static const Rational EPS = "1/10000000000000000000"_r;  // 1e-19
-    static const Rational LOOSE_EPS = "1/1000000000"_r;       // 1e-9
 
     // ============================================================================
     // Basic GaussQi integration with Eigen
@@ -79,7 +84,9 @@ namespace delta::testing {
             for (int j = 0; j < 2; ++j) {
                 if (Z(i, j) == GaussQi(0, 0)) continue;
                 auto recovered = delta::log(expZ(i, j), EPS);
-                EXPECT_RATIONAL_NEAR(recovered.real(), Z(i, j).real(), LOOSE_EPS);
+                // exp followed by log accumulates error; allow EPS * 10
+                EXPECT_RATIONAL_NEAR(recovered.real(), Z(i, j).real(), EPS * 10);
+                EXPECT_RATIONAL_NEAR(recovered.imag(), Z(i, j).imag(), EPS * 10);
             }
     }
 
@@ -113,11 +120,12 @@ namespace delta::testing {
         auto cos2 = cosA * cosA;
         auto sum = sin2 + cos2;
 
+        // sin^2 + cos^2 = I, two matrix multiplications + sum ⇒ EPS * 100
         for (int i = 0; i < 2; ++i)
             for (int j = 0; j < 2; ++j) {
                 Rational expected = (i == j) ? 1_r : 0_r;
-                EXPECT_RATIONAL_NEAR(sum(i, j).real(), expected, LOOSE_EPS);
-                EXPECT_RATIONAL_NEAR(sum(i, j).imag(), 0_r, LOOSE_EPS);
+                EXPECT_RATIONAL_NEAR(sum(i, j).real(), expected, EPS * 100);
+                EXPECT_RATIONAL_NEAR(sum(i, j).imag(), 0_r, EPS * 100);
             }
     }
 
@@ -131,10 +139,10 @@ namespace delta::testing {
         Rational cos1 = delta::cos(1_r, EPS);
         Rational sin1 = delta::sin(1_r, EPS);
 
-        EXPECT_RATIONAL_NEAR(E(0, 0).real(), cos1, LOOSE_EPS);
-        EXPECT_RATIONAL_NEAR(E(0, 0).imag(), sin1, LOOSE_EPS);
-        EXPECT_RATIONAL_NEAR(E(1, 1).real(), cos1, LOOSE_EPS);
-        EXPECT_RATIONAL_NEAR(E(1, 1).imag(), -sin1, LOOSE_EPS);
+        EXPECT_RATIONAL_NEAR(E(0, 0).real(), cos1, EPS);
+        EXPECT_RATIONAL_NEAR(E(0, 0).imag(), sin1, EPS);
+        EXPECT_RATIONAL_NEAR(E(1, 1).real(), cos1, EPS);
+        EXPECT_RATIONAL_NEAR(E(1, 1).imag(), -sin1, EPS);
     }
 
     // ============================================================================
@@ -180,11 +188,13 @@ namespace delta::testing {
         auto expA = delta::exp(A, EPS);
         auto expMinusA = delta::exp(-A, EPS);
         auto product = expA * expMinusA;
+
+        // exp(A)*exp(-A) = I; two matrix exponentials + multiplication ⇒ EPS * 100
         for (int i = 0; i < 2; ++i)
             for (int j = 0; j < 2; ++j) {
                 GaussQi expected = (i == j) ? GaussQi(1, 0) : GaussQi(0, 0);
-                EXPECT_LT(delta::abs(product(i, j).real() - expected.real()), LOOSE_EPS);
-                EXPECT_LT(delta::abs(product(i, j).imag() - expected.imag()), LOOSE_EPS);
+                EXPECT_LT(delta::abs(product(i, j).real() - expected.real()), EPS * 100);
+                EXPECT_LT(delta::abs(product(i, j).imag() - expected.imag()), EPS * 100);
             }
     }
 
@@ -195,11 +205,13 @@ namespace delta::testing {
         auto S = delta::sin(A, EPS);
         auto C = delta::cos(A, EPS);
         auto Identity = S * S + C * C;
+
+        // sin^2 + cos^2 = I; two multiplications + sum ⇒ EPS * 100
         for (int i = 0; i < 2; ++i)
             for (int j = 0; j < 2; ++j) {
                 GaussQi expected = (i == j) ? GaussQi(1, 0) : GaussQi(0, 0);
-                EXPECT_LT(delta::abs(Identity(i, j).real() - expected.real()), LOOSE_EPS);
-                EXPECT_LT(delta::abs(Identity(i, j).imag() - expected.imag()), LOOSE_EPS);
+                EXPECT_LT(delta::abs(Identity(i, j).real() - expected.real()), EPS * 100);
+                EXPECT_LT(delta::abs(Identity(i, j).imag() - expected.imag()), EPS * 100);
             }
     }
 
@@ -261,10 +273,12 @@ namespace delta::testing {
             GaussQi(2, 0), GaussQi(5, 0);
         auto sqrtA = delta::sqrt(A, EPS);
         auto square = sqrtA * sqrtA;
+
+        // sqrt(A)^2 = A; one sqrt (iterative) + one multiplication ⇒ EPS * 100
         for (int i = 0; i < 2; ++i)
             for (int j = 0; j < 2; ++j) {
-                EXPECT_LT(delta::abs(square(i, j).real() - A(i, j).real()), LOOSE_EPS);
-                EXPECT_LT(delta::abs(square(i, j).imag() - A(i, j).imag()), LOOSE_EPS);
+                EXPECT_LT(delta::abs(square(i, j).real() - A(i, j).real()), EPS * 100);
+                EXPECT_LT(delta::abs(square(i, j).imag() - A(i, j).imag()), EPS * 100);
             }
     }
 
