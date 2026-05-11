@@ -64,9 +64,7 @@ namespace delta {
             return GaussQi(Rational(0));
         }
 
-        Rational r = abs(z, eps);                      // |z|
-        Rational sqrt_half = delta::sqrt(Rational(1, 2), eps); // 1/sqrt(2)
-
+        Rational r = abs(z, eps);            
         Rational re_part = delta::sqrt((r + z.real()) / Rational(2), eps);
         Rational im_part = delta::sqrt((r - z.real()) / Rational(2), eps);
 

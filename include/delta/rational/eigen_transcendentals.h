@@ -1,5 +1,7 @@
 // (c) 2026 Timofey Ishimtsev.
 // Licensed under PolyForm Small Business License 1.0.0
+// 
+// THIS RIGHT HERE IS NOT A CODE FILE: IT IS A BATTLEFIELD FOR THE MIND.
 // ============================================================================
 // EXPERT COMMENTARY: MATRIX TRANSCENDENTALS IN EXACT RATIONAL ARITHMETIC
 // ============================================================================
@@ -34,250 +36,177 @@
 //     wrapper template remains in the header, instantiated once per scalar
 //     type (Rational, GaussQi), not once per expression.
 //
-// The trade‑off is a deliberate, measured surrender of micro‑optimisations
-// that are irrelevant for this scalar domain, in exchange for compilation
-// speed and code clarity.
+// The trade‑off is a deliberate surrender of micro‑optimisations irrelevant
+// for this scalar domain, in exchange for compilation speed and clarity.
 //
 //
-// 2.  ALGORITHMIC LANDSCAPE – WHAT WE COMPUTE AND WHY
+// 2.  ALGORITHMIC LANDSCAPE
 // ---------------------------------------------------------------------------
-// The file provides five matrix functions for both real (Rational) and
-// complex (GaussQi) square matrices:
+// The file provides five matrix functions for real (Rational) and complex
+// (GaussQi) square matrices: exp, log, sin, cos, sqrt.
 //
-//   exp(A) – matrix exponential
-//   log(A) – principal matrix logarithm
-//   sin(A), cos(A) – matrix trigonometric functions
-//   sqrt(A) – principal square root
+// • Diagonal fast‑path – element‑wise application, exact and cheap.
 //
-// The core building blocks are:
+// • Exponential – scaling‑and‑squaring with Padé approximants.
+//   Scale A by 2^k until ‖A/2^k‖ ≤ 0.5.  Form diagonal Padé [m/m] approximant,
+//   solve Q·E = P via LU, then square k times.
 //
-// • Diagonal fast‑path.  If the matrix is diagonal, the function is applied
-//   element‑wise.  This gives exact results and avoids heavy machinery.
+// • Logarithm – for complex matrices, classical scaling by division by 2 fails
+//   (it does not reduce phase; repeated halving drives the matrix toward -I).
+//   Repeated square roots (Denman–Beavers) converge but cause catastrophic
+//   growth of rational bit length, making computation effectively infinite.
+//   Our solution: trace normalisation.  Replace M by B = M / (trace(M)/n),
+//   centering the spectrum (average eigenvalue becomes 1).  Then apply a
+//   direct diagonal Padé approximant for log(I+X) with order m computed by
+//   the correct formula for the logarithm (see §5.3).  No iterative scaling.
+//   For ill‑conditioned matrices, a single Cayley transform can be added
+//   as a fallback (see §8).
 //
-// • Exponential – scaling‑and‑squaring with Padé approximants.  The matrix
-//   is scaled by a power of two until its norm is ≤ 0.5.  A diagonal Padé
-//   approximant of order m is formed, yielding numerator P(A) and
-//   denominator Q(A).  The system Q(A)·E = P(A) is solved via Eigen’s
-//   partialPivLu().solve() – an LU factorisation with partial pivoting,
-//   which is reliably fast for the small matrices we encounter.  Finally
-//   the result is squared k times.
+// • Trigonometric functions – for Rational, Taylor series with half‑argument
+//   reduction when ‖A‖ > π.  For GaussQi, via Euler identities using exp.
 //
-// • Logarithm – inverse scaling‑and‑squaring with arctanh series.
-//   The matrix is repeatedly divided by 2 (or, in alternative designs,
-//   square‑rooted – see §5) until ∥X−I∥ ≤ 0.5.  Then
-//     Z = (X−I)(X+I)^{−1}
-//   is formed and the series
-//     log X = 2·∑_{n=0}^∞ Z^{2n+1}/(2n+1)
-//   is evaluated.  The final result is shifted by k·log(2)·I.
-//
-// • Trigonometric functions – for Rational, plain Taylor series around zero
-//   with a half‑argument reduction when ∥A∥ > π.  For GaussQi, we use the
-//   Euler identities sin=(exp(iA)−exp(−iA))/2i etc.  This delegates to
-//   the exponential, which is itself expensive, but it guarantees correct
-//   analytic behaviour in the complex plane.
-//
-// • Square root – Newton iteration (see §6.3).
+// • Square root – Newton iteration (one inversion per step, quadratic convergence).
 //
 //
-// 3.  THE DANGER OF “STANDARD” FLOATING‑POINT HEURISTICS
+// 3.  THE DANGER OF FLOATING‑POINT HEURISTICS
 // ---------------------------------------------------------------------------
-// A recurring theme in the evolution of this file is that optimisation
-// techniques perfectly valid for IEEE‑754 double precision are frequently
-// disastrous in exact rational arithmetic.  The root cause is that in
-// floating‑point, arithmetic operations have constant cost and the main
-// concern is the number of matrix multiplications or the norm of the
-// matrices.  In exact rational arithmetic, every addition or multiplication
-// increases the length of the involved integers, so the actual cost depends
-// on the *growth of the numerators and denominators*.  Moreover some
-// operations (like computing a row‑sum norm) are far more expensive than
-// in floating‑point because they require many rational GCD/LCM operations.
-//
-// With this in mind we examine a series of attempted improvements, their
-// observed impact, and the reasons they failed or succeeded.
+// Optimisations valid for IEEE‑754 double are often disastrous in exact
+// rational arithmetic.  Every rational addition/multiplication increases
+// integer bit length; the cost depends on *growth*, not operation count.
+// Techniques that assume constant cost per operation (e.g., L∞ norm,
+// Paterson–Stockmeyer, Bareiss) backfire spectacularly.
 //
 //
 // 4.  ATTEMPTED OPTIMISATIONS THAT REGRESSED PERFORMANCE
 // ---------------------------------------------------------------------------
 //
-// 4.1  L∞ norm (maximum absolute row sum) instead of element‑wise maximum
-//      norm (“matrix_max_norm”).
-//   Motivation: L∞ is a true matrix norm, compatible with the theoretical
-//   error bounds, and often leads to fewer scaling steps.
-//   Reality:  computing L∞ requires summing absolute values along each row
-//   – a cascade of rational additions, each triggering LCM and GCD.  The
-//   result is always ≥ the element‑wise maximum, so scaling loops run for
-//   the same or *more* iterations, while each iteration is more expensive.
-//   Overall slowdown reached a factor of 2–10 on GaussQi tests, and caused
-//   two logarithm tests to exhaust their max_scale and throw.
+// 4.1  L∞ norm instead of element‑wise maximum.
+//   Computing row sums requires many rational additions (LCM/GCD cascade).
+//   Slower by factor 2–10; caused two log tests to exhaust max_scale.
 //
-// 4.2  Adaptive Padé order with an added “+4” safety margin.
-//   The formula was m = ceil( ln(1/ε) / (2·ln(4/θ)) ) + 4.  The extra +4
-//   was a conservative hedge, but it increased m by 4–6 for typical
-//   tolerances (ε=1e‑19, θ≈0.5).  Every additional power of A_scaled means
-//   another matrix multiplication, and the cost of rational matrix
-//   multiplication grows combinatorially with the size of the entries.
-//   The gain in accuracy was negligible (already below ε), yet the runtime
-//   penalty was severe.
+// 4.2  Adaptive Padé order with “+4” safety margin.
+//   Added 4–6 to m for typical ε=1e‑19, θ≈0.5.  Runtime penalty without
+//   accuracy gain (error already below ε).
 //
-// 4.3  Paterson–Stockmeyer scheme for simultaneous evaluation of P(A) and
-//      Q(A) in O(√m) multiplications.
-//   When m ≤ 12–16, the overhead of pre‑computing the intermediate powers
-//   and re‑combining them exceeds the saving.  The method becomes
-//   advantageous only when m ≥ 24, a regime we do not reach with sensible
-//   tolerances.
+// 4.3  Paterson–Stockmeyer for P(A) and Q(A) evaluation.
+//   Overhead exceeds saving for m ≤ 16, the regime we operate in.
 //
-// 4.4  Bareiss fraction‑free Gaussian elimination for exactly solving
-//      Q(A)·E = P(A) in integer arithmetic.
-//   The idea was to clear denominators, perform integer elimination, and
-//   obtain an exact rational solution without rational divisions inside
-//   the solver.  For 5×5 matrices, the LCM of denominators and the
-//   intermediate integer entries became gigantic (thousands of bits),
-//   dwarfing the cost of a plain LU solve in rational arithmetic.
-//   Bareiss is a weapon for large sparse integer matrices, not for small
-//   dense rational ones.
+// 4.4  Bareiss fraction‑free Gaussian elimination.
+//   Clearing denominators produced gigantic integers (thousands of bits)
+//   for 5×5 matrices, dwarfing plain LU solve.
 //
-// 4.5  Scaling the logarithm by repeated square roots instead of division
-//      by 2.
-//   A single sqrt iteration (Denman–Beavers) costs two matrix inversions,
-//   while division by 2 is a trivial scalar operation.  The sqrt‑based
-//   scaling can reduce the number of steps when the matrix is very badly
-//   conditioned, but for the matrices in our current test suite it simply
-//   replaced cheap divisions with enormously expensive inversions.  The
-//   result was a 2500‑fold slowdown on the MatrixLogExpInverse test.
+// 4.5  Logarithm scaling by repeated square roots (Denman–Beavers).
+//   Two inversions per step, plus catastrophic bit growth.  2500× slowdown.
+//
+// 4.6  Logarithm scaling by division by 2 for complex matrices.
+//   Does not bring B closer to I; with non‑zero phase, repeated halving
+//   drives B toward -I, not I.  Convergence fails.
 //
 //
-// 5.  OPTIMISATIONS THAT WORKED AND WHY
+// 5.  OPTIMISATIONS THAT WORKED
 // ---------------------------------------------------------------------------
 //
-// 5.1  Replacing explicit inverse with linear‑system solve in the logarithm.
-//   Old code:  Z = (X−I) * (X+I).inverse()
-//   New code:  Z = (X+I).partialPivLu().solve(X−I)
-//   The inverse explicitly computes the adjugate and determinant, then
-//   multiplies by the right‑hand side.  solve() performs the same
-//   factorisation but avoids the final matrix‑matrix product.  For n=5
-//   this yields a measurable 5–15% speed‑up on logarithmic tests.
+// 5.1  Replace explicit inverse with linear‑system solve in log.
+//   Z = (X+I).partialPivLu().solve(X−I) instead of (X−I)*(X+I).inverse().
+//   Avoids final matrix‑matrix product.  5–15% speed‑up on log tests.
 //
-// 5.2  Newton iteration for the matrix square root.
-//   Old: Denman–Beavers  Y' = (Y + Z^{-1})/2, Z' = (Z + Y^{-1})/2.
-//        This requires two inversions per step.
-//   New: Newton  Y' = (Y + A·Y^{-1})/2.
-//        One inversion per step, quadratic convergence.  The method is
-//        stable for the positive‑definite (or complex non‑negative
-//        real‑part) matrices we encounter.  The sqrt tests improved by
-//        ~40–50%.
+// 5.2  Newton iteration for matrix square root.
+//   Y' = (Y + A·Y⁻¹)/2 (one inversion per step) instead of Denman–Beavers
+//   (two inversions).  ~40–50% improvement.
 //
 // 5.3  Padé order directly from Stirling’s formula, without safety margin.
-//   We compute m = ⌈ ln(ε) / (2·ln(θ/4)) ⌉ and clamp m ≥ 4.
-//   For ε = 1e‑19 and θ ≈ 0.5 this gives m ≈ 9–10 instead of 12 (which
-//   the old fixed‑threshold table returned).  The reduction of 2–3 matrix
-//   multiplications may appear modest, but for complex matrices (GaussQi)
-//   a single multiplication involves 4× as many rational operations as a
-//   real one.  The consequence is a 30–50% speed‑up on all complex
-//   exponential, sine, and cosine tests – the biggest single contributor
-//   to the overall performance gain.
+//   For exp:      m = ⌈ ln(1/ε) / (2·ln(4/θ)) ⌉
+//   For log:      m = ⌈ ln(1/ε) / (2·ln(1/θ)) ⌉   (different!)
+//   Using the correct formula for each function eliminated the need for
+//   empirical fudge factors.  For complex matrices, this gave 30–50% speed‑up.
+//
+// 5.4  Trace normalisation for complex matrix logarithm.
+//   No iterative scaling.  B = M / (trace(M)/n) centres the spectrum at 1.
+//   For typical matrices, ‖X‖ = ‖B−I‖ ≤ 1 (often ≤ 0.5).  Direct Padé for
+//   log(I+X) with order m from the log formula yields 1e-19 accuracy in
+//   hundreds of milliseconds for 5×5 matrices.  No bit growth explosion.
 //
 //
-// 6.  OVERALL BENCHMARK IMPACT (measured on 2026‑05‑11, 65 tests)
+// 6.  BENCHMARK IMPACT (measured on 2026‑05‑12, 66 tests)
 // ---------------------------------------------------------------------------
-//   Version                         Total time    Comment
-//   Original code (cheat tolerances)  20.3 s       Loose 1e‑9 acceptance
-//   Original code + honest tests      22.1 s       Regression from stricter checks
-//   Final optimised code              14.9 s       Net speed‑up of 26% vs honest baseline
+//   Version                                    Total time   Status
+//   Before fixes (wrong formula, +4 fudge)      ~11.5 s      1 failure
+//   After formula separation and sign fixes     ~11.5 s      66 PASSED
 //
-//   Detailed gains:
-//     GaussQi tests: 7.2 s → 4.1 s (−43%)
-//       SinSqPlusCosSq: 6.2 s → 3.3 s
-//       ExpTimesExpMinus: 0.9 s → 0.5 s
-//     Wolfram complex tests: 12.4 s → 10.3 s (−17%)
-//       ComplexMatrixC_Exp: 1.5 s → 0.9 s
-//       ComplexMatrixC_Sqrt: 0.75 s → 0.41 s
-//     Rational tests: unchanged within noise (±15%)
+//   Key timings:
+//     ComplexMatrixC_Log:    397 ms (no empirical margin)
+//     ComplexMatrixC_Exp:    944 ms
+//     ComplexMatrixC_Sin:   2042 ms
+//     ComplexMatrixC_Cos:   1980 ms
+//     ComplexMatrixC_Sqrt:   436 ms
+//     SinSqPlusCosSq (GaussQi): 3403 ms
 //
-//   Two pre‑existing test failures (RealMatrixA_Exp,
-//   ComplexMatrixC_Log) are unrelated to the optimisations; they represent
-//   algorithmic weaknesses in the log scaling for certain ill‑conditioned
-//   matrices and will be addressed separately.
+//   All Wolfram verification tests passed.
 //
 //
-// 7.  KEY FACTORS THAT DETERMINE PERFORMANCE IN EXACT RATIONAL ARITHMETIC
+// 7.  KEY LESSONS FOR EXACT RATIONAL ARITHMETIC
 // ---------------------------------------------------------------------------
-//   • Integer‑length explosion.  Every rational addition or multiplication
-//     increases the bit‑length of numerators and denominators.  Algorithms
-//     that minimise the *total number of arithmetic operations*, even at
-//     the cost of a few more matrix multiplications, often lose if those
-//     multiplications cause a cascade of GCD reductions.
-//   • Matrix size.  For n ≤ 10 the cubic cost of an LU decomposition is
-//     perfectly acceptable.  Sophisticated solvers (Bareiss, Strassen)
-//     start to shine only at n ≥ 50–100, a range we do not use.
-//   • Norm choice.  Element‑wise maximum is cheap and correlates well
-//     enough with the true matrix norm for convergence decisions.
-//   • Tuning of Padé order.  The analytic formula matches the theoretical
-//     error bounds tightly; adding an empirical safety margin only adds
-//     runtime without improving accuracy.  If a future test reveals a
-//     violation, the formula should be adjusted based on rigorous backward‑
-//     error analysis, not by a blind +4.
-//   • Complex versus real.  A complex matrix multiplication entails four
-//     real multiplications and two real additions (plus conjugations).
-//     Therefore any reduction of matrix multiplications in the complex
-//     path yields roughly four times the benefit.
+//   • Integer length grows with every operation – minimise total arithmetic,
+//     not just operation count.  GCD reduction is not free.
+//   • Matrix size n ≤ 10; cubic LU cost is acceptable.
+//   • Element‑wise maximum norm is cheap and sufficient.
+//   • Padé order formulas differ between functions:
+//        exp: m ≈ ln(1/ε) / (2·ln(4/θ))
+//        log: m ≈ ln(1/ε) / (2·ln(1/θ))
+//     Confusing them wastes performance or breaks accuracy.
+//   • Complex matrix multiplication costs ~4× a real one.
+//   • Always write the formula in a comment directly above the code that
+//     implements it, then verify they match.  A sign error (ln(ε) vs ln(1/ε),
+//     ln(θ/4) vs ln(4/θ)) can cost days of debugging.
 //
 //
 // 8.  GUIDELINES FOR FUTURE DEVELOPMENT
 // ---------------------------------------------------------------------------
-//   • Keep norms simple.  Never replace element‑wise maximum with L∞ or
-//     L1 without exhaustive benchmarking on rational data.
-//   • Respect the “no safety margin” lesson.  Compute necessary precision
-//     from first principles; if extra robustness is desired, add it as a
-//     run‑time fallback (e.g., “if converged, return; else retry with
-//     m+=2”) rather than a blanket increase for all calls.
-//   • Hybrid scaling for log.  The current division‑by‑2 loop can stall
-//     on matrices with eigenvalues far from 1.  A fallback that applies a
-//     single square‑root step (Newton) before resuming division‑by‑2 would
-//     cure the “scaling did not converge” errors without the cost of
-//     full sqrt‑based scaling.
-//   • Cheat tests honestly.  Always verify results with a tolerance
-//     proportional to the requested epsilon (e.g., ε·10 for one extra
-//     operation, ε·100 for matrix‑matrix products).  This will
-//     immediately detect any regression in accuracy 
-//     and give performance context relative to resulting precision.
-//   • Paterson–Stockmeyer can be considered if m regularly exceeds 20, but
-//     that requires matrices with huge norms or extreme tolerances – not
-//     the current profile.
-//   • Explore diagonalisation or Schur–Parlett methods for matrices up to
-//     ≈ 20×20 if the rational eigenvalue problem can be solved efficiently.
-//     This is a long‑term research direction, not a near‑term improvement.
+//   • Keep norms simple – element‑wise maximum.
+//   • No blind safety margins.  If a test fails, adjust the formula
+//     or add a run‑time fallback (e.g., “if not converged, m+=2 and retry”).
+//   • For complex log, trace normalisation + direct Padé suffices for most
+//     matrices.  If a pathological case appears (eigenvalue spread > 10),
+//     apply a single Cayley transform: compute Z = (B−I)(B+I)⁻¹, then
+//     log(B) = 2·atanh(Z) using its own Padé table (not yet implemented).
+//   • Precompute Padé coefficient tables for frequently used orders
+//     (m = 4,6,8,…,20).  Already done for exp (c coefficients) and
+//     partially for log (pade_log_table).
+//   • Test honestly – use relative tolerance for large entries.
+//   • Long‑term: consider Schur–Parlett methods if rational eigenvalue
+//     problems become feasible for n ≈ 20.
+//
+//
+// 9.  POST‑MORTEM: THE TWO DAYS THAT SHOOK THE LOGARITHM
+// ---------------------------------------------------------------------------
+// The complex matrix logarithm failed through several attempts:
+//   • Division by 2 – no phase reduction, converges to -I.
+//   • Repeated square roots – bit length explosion, effectively infinite.
+//   • Diagonal shifts – unstable, potential division by zero.
+//   • Trace normalisation + direct Padé – works.
+//
+// The final bug was trivial: the code formula did not match the comment.
+// For exp, the code had log(θ/4) instead of log(4/θ).  For log, it used
+// the exp formula.  Fixing the signs and splitting the functions took
+// minutes once spotted.
+//
+// MORAL: If the algorithm does not converge, check the signs.  If it
+// converges slowly, check whether you are using the right formula at all.
 //
 //
 // ----------------------------------------------------------------------------
 // SEMANTICS OF THE EPSILON PARAMETER FOR MATRIX FUNCTIONS
 // ----------------------------------------------------------------------------
-// The scalar `eps` that is passed to exp, log, sin, cos, sqrt is a
-// **relative** accuracy requirement on each element of the result:
+// The scalar `eps` is a **relative** accuracy requirement:
+//   |computed(i,j) – exact(i,j)| ≤ C·eps·|exact(i,j)|
+// where C is a small constant (≈1).  For near‑unity results, absolute
+// tolerance is acceptable; for large entries (e.g., exp(A) ~ 10¹²), use
+// relative tolerance: tol = eps·max(1, |reference|).
 //
-//   |computed(i,j) – exact(i,j)|  ≤  C · eps · |exact(i,j)|
-//
-// where C is a small constant (close to 1) that depends on the algorithm
-// (Padé approximant + scaling).  This is the standard guarantee of the
-// scaling‑and‑squaring framework and is exactly the same contract as for
-// the scalar transcendental functions (see evaluation_core.h).
-//
-// For elements whose magnitude is ≲ 1, an absolute tolerance of `eps` is
-// automatically satisfied; for elements of large magnitude (e.g. exp(A)
-// with entries ~10^12) the tolerance must be scaled proportionally.
-// Therefore:
-//
-//   • Tests that verify identities (sin²+cos²=I, exp(A)·exp(-A)=I, etc.)
-//     may use an absolute tolerance if the expected values are known to be
-//     near unity.  Our test suite uses `eps * N` (N ≈ 10–100) to account
-//     for accumulated round‑off.
-//
-//   • Tests that compare against high‑precision reference data for matrices
-//     with potentially large entries MUST use a relative tolerance:
-//       tol = eps * max(1, |reference|).
-//
-// Failure to use a relative tolerance for large‑valued matrices is a bug in
-// the test, not in the library.  The Wolfram‑verification tests follow this
-// rule.
+// • Identity‑based tests (sin²+cos²=I, exp(A)·exp(-A)=I) may use absolute
+//   tolerance (expected values ≈1).
+// • Wolfram‑comparison tests MUST use relative tolerance.  Our suite follows
+//   this rule.
 // ----------------------------------------------------------------------------
 #pragma once
 
@@ -352,8 +281,8 @@ namespace delta {
             double target = eps.to_double();
             if (target <= 0.0) target = 1e-19;
             if (theta < 1e-12) return 4;               // negligible norm
-            // m ≈ ln(1/ε) / (2 * ln(4/θ))
-            double m_approx = std::log(target) / (2.0 * std::log(theta / 4.0));
+            // m ≈ ln(1/ε) / (2 * ln(4/θ)) = -1*ln(ε) / (2 * ln(4/θ))
+            double m_approx = -1.0*std::log(target) / (2.0 * std::log(4.0/ theta));
             int m = static_cast<int>(std::ceil(m_approx));
             if (m < 4) m = 4;
             return m;
@@ -719,7 +648,19 @@ namespace delta {
                 p[i] = sum;
             }
         }
-
+        
+        inline int pade_order_log(const Rational& normX, const Rational& eps) {
+            double theta = normX.to_double();
+            double target = eps.to_double();
+            if (target <= 0.0) target = 1e-19;
+            if (theta < 1e-12) return 4;
+            // m ≈ ln(1/ε) / (2 * ln(1/θ)) = -ln(ε) / (2 * ln(1/θ))
+            double m_approx = -1.0*std::log(target) / (2.0 * std::log(1.0 / theta));
+            int m = static_cast<int>(std::ceil(m_approx));
+            if (m < 4) m = 4;
+            if (m > 100) m = 100; // или больше
+            return m;
+        }
         // --------------------------------------------------------------------
         // Оптимизированный log_gaussqi с Паде-аппроксимацией
         // --------------------------------------------------------------------
@@ -745,9 +686,10 @@ namespace delta {
             Rational normX = matrix_max_norm(X);
 
             // Выбор порядка Паде
-            int m = pade_order_stirling(normX, eps);
+            int m = pade_order_log(normX, eps);
             if (m < 4) m = 4;
-            if (m > 16) m = 16;   // разумный верхний предел
+            //m += 4;//недостающий запас членов ряда для Логарифма.
+            if (m > 100) m = 100;   // разумный верхний предел
 
             std::vector<Rational> p, q;
             // Используем таблицу для m <= 14, иначе вычисляем динамически

@@ -467,34 +467,6 @@ namespace delta::testing {
             }
         }
     }
-    TEST_F(WolframVerificationTest, RealMatrixA_ExpVerbose) {
-        Eigen::Matrix<Rational, 5, 5> A;
-        A << 2_r, 3_r, 4_r, 5_r, 6_r,
-            3_r, 4_r, 5_r, 6_r, 7_r,
-            4_r, 5_r, 6_r, 7_r, 8_r,
-            5_r, 6_r, 7_r, 8_r, 9_r,
-            6_r, 7_r, 8_r, 9_r, 10_r;
-
-        auto result = delta::exp(A, EPS);
-        auto expected = matrix_from_strings(wolfram_exp_A_str);
-
-        std::cout << "=== RealMatrixA_Exp debug output ===\n";
-        for (int i = 0; i < 5; ++i) {
-            for (int j = 0; j < 5; ++j) {
-                double res_d = result(i, j).to_double();
-                double exp_d = expected(i, j).to_double();
-                double diff = res_d - exp_d;
-                std::cout << "[" << i << "," << j << "] "
-                    << "result=" << res_d
-                    << " expected=" << exp_d
-                    << " diff=" << diff
-                    << " (rel=" << (exp_d != 0.0 ? std::abs(diff / exp_d) : 0.0) << ")"
-                    << std::endl;
-            }
-        }
-        // Пока не проверяем, просто смотрим глазами.
-        SUCCEED();
-    }
     TEST_F(WolframVerificationTest, RealMatrixA_Sin) {
         Eigen::Matrix<Rational, 5, 5> A;
         A << 2_r, 3_r, 4_r, 5_r, 6_r,
