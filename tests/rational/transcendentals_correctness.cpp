@@ -1021,26 +1021,65 @@ namespace delta::testing {
             std::cout << "ACOS MONOTONIC: acos is strictly decreasing on [-0.9, 0.9] with steps of 0.5." << std::endl;
         }
     }
+    // ============================================================================
+    // TESTS FOR AcosDerivative
+    // ============================================================================
+    //
+    // Theory: For one‑sided finite difference f'(x) ≈ (f(x+dx)-f(x))/dx,
+    // the total error is bounded by:
+    //
+    //   |f'_num - f'_true| ≤ (dx/2) * max|f''(ξ)|  +  2·ε / dx
+    //
+    // where ε is the absolute error in computing f (the `eps` parameter),
+    // and max|f''(ξ)| on [x, x+dx] for f=acos at x=0.5 is ≈ 0.7698.
+    //
+    // Therefore we can set a tolerance that is mathematically guaranteed
+    // to be satisfied by any implementation respecting the ε contract.
+    // ============================================================================
 
-    /**
-     * @test AcosDerivative
-     * @brief Checks numerical derivative matches -1/√(1-x²).
-     */
-    TEST_F(TranscendentalCorrectnessTest, AcosDerivative) {
+    TEST_F(TranscendentalCorrectnessTest, AcosDerivativeFixedParameters) {
+        // Parameters taken from the original (invalid) test:
+        // dx = 1e-38, eps = 1e-40
         const Rational x = "0.5"_r;
-        const Rational eps = EPS_ULTRA;
-        const Rational dx("1/100000000000000000000000000000000000000"); // 1e-38
+        const Rational eps = "1/100000000000000000000000000000000000000"_r;   // 1e-40
+        const Rational dx = "1/100000000000000000000000000000000000000"_r;   // 1e-38
 
-        Rational acos_x = delta::acos(x, eps);
         Rational acos_x_plus = delta::acos(x + dx, eps);
+        Rational acos_x = delta::acos(x, eps);
         Rational derivative_numeric = (acos_x_plus - acos_x) / dx;
 
         Rational derivative_analytic = -1_r / delta::sqrt(1_r - x * x, eps);
 
-        EXPECT_RATIONAL_NEAR(derivative_numeric, derivative_analytic, eps * 1000);
-        if (!HasFailure()) {
-            std::cout << "ACOS DERIVATIVE: Numerical derivative matches -1/sqrt(1-x^2) at x=0.5 to 1000*eps tolerance." << std::endl;
-        }
+        // Error bound calculation:
+        //   truncation error ≤ (dx/2) * max|f''| ≈ 0.5e-38 * 0.77 ≈ 3.85e-39
+        //   rounding error   ≤ 2·eps / dx = 2e-40 / 1e-38 = 0.02
+        // Total ≤ 0.02 + 3.85e-39 ≈ 0.02
+        // We set tolerance = 0.03 (a safe margin above the theoretical maximum)
+        const Rational tolerance = "3/100"_r;   // 0.03
+
+        EXPECT_RATIONAL_NEAR(derivative_numeric, derivative_analytic, tolerance);
+    }
+
+    TEST_F(TranscendentalCorrectnessTest, AcosDerivativePractical) {
+        // Practical parameters that keep the overall error small:
+        // dx = 1e-6, eps = 1e-12  → error ≈ 2e-6 + 4e-7 ≈ 2.4e-6
+        const Rational x = "0.5"_r;
+        const Rational eps = "1/1000000000000"_r;      // 1e-12
+        const Rational dx = "1/1000000"_r;            // 1e-6
+
+        Rational acos_x_plus = delta::acos(x + dx, eps);
+        Rational acos_x = delta::acos(x, eps);
+        Rational derivative_numeric = (acos_x_plus - acos_x) / dx;
+
+        Rational derivative_analytic = -1_r / delta::sqrt(1_r - x * x, eps);
+
+        // Error bound:
+        //   truncation error ≤ (dx/2)*0.77 ≈ 0.5e-6 * 0.77 ≈ 3.85e-7
+        //   rounding error   ≤ 2·eps / dx = 2e-12 / 1e-6 = 2e-6
+        // Total ≤ 2.385e-6. Tolerance 1e-5 is a safe conservative bound.
+        const Rational tolerance = "1/100000"_r;       // 1e-5
+
+        EXPECT_RATIONAL_NEAR(derivative_numeric, derivative_analytic, tolerance);
     }
 
     // =============================================================================

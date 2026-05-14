@@ -126,7 +126,8 @@
 #include "rational_class.h"
 #include "lazy_rational.h"
 #include "context.h"
-
+#include <absl/container/flat_hash_map.h>
+#include <stdexcept>
 namespace delta {
 
     //quality-of-life utils. Не трансцендентная но лучше места для этой свободной функции пока не нашлось
@@ -546,5 +547,234 @@ namespace delta {
         return lazy_tan(x, eps);
     }
     */
+
+} // namespace delta
+
+
+
+namespace delta {
+
+    // ----------------------------------------------------------------------------
+    // Вспомогательные функции редукции аргументов (чисто рациональные, без float)
+    // ----------------------------------------------------------------------------
+    namespace internal {
+
+        // Возвращает { reduced_f, sign } для sinpi, где reduced_f ∈ [0, 0.5]
+        inline std::pair<Rational, int> reduce_sinpi(const Rational& x) {
+            Rational x_abs = delta::abs(x);
+            Rational n = delta::floor(x_abs);          // целая часть
+            Rational f = x_abs - n;                    // дробная часть [0,1)
+            int sign = (n.numerator_raw() % 2 == 0) ? 1 : -1;
+            if (x < 0) sign = -sign;
+            if (f > Rational(1, 2)) {
+                f = Rational(1) - f;                  // sin(π(1-f)) = sin(πf)
+            }
+            return { f, sign };
+        }
+
+        // Возвращает { reduced_f, sign } для cospi, где reduced_f ∈ [0, 0.5]
+        inline std::pair<Rational, int> reduce_cospi(const Rational& x) {
+            Rational x_abs = delta::abs(x);
+            Rational n = delta::floor(x_abs);
+            Rational f = x_abs - n;
+            int sign = (n.numerator_raw() % 2 == 0) ? 1 : -1;
+            if (x < 0) sign = sign;    // cos чётная, знак от x не зависит
+            if (f > Rational(1, 2)) {
+                f = Rational(1) - f;
+                sign = -sign;          // cos(π(1-f)) = -cos(πf)
+            }
+            return { f, sign };
+        }
+
+        // Возвращает { reduced_f, sign } для tanpi, где reduced_f ∈ [0, 0.5] (исключая 1/2)
+        inline std::pair<Rational, int> reduce_tanpi(const Rational& x) {
+            Rational x_abs = delta::abs(x);
+            Rational n = delta::floor(x_abs);
+            Rational f = x_abs - n;
+            int sign = (x < 0) ? -1 : 1;
+            // tan имеет период 1
+            if (f > Rational(1, 2)) {
+                f = Rational(1) - f;
+                sign = -sign;
+            }
+            // f ∈ [0, 0.5], f == 1/2 будет обработано отдельно
+            return { f, sign };
+        }
+
+    } // namespace internal
+
+    // ----------------------------------------------------------------------------
+    // Таблицы точных значений для sinpi / cospi / tanpi
+    // (глобальные, read‑only, одна копия на всю программу)
+    // ----------------------------------------------------------------------------
+    namespace internal {
+
+        struct TableEntry {
+            enum Kind { CONST, SQRT_RATIO };
+            Kind kind;
+            Rational value;      // для CONST
+            Rational sqrt_arg;   // для SQRT_RATIO (2 или 3)
+        };
+
+        // таблица для sinpi (ключ – редуцированная доля π в [0, 0.5])
+        inline const absl::flat_hash_map<Rational, TableEntry>& sinpi_table() {
+            static const absl::flat_hash_map<Rational, TableEntry> table = {
+                {Rational(0),   {TableEntry::CONST, Rational(0), Rational(0)}},
+                {Rational(1,6), {TableEntry::CONST, Rational(1,2), Rational(0)}},
+                {Rational(1,4), {TableEntry::SQRT_RATIO, Rational(0), Rational(2)}},
+                {Rational(1,3), {TableEntry::SQRT_RATIO, Rational(0), Rational(3)}},
+                {Rational(1,2), {TableEntry::CONST, Rational(1), Rational(0)}},
+            };
+            return table;
+        }
+
+        // таблица для cospi (ключ – редуцированная доля π в [0, 0.5])
+        inline const absl::flat_hash_map<Rational, TableEntry>& cospi_table() {
+            static const absl::flat_hash_map<Rational, TableEntry> table = {
+                {Rational(0),   {TableEntry::CONST, Rational(1), Rational(0)}},
+                {Rational(1,6), {TableEntry::SQRT_RATIO, Rational(0), Rational(3)}},
+                {Rational(1,4), {TableEntry::SQRT_RATIO, Rational(0), Rational(2)}},
+                {Rational(1,3), {TableEntry::CONST, Rational(1,2), Rational(0)}},
+                {Rational(1,2), {TableEntry::CONST, Rational(0), Rational(0)}},
+            };
+            return table;
+        }
+
+        // таблица для tanpi (ключ – редуцированная доля π в [0, 0.5], кроме 1/2)
+        inline const absl::flat_hash_map<Rational, TableEntry>& tanpi_table() {
+            static const absl::flat_hash_map<Rational, TableEntry> table = {
+                {Rational(0),   {TableEntry::CONST, Rational(0), Rational(0)}},
+                {Rational(1,6), {TableEntry::SQRT_RATIO, Rational(0), Rational(3)}},
+                {Rational(1,4), {TableEntry::CONST, Rational(1), Rational(0)}},
+                {Rational(1,3), {TableEntry::SQRT_RATIO, Rational(0), Rational(3)}},
+            };
+            return table;
+        }
+
+    } // namespace internal
+
+    // ----------------------------------------------------------------------------
+    // sinpi, cospi, tanpi (публичные)
+    // ----------------------------------------------------------------------------
+    inline Rational sinpi(const Rational& x, const Rational& eps = default_eps()) {
+        auto [f, sign] = internal::reduce_sinpi(x);
+        auto it = internal::sinpi_table().find(f);
+        if (it != internal::sinpi_table().end()) {
+            const auto& e = it->second;
+            Rational val;
+            if (e.kind == internal::TableEntry::CONST) {
+                val = e.value;
+            }
+            else { // SQRT_RATIO
+                val = eager_sqrt(e.sqrt_arg, eps) / 2;
+            }
+            return Rational(sign) * val;
+        }
+        // fallback – внутренняя eager_sinpi (реализована в evaluation_core.h)
+        return Rational(sign) * Rational(internal::eager_sinpi(f.value(), eps.value()));
+    }
+
+    inline Rational cospi(const Rational& x, const Rational& eps = default_eps()) {
+        auto [f, sign] = internal::reduce_cospi(x);
+        auto it = internal::cospi_table().find(f);
+        if (it != internal::cospi_table().end()) {
+            const auto& e = it->second;
+            Rational val;
+            if (e.kind == internal::TableEntry::CONST) {
+                val = e.value;
+            }
+            else {
+                val = eager_sqrt(e.sqrt_arg, eps) / 2;
+            }
+            return Rational(sign) * val;
+        }
+        return Rational(sign) * Rational(internal::eager_cospi(f.value(), eps.value()));
+    }
+
+    inline Rational tanpi(const Rational& x, const Rational& eps = default_eps()) {
+        auto [f, sign] = internal::reduce_tanpi(x);
+        if (f == Rational(1, 2)) {
+            throw std::domain_error("tanpi: argument is an odd half-integer (infinite)");
+        }
+        auto it = internal::tanpi_table().find(f);
+        if (it != internal::tanpi_table().end()) {
+            const auto& e = it->second;
+            Rational val;
+            if (e.kind == internal::TableEntry::CONST) {
+                val = e.value;
+            }
+            else { // sqrt(3) для f=1/3 или f=1/6
+                Rational sqrt3 = eager_sqrt(Rational(3), eps);
+                if (f == Rational(1, 6)) {
+                    val = sqrt3 / 3;      // tan(π/6) = 1/√3 = √3/3
+                }
+                else { // f == 1/3
+                    val = sqrt3;          // tan(π/3) = √3
+                }
+            }
+            return Rational(sign) * val;
+        }
+        return Rational(sign) * Rational(internal::eager_tanpi(f.value(), eps.value()));
+    }
+
+    // ----------------------------------------------------------------------------
+    // Обратные функции: asinpi, acospi, atanpi
+    // ----------------------------------------------------------------------------
+    namespace internal {
+        // таблица для asinpi по квадрату аргумента (y^2)
+        inline const absl::flat_hash_map<Rational, Rational>& asinpi_sq_table() {
+            static const absl::flat_hash_map<Rational, Rational> table = {
+                {Rational(0),    Rational(0)},
+                {Rational(1,4),  Rational(1,6)},
+                {Rational(1,2),  Rational(1,4)},
+                {Rational(3,4),  Rational(1,3)},
+                {Rational(1),    Rational(1,2)},
+            };
+            return table;
+        }
+
+        // таблица для atanpi по квадрату аргумента (y^2)
+        inline const absl::flat_hash_map<Rational, Rational>& atanpi_sq_table() {
+            static const absl::flat_hash_map<Rational, Rational> table = {
+                {Rational(0),    Rational(0)},
+                {Rational(1),    Rational(1,4)},
+                {Rational(3),    Rational(1,3)},
+                {Rational(1,3),  Rational(1,6)},
+            };
+            return table;
+        }
+    } // namespace internal
+
+    inline Rational asinpi(const Rational& y, const Rational& eps = default_eps()) {
+        if (y < -1 || y > 1) throw std::domain_error("asinpi argument out of [-1,1]");
+        Rational y_abs = delta::abs(y);
+        int sign = (y < 0) ? -1 : 1;
+        Rational y2 = y_abs * y_abs;
+        auto it = internal::asinpi_sq_table().find(y2);
+        if (it != internal::asinpi_sq_table().end()) {
+            return Rational(sign) * it->second;
+        }
+        // fallback: asinpi(y) = asin(y) / π
+        return (eager_asin(y, eps) / eager_pi(eps));
+    }
+
+    inline Rational acospi(const Rational& y, const Rational& eps = default_eps()) {
+        if (y < -1 || y > 1) throw std::domain_error("acospi argument out of [-1,1]");
+        if (y == 1) return Rational(0);
+        if (y == -1) return Rational(1);
+        return Rational(1, 2) - asinpi(y, eps);
+    }
+
+    inline Rational atanpi(const Rational& y, const Rational& eps = default_eps()) {
+        Rational y_abs = delta::abs(y);
+        int sign = (y < 0) ? -1 : 1;
+        Rational y2 = y_abs * y_abs;
+        auto it = internal::atanpi_sq_table().find(y2);
+        if (it != internal::atanpi_sq_table().end()) {
+            return Rational(sign) * it->second;
+        }
+        // fallback: atanpi(y) = atan(y) / π
+        return (eager_atan(y, eps) / eager_pi(eps));
+    }
 
 } // namespace delta

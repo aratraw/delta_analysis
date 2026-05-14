@@ -183,9 +183,15 @@ namespace delta {
         friend void inplace_mul(Rational& a, const Rational& b);
     };
 
+    //=====UTILITY=====
+   
     // Output stream operator – prints the rational in "a/b" form (or just "a" if denominator == 1).
     std::ostream& operator<<(std::ostream& os, const Rational& r);
 
+    template <typename H>
+    H AbslHashValue(H h, const Rational& r) {
+        return H::combine(std::move(h), r.value());
+    }
 } // namespace delta
 
 #include "rational_impl.h"

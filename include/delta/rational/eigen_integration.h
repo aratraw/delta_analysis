@@ -138,7 +138,7 @@ namespace Eigen {
             static inline delta::GaussQi run(const delta::GaussQi& x, int y) {
                 return delta::pow(x, y);
             }
-        };
+        }; 
 
         // NOTE: exp_impl and log_impl for GaussQi are intentionally OMITTED.
         // Eigen's internal complex routines that might bypass ADL are not relied upon

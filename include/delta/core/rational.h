@@ -708,6 +708,117 @@
 //     M(1,0) = "1/4"_r; M(1,1) = "1/5"_r;
 //     auto Minv = M.inverse();   // exact rational inverse (with approximations for sqrt)
 //
+// ---------------------------------------------------------------------------------------------------------
+// 11.  COMPLEX RATIONALS – delta::GaussQi
+// ---------------------------------------------------------------------------------------------------------
+//
+// #include <delta/rational/gauss_qi.h>
+//
+// GaussQi represents a complex number (a + i·b) where both real and imaginary
+// parts are delta::Rational.  This is the only natural way to obtain an exact
+// complex rational scalar type that stays closed under addition, multiplication,
+// division and the transcendental functions described below.  Attempting to use
+// `std::complex<Rational>` would break because the standard specialisation for
+// arbitrary types does not provide the necessary transcendental functions and
+// does not integrate with the lazy expression framework.
+//
+// ---- Constructors ----
+//
+//   GaussQi()                         // 0 + 0i
+//   GaussQi(const Rational& re)       // re + 0i
+//   GaussQi(const Rational& re, const Rational& im)
+//   GaussQi(Rational&& re, Rational&& im)
+//   GaussQi(long long re)            // explicit – no implicit conversion from int
+//   GaussQi(long long re, long long im)
+//   explicit GaussQi(const std::string& str)  // parses "(re,im)" or simplified forms
+//   GaussQi(const std::string& re_str, const std::string& im_str)
+//
+// ---- Literals (literals.h) ----
+//   "1+2i"_qi       → GaussQi(1, 2)
+//   "1/2-3/4i"_qi   → GaussQi(Rational(1,2), Rational(-3,4))
+//   "0.333i"_qi     → GaussQi(0, "333/1000"_r)
+//   "i"_qi          → GaussQi(0, 1)
+//   "-i"_qi         → GaussQi(0, -1)
+//   "2"_qi          → GaussQi(2, 0)
+//   "(1,2)"_qi      → comma-separated form
+//
+// ---- Accessors ----
+//   .real() const → const Rational&
+//   .imag() const → const Rational&
+//   .real(const Rational&) / .imag(const Rational&)  // mutation
+//
+// ---- Basic operations ----
+//   .norm() → Rational   (re² + im²)
+//   .conj() → GaussQi
+//   +, -, *, / (binary and unary) with GaussQi and Rational/int
+//   ==, !=
+//   << (stream output, format "a" if im==0 else "(a,b)")
+//   .to_string() → std::string
+//   .to_double() → std::pair<double,double>
+//
+// ---- Transcendental functions (scalar, eager) ----
+//   All functions are declared in gauss_qi_transcendentals.h and follow the same
+//   pattern as the Rational transcendentals: they take an optional epsilon
+//   (Rational) and return GaussQi (or Rational when appropriate).
+//
+//   abs(z, eps) → Rational       (sqrt(re²+im²))
+//   arg(z, eps) → Rational       (atan2(im, re))
+//   sqrt(z, eps) → GaussQi       principal branch
+//   exp(z, eps) → GaussQi       uses exp(re)*(cos(im)+i sin(im))
+//   log(z, eps) → GaussQi       principal branch (ln|z| + i·arg(z))
+//   sin(z, eps) → GaussQi, cos(z, eps), tan(z, eps)
+//   asin(z, eps), acos(z, eps), atan(z, eps)  – via log/imag formulas
+//   pow(z, w, eps) → GaussQi    exp(w·log(z)) for complex exponent
+//   pow(z, int) → GaussQi       binary exponentiation (exact, no epsilon)
+//
+//   Note: `atan2(y, x, eps)` is also available for Rational arguments.
+//
+// ---- Using GaussQi with LazyRational ----
+//   The lazy subsystem does not currently support GaussQi directly; you cannot
+//   build lazy expression trees with complex numbers.  If you need lazy complex
+//   arithmetic, you must combine two LazyRational trees (real and imaginary)
+//   manually.  This may be added in a future version.
+//
+// ---- Integration with Eigen ----
+//   Including `eigen_integration.h` makes GaussQi a valid scalar type for
+//   Eigen matrices and arrays.  NumTraits<GaussQi> provides epsilon(),
+//   dummy_precision(), and sets IsComplex = 1.  You can write:
+//
+//     Eigen::Matrix<GaussQi, 2, 2> Z;
+//     Z << 1+2i_qi, 3-4i_qi,
+//          0_iqi,     "1/2"_qi;
+//     auto expZ = delta::exp(Z);   // matrix exponential for complex rational matrices
+//
+//   Both element‑wise transcendentals (Z.array().sin()) and true matrix functions
+//   (delta::exp(Z), delta::log(Z), delta::sin(Z), delta::cos(Z), delta::sqrt(Z))
+//   are available.  The matrix logarithm for complex matrices uses a special
+//   trace‑normalisation algorithm to avoid the catastrophic bit‑length explosion
+//   that occurs with naive scaling by 2 or repeated square roots.
+//
+// ---- Performance notes on GaussQi ----
+//   Each GaussQi stores two Rational objects, so arithmetic is roughly twice as
+//   heavy as real rational arithmetic.  Matrix operations (multiplication, LU)
+//   on GaussQi matrices are about 4–6 times slower than on real rational matrices
+//   because each complex operation requires several real rational operations.
+//   The transcendental functions internally call the real versions for the
+//   real and imaginary parts, with careful handling of branches.
+//
+// ---- Example ----
+//   #include <delta/rational/gauss_qi.h>
+//   #include <delta/rational/transcendentals.h>
+//   using namespace delta;
+//
+//   GaussQi z("1/2"_r, "1/3"_r);
+//   GaussQi w = exp(z, "1e-20"_r);                      // e^{0.5+0.333i}
+//   Rational r = abs(w, "1e-20"_r);                    // = e^{0.5} ≈ 1.64872...
+//   std::cout << "|exp(z)| = " << r << std::endl;
+//
+//   // Eigen integration:
+//   Eigen::Matrix<GaussQi, 2, 2> M;
+//   M << 1+2i_qi, 0_iqi,
+//        0_iqi,    3+4i_qi;
+//   auto logM = delta::log(M, Rational(1, 1e18));
+//   std::cout << logM << std::endl;
 // =========================================================================================================
 //                           END OF TECHNICAL REFERENCE
 // =========================================================================================================

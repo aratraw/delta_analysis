@@ -25,6 +25,7 @@
 #include <vector>
 #include <iostream>
 #include "delta/core/rational.h"
+#include <boost/multiprecision/cpp_dec_float.hpp>
 #include "test_utils.h"
 
 namespace delta::testing {
