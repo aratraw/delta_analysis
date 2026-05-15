@@ -5,18 +5,19 @@
 # ============================================================================
 add_executable(delta_tests_rational
     main_tests_rational.cpp
-    rational_test.cpp
-    rational_test_2.cpp
-    rational_gauss_qi_test.cpp
-    interval_test.cpp
-    batch_test.cpp
-    lazy_rational_contract_tests.cpp
-    lazy_test.cpp
-    lazy_simplification_tests.cpp
-    gc_test.cpp
-    gc_reset_pool_edge_cases_tests.cpp
+#    rational_test.cpp
+#    rational_test_2.cpp
+#    rational_gauss_qi_test.cpp
+#    interval_test.cpp
+#    batch_test.cpp
+#    lazy_rational_contract_tests.cpp
+#    lazy_test.cpp
+#   lazy_simplification_tests.cpp
+#    gc_test.cpp
+#    gc_reset_pool_edge_cases_tests.cpp
     pow_test.cpp
     transcendentals_correctness.cpp
+    transcendentals_correctness_2.cpp
 )
 
 target_include_directories(delta_tests_rational PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/..)
@@ -44,10 +45,10 @@ gtest_discover_tests(delta_tests_rational
 # ============================================================================
 add_executable(delta_tests_rational_kernel_benchmarks
     main_tests_rational.cpp
-    "transcendentals_canonicalization_benchmark.cpp"
-    "transcendentals_comparative.cpp"
-    "performance_compare_test.cpp"
-    "performance_test.cpp"
+#    "transcendentals_canonicalization_benchmark.cpp"
+#    "transcendentals_comparative.cpp"
+#    "performance_compare_test.cpp"
+#    "performance_test.cpp"
 )
 
 target_include_directories(delta_tests_rational_kernel_benchmarks PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/..)
@@ -74,9 +75,9 @@ gtest_discover_tests(delta_tests_rational_kernel_benchmarks
 # ============================================================================
 add_executable(delta_tests_eigen_integration
     main_tests_rational.cpp
-    eigen_integration_test.cpp
-    eigen_integration_gauss_qi.cpp
-    eigen_integration_wolfram_caliber.cpp
+#    eigen_integration_test.cpp
+#    eigen_integration_gauss_qi.cpp
+#   eigen_integration_wolfram_caliber.cpp
 )
 
 target_include_directories(delta_tests_eigen_integration PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/..)

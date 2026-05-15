@@ -220,7 +220,7 @@ namespace delta::internal {
     Value series_pi(const Value& eps);
     Value series_e(const Value& eps);
     Value series_ln2(const Value& eps);
-
+    dumb_int integer_floor_sqrt(const dumb_int& a);
     // ----------------------------------------------------------------------------
     // Helper predicates
     // ----------------------------------------------------------------------------
@@ -473,32 +473,41 @@ namespace delta::internal {
     inline bool is_integer(const Value& v) { return denominator(v) == 1; }
     inline dumb_int get_integer(const Value& v) { return numerator(v); }
 
-    inline dumb_int integer_nth_root_fast(const dumb_int& a, const dumb_int& n) {
-        if (n == 0) return 0;
+    inline dumb_int integer_nth_root_floor(const dumb_int& a, const dumb_int& n) {
+        if (n == 0) return 0;                 // не определено
         if (n == 1 || a == 0 || a == 1) return a;
         if (a < 0) {
-            if (n % 2 == 0) return 0;
-            return -integer_nth_root_fast(-a, n);
+            if (n % 2 == 0) return 0;         // чётный корень из отрицательного
+            return -integer_nth_root_floor(-a, n);
         }
-        if (n > 1000) {
-            if (a == 0 || a == 1) return a;
-            return 0;
-        }
+        if (n > 1000) return 0;               // предохранитель
+
         int n_int = n.convert_to<int>();
         size_t bits = boost::multiprecision::msb(a) + 1;
+        // начальное приближение сверху
         dumb_int x = dumb_int(1) << ((bits + n_int - 1) / n_int);
-        dumb_int x_prev;
-        do {
-            x_prev = x;
-            dumb_int p = boost::multiprecision::pow(x, n_int - 1);
-            if (p == 0) break;
-            x = (dumb_int(n_int - 1) * x + a / p) / n_int;
-        } while (x < x_prev);
-        if (boost::multiprecision::pow(x, n_int) == a) return x;
-        if (boost::multiprecision::pow(x + 1, n_int) == a) return x + 1;
-        return 0;
-    }
+        dumb_int x_prev = 0;
 
+        while (true) {
+            dumb_int p = boost::multiprecision::pow(x, n_int - 1);
+            if (p == 0) {
+                // переполнение – уменьшаем x
+                x = x / 2;
+                if (x == 0) return 0;
+                continue;
+            }
+            dumb_int next_x = (dumb_int(n_int - 1) * x + a / p) / n_int;
+            // целочисленный метод Ньютона: когда next_x >= x, достигли floor
+            if (next_x >= x || next_x == x_prev) break;
+            x_prev = x;
+            x = next_x;
+        }
+        // Корректировка вниз (гарантия, что x^p <= a)
+        while (boost::multiprecision::pow(x, n_int) > a) {
+            --x;
+        }
+        return x;
+    }
     inline bool is_quick_perfect_square(const dumb_int& x) {
         if (x < 0) return false;
         if (x == 0 || x == 1) return true;
@@ -529,21 +538,32 @@ namespace delta::internal {
         if (is_zero(base)) return Value(0);
         bool negative = is_negative(base);
         if (negative && n_int % 2 == 0) return std::nullopt;
+
         dumb_int num = numerator(base);
         dumb_int den = denominator(base);
         if (negative) num = -num;
-        if (n_int == 2) {
-            if (den != 1 && !is_quick_perfect_square(den)) return std::nullopt;
-            if (!is_quick_perfect_square(num)) return std::nullopt;
-        }
-        dumb_int root_den = integer_nth_root_fast(den, n);
-        if (root_den == 0) return std::nullopt;
-        dumb_int root_num = integer_nth_root_fast(num, n);
-        if (root_num == 0) return std::nullopt;
-        if (negative) root_num = -root_num;
-        return Value(root_num, root_den);
-    }
 
+        // Для квадрата используем быстрый путь с масками
+        if (n_int == 2) {
+            if (!is_quick_perfect_square(num) || !is_quick_perfect_square(den)) return std::nullopt;
+            dumb_int root_num = integer_floor_sqrt(num);
+            dumb_int root_den = integer_floor_sqrt(den);
+            if (root_num * root_num == num && root_den * root_den == den)
+                return Value(root_num, root_den);
+            return std::nullopt;
+        }
+
+        // Для n > 2 – общий метод
+        dumb_int root_den = integer_nth_root_floor(den, n);
+        dumb_int root_num = integer_nth_root_floor(num, n);
+        // Единственная проверка точности (возведение в степень)
+        if (boost::multiprecision::pow(root_num, n_int) == num &&
+            boost::multiprecision::pow(root_den, n_int) == den) {
+            if (negative) root_num = -root_num;
+            return Value(root_num, root_den);
+        }
+        return std::nullopt;
+    }
     // ============================================================================
     // Configuration for series methods
     // ============================================================================
@@ -1050,10 +1070,35 @@ namespace delta::internal {
         return guess;
     }
 
+        // TODO: УНИФИЦИРОВАТЬ ТОЧНОЕ ВЗЯТИЕ КОРНЕЙ ЛЮБОЙ СТЕПЕНИ
+    // ------------------------------------------------------------
+    // Сейчас:
+    //   - integer_floor_sqrt() для квадратного корня использует быструю битовую маску
+    //     и работает функционально бесплатно (замеры показывают O(1) для чисел до 128 бит).
+    //   - Для кубических и более высоких степеней используется integer_nth_root_floor(),
+    //     которая работает через итерации Ньютона и не имеет битовой маски.
+    //   - try_exact_nth_root() вызывается только в sqrt и nth_root, но не используется
+    //     в pow для точных корней (хотя могла бы).
+    //
+    // План оптимизации:
+    // 1. Разработать битовые маски (mod 2^k, цифровые корни) для кубических и пятых степеней,
+    //    аналогично is_quick_perfect_square().
+    // 2. Реализовать единый шаблонный предикат is_exact_root(base, n) с быстрыми отсечениями.
+    // 3. Создать функцию try_exact_root(base, n), которая возвращает std::optional<Value>
+    //    и используется во всех местах:
+    //      - eager_sqrt (для n=2)
+    //      - eager_nth_root (для любых n)
+    //      - eager_pow (для дробных показателей p/q)
+    // 4. Это ускорит точные случаи (например, 8^(2/3)) и избавит от дублирования логики.
+    //
+    // Приоритет: средний (улучшение детерминизма и производительности для точных корней).
+    // ------------------------------------------------------------
+
     // ============================================================================
     // General power with rational exponent
     // ============================================================================
     inline Value eager_pow(const Value& base, const Value& exp, const Value& eps) {
+        // Базовые граничные случаи
         if (is_zero(base)) {
             if (is_zero(exp)) throw std::domain_error("0^0 is undefined");
             if (is_negative(exp)) throw std::domain_error("0^negative is undefined");
@@ -1062,11 +1107,18 @@ namespace delta::internal {
         if (is_one(base)) return base;
         if (is_zero(exp)) return Value(1);
 
-        bool exp_is_int = is_integer(exp);
         dumb_int exp_num = numerator(exp);
-        dumb_int exp_den = denominator(exp);
+        dumb_int exp_den = denominator(exp); // > 0
 
-        if (exp_is_int) {
+        // ---- Отрицательное основание ----
+        if (is_negative(base)) {
+            if (exp_den != 1) { // Дробный показатель
+                if (exp_den % 2 == 0)
+                    throw std::domain_error("pow: even root of negative number (complex result)");
+                Value pos_pow = eager_pow(-base, exp, eps);
+                return (exp_num % 2 != 0) ? -pos_pow : pos_pow;
+            }
+            // Целый показатель
             if (exp_num < 0) {
                 Value base_recip = Value(1) / base;
                 return eager_pow_int(base_recip, -exp_num);
@@ -1074,26 +1126,42 @@ namespace delta::internal {
             return eager_pow_int(base, exp_num);
         }
 
-        dumb_int p = exp_num, q = exp_den;
-        bool negative = (p < 0);
-        if (negative) p = -p;
-
-        if (p == 1) {
-            Value n_val = Value(q);
-            if (q == 2) return eager_sqrt(base, eps);
-            Value internal_eps = eps / 1000;
-            return eager_nth_root(base, n_val, internal_eps);
+        // ---- Положительное основание, целый показатель ----
+        if (exp_den == 1) {
+            if (exp_num < 0) {
+                Value base_recip = Value(1) / base;
+                return eager_pow_int(base_recip, -exp_num);
+            }
+            return eager_pow_int(base, exp_num);
         }
 
-        Value internal_eps = (p == 0) ? eps : eps / Value(p * 1000);
+        // ---- Положительное основание, дробный показатель p/q ----
+        // Приводим к виду base^(p/q) с q>0, p может быть отрицательным
+        dumb_int p = exp_num;
+        dumb_int q = exp_den;
+        bool negative_exp = (p < 0);
+        if (negative_exp) p = -p;
+
+        // Пытаемся извлечь точный корень степени q
+        Value q_val(q);
+        auto exact_root = try_exact_nth_root(base, q_val);
+        if (exact_root.has_value()) {
+            // Точный корень -> возводим в степень p (точная арифметика)
+            Value result = eager_pow_int(*exact_root, p);
+            if (negative_exp) result = Value(1) / result;
+            return result;
+        }
+
+        // Неточный корень: возвращаемся к exp((p/q)*log(base))
+        // Для контроля точности масштабируем eps
+        Value internal_eps = eps / Value(p * 1000);
         Value log_base = eager_log(base, internal_eps);
-        Value p_val = negative ? Value(-p) : Value(p);
+        Value p_val = negative_exp ? Value(-p) : Value(p);
         Value p_log = p_val * log_base;
-        Value q_val = Value(q);
-        Value p_log_div_q = p_log / q_val;
+        Value q_val_val(q);
+        Value p_log_div_q = p_log / q_val_val;
         return eager_exp(p_log_div_q, internal_eps);
     }
-
     // ============================================================================
     // EAGER DISPATCHERS – entry points for user calls.
     // They choose between float and series paths based on eps and argument.
