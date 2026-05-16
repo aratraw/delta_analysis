@@ -46,7 +46,7 @@ gtest_discover_tests(delta_tests_rational
 add_executable(delta_tests_rational_kernel_benchmarks
     main_tests_rational.cpp
 #    "transcendentals_canonicalization_benchmark.cpp"
-#    "transcendentals_comparative.cpp"
+    "transcendentals_comparative.cpp"
 #    "performance_compare_test.cpp"
 #    "performance_test.cpp"
 )
@@ -75,9 +75,9 @@ gtest_discover_tests(delta_tests_rational_kernel_benchmarks
 # ============================================================================
 add_executable(delta_tests_eigen_integration
     main_tests_rational.cpp
-#    eigen_integration_test.cpp
-#    eigen_integration_gauss_qi.cpp
-#   eigen_integration_wolfram_caliber.cpp
+    eigen_integration_test.cpp
+    eigen_integration_gauss_qi.cpp
+   eigen_integration_wolfram_caliber.cpp
 )
 
 target_include_directories(delta_tests_eigen_integration PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/..)
