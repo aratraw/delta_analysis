@@ -333,7 +333,3 @@ At present **we do not apply continued fractions to compress series results** be
 Nevertheless, **the idea is recorded as a future optimisation direction.** If real‑world use cases emerge where bloated rationals from the series path become a bottleneck, we will implement `compress_via_continued_fraction` and enable it by default.
 
 **P.S.** An additional advantage of the current approach (powers of two in the denominator for the float path) is that **binary representation matches the processor’s binary architecture perfectly**. This yields speedups not only in Boost but also in any future SIMD/AVX‑based mass operations with rational numbers when the denominator is a power of two (i.e., the numbers are essentially fixed‑point). Thus the engineering decision to use `cpp_bin_float` and `to_rational_with_eps` via powers of two has long‑term value.
-
----
-
-*End of Documentation.*

@@ -107,6 +107,7 @@
 #pragma once
 
 #include "delta/core/rational.h"
+#include "delta/rational/eigen_integration.h" // for good measure
 #include "delta/geometry/tensor_field.h"
 #include "delta/geometry/simplicial_complex.h"
 #include "delta/geometry/connection.h"

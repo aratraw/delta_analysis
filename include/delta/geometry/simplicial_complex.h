@@ -93,6 +93,7 @@
 #include <cmath>
 #include <Eigen/Dense>
 #include "delta/core/rational.h"
+#include "delta/rational/eigen_integration.h"
 #include "delta/core/grid_concept.h"
 #include "delta/core/regulative_idea.h"
 #include "delta/geometry/constructive_core.h"// for our Vector type

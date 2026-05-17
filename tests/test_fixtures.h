@@ -236,8 +236,7 @@ namespace delta::testing {
     // Macro for approximate rational comparison
     // -------------------------------------------------------------------------
 #define EXPECT_RATIONAL_NEAR(val, expected, eps) \
-        EXPECT_PRED3((::delta::testing::DeltaTest::near), val, expected, eps)
-
+    EXPECT_LE(delta::abs((val) - (expected)), (eps))
     // -------------------------------------------------------------------------
     // Additional fixtures for core and calculus tests
     // -------------------------------------------------------------------------

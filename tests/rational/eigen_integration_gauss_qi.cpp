@@ -12,7 +12,7 @@
 #include <gtest/gtest.h>
 #include <Eigen/Dense>
 #include "delta/core/rational.h"
-#include "delta/core/eigen_integration.h"
+#include "delta/rational/eigen_integration.h"
 #include "test_utils.h"
 
 using namespace delta;

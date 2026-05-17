@@ -92,6 +92,7 @@
 #include <Eigen/Dense>
 #include <boost/multiprecision/cpp_int.hpp>
 #include "delta/core/rational.h"
+#include "delta/rational/eigen_integration.h"
 
 namespace delta::geometry {
 

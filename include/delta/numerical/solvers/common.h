@@ -182,6 +182,7 @@
 #include <stdexcept>
 #include "delta/core/uniform_grid.h"
 #include "delta/core/product_grid.h"
+#include "delta/rational/eigen_integration.h"
 
 namespace delta::numerical::solvers {
 

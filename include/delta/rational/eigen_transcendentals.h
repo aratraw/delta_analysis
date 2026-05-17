@@ -245,9 +245,9 @@ namespace delta {
         }
 
         inline bool is_diagonal(const DynMatRational& M) {
-            const int n = M.rows();
-            for (int i = 0; i < n; ++i)
-                for (int j = 0; j < n; ++j)
+            const Eigen::Index n = M.rows();
+            for (Eigen::Index i = 0; i < n; ++i)
+                for (Eigen::Index j = 0; j < n; ++j)
                     if (i != j && M(i, j) != Rational{}) return false;
             return true;
         }
@@ -266,9 +266,9 @@ namespace delta {
         }
 
         inline bool is_diagonal(const DynMatGaussQi& M) {
-            const int n = M.rows();
-            for (int i = 0; i < n; ++i)
-                for (int j = 0; j < n; ++j)
+            const Eigen::Index n = M.rows();
+            for (Eigen::Index i = 0; i < n; ++i)
+                for (Eigen::Index j = 0; j < n; ++j)
                     if (i != j && M(i, j) != GaussQi{}) return false;
             return true;
         }
@@ -364,9 +364,9 @@ namespace delta {
             }
 
             // ----- Normalise by trace -----
-            int n = M.rows();
+            Eigen::Index n = M.rows();
             Rational trace = M.trace();
-            Rational scale = trace / Rational(n);
+            Rational scale = trace / Rational(static_cast<long long>(n));
             DynMatRational B = (M / scale).eval();
 
             // ----- Standard logarithm via division by 2 -----
@@ -676,9 +676,9 @@ namespace delta {
             }
 
             // Нормировка следом
-            int n = M.rows();
+            Eigen::Index n = M.rows();
             GaussQi trace = M.trace();
-            GaussQi scale = trace / GaussQi(Rational(n), Rational(0));
+            GaussQi scale = trace / GaussQi(Rational(static_cast<long long>(n)), Rational(0));
             DynMatGaussQi B = (M / scale).eval();
 
             DynMatGaussQi I = DynMatGaussQi::Identity(n, n);

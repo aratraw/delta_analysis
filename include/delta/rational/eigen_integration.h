@@ -1,5 +1,6 @@
 // (c) 2026 Timofey Ishimtsev.
 // Licensed under PolyForm Small Business License 1.0.0
+
 // eigen_integration.h
 // -----------------------------------------------------------------------------
 // Integration of delta::Rational, delta::GaussQi and delta::dumb_int with Eigen3.
@@ -26,7 +27,10 @@
 //   or numerically unstable. Use with caution and prefer rational-preserving
 //   algorithms where possible.
 // -----------------------------------------------------------------------------
-#pragma once
+
+#ifndef DELTA_RATIONAL_EIGEN_INTEGRATION_H
+#define DELTA_RATIONAL_EIGEN_INTEGRATION_H
+
 #ifndef EIGEN_DONT_VECTORIZE
 #define EIGEN_DONT_VECTORIZE
 #endif
@@ -46,6 +50,10 @@ namespace Eigen {
     // ========================================================================
     // Part 1: Integration for delta::Rational
     // ========================================================================
+
+#ifndef EIGEN_NUMTRAITS_DELTA_RATIONAL_SPECIALIZED
+#define EIGEN_NUMTRAITS_DELTA_RATIONAL_SPECIALIZED
+
     template<>
     struct NumTraits<delta::Rational> : GenericNumTraits<delta::Rational> {
         using Real = delta::Rational;
@@ -54,30 +62,23 @@ namespace Eigen {
 
         static inline Real epsilon() { return delta::default_eps(); }
         static inline Real dummy_precision() { return delta::default_eps(); }
-
+        static inline int digits10() { return 0; }          // <-- добавлено
+        static inline int max_digits10() { return 0; }      // <-- добавлено
         enum {
             IsInteger = 0,
             IsSigned = 1,
             IsComplex = 0,
             RequireInitialization = 1,
-            // 64 байта — это 8 полноценных double. 
-            // Eigen должен понимать, что просто "переложить" это число 
-            // из ячейки в ячейку — это уже работа.
             ReadCost = 8,
-
-            // Сложение: Общий знаменатель + GCD + потенциальные аллокации в cpp_int.
-            // Это чудовищно дорого. 
             AddCost = 250,
-
-            // Умножение: ac/bd + GCD. 
-            // Чуть дешевле сложения, но всё равно за пределами добра и зла.
             MulCost = 200
         };
     };
 
+#endif // EIGEN_NUMTRAITS_DELTA_RATIONAL_SPECIALIZED
+
     namespace internal {
-        // sqrt_impl is explicitly provided for safety and compatibility with
-        // Eigen's internal dispatch (though ADL would also find delta::sqrt).
+        // sqrt_impl for Rational
         template<>
         struct sqrt_impl<delta::Rational> {
             static inline delta::Rational run(const delta::Rational& x) {
@@ -89,6 +90,10 @@ namespace Eigen {
     // ========================================================================
     // Part 2: Integration for delta::GaussQi
     // ========================================================================
+
+#ifndef EIGEN_NUMTRAITS_DELTA_GAUSSQI_SPECIALIZED
+#define EIGEN_NUMTRAITS_DELTA_GAUSSQI_SPECIALIZED
+
     template<>
     struct NumTraits<delta::GaussQi> : GenericNumTraits<delta::GaussQi> {
         using Real = delta::Rational;
@@ -97,27 +102,23 @@ namespace Eigen {
 
         static inline Real epsilon() { return delta::default_eps(); }
         static inline Real dummy_precision() { return delta::default_eps(); }
-
-        // Для GaussQi
+        static inline int digits10() { return 0; }          // <-- добавлено
+        static inline int max_digits10() { return 0; }      // <-- добавлено
         enum {
             IsInteger = 0,
             IsSigned = 1,
             IsComplex = 1,
             RequireInitialization = 1,
-            // 128 байт данных! Это два кэш-лайна.
             ReadCost = 16,
-
-            // Комплексная арифметика на базе рациональных:
-            // (a+bi)+(c+di) = (a+c) + (b+d)i
             AddCost = 500,
-            // (a+bi)(c+di) = (ac-bd) + (ad+bc)i -> 4 Mul + 2 Add + 1 Sub
             MulCost = 1200
         };
     };
 
+#endif // EIGEN_NUMTRAITS_DELTA_GAUSSQI_SPECIALIZED
+
     namespace internal {
-        // real_impl and imag_impl are REQUIRED for Eigen's .real() and .imag()
-        // methods on matrices of GaussQi. They are not found via ADL.
+        // real_impl and imag_impl for GaussQi
         template<>
         struct real_impl<delta::GaussQi> {
             static inline delta::Rational run(const delta::GaussQi& x) {
@@ -138,14 +139,7 @@ namespace Eigen {
             static inline delta::GaussQi run(const delta::GaussQi& x, int y) {
                 return delta::pow(x, y);
             }
-        }; 
-
-        // NOTE: exp_impl and log_impl for GaussQi are intentionally OMITTED.
-        // Eigen's internal complex routines that might bypass ADL are not relied upon
-        // for our use case. All transcendental functions (including exp, log) are
-        // found via ADL because they live in namespace delta.
-        // If you encounter a specific Eigen algorithm that requires these specializations,
-        // you can add them back, but they are not needed for standard matrix operations.
+        };
     } // namespace internal
 
 } // namespace Eigen
@@ -167,3 +161,5 @@ namespace Eigen {
 // The epsilon parameter is always Rational (default: delta::default_eps()).
 // ========================================================================
 #include "eigen_transcendentals.h"
+
+#endif // DELTA_RATIONAL_EIGEN_INTEGRATION_H

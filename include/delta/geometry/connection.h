@@ -97,6 +97,7 @@
 #include <cstddef>
 #include <functional>
 #include "delta/core/rational.h"
+#include "delta/rational/eigen_integration.h"
 #include "delta/geometry/simplicial_complex.h"
 
 namespace delta::geometry {

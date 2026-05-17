@@ -16,6 +16,7 @@
 #include "grid_concept.h"
 #include "grid_refine.h"
 #include "rational.h"
+#include "eigen_integration.h"
 
 namespace delta {
 

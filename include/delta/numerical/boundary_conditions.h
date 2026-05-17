@@ -92,6 +92,7 @@
 #include <set>
 #include <map>
 #include <Eigen/Sparse>
+#include "delta/rational/eigen_integration.h"
 
 namespace delta::numerical {
 

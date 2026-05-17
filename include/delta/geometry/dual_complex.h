@@ -101,6 +101,7 @@
 #include "delta/geometry/simplicial_complex.h"
 #include "delta/core/regulative_idea.h"
 #include "delta/rational/transcendentals.h"
+#include "delta/rational/eigen_integration.h"
 
 namespace delta::geometry {
 

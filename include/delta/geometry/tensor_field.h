@@ -80,6 +80,7 @@
 #include <type_traits>
 #include <Eigen/Dense>
 #include "delta/core/rational.h"   // for compatibility with Rational (optional)
+#include "delta/rational/eigen_integration.h"
 
 namespace delta::geometry {
 

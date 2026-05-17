@@ -144,6 +144,7 @@
 #include "delta/geometry/simplicial_complex.h"
 #include "delta/geometry/constructive_core.h"
 #include "delta/rational/context.h"
+#include "delta/rational/eigen_integration.h"//for good measure
 
 namespace delta::geometry {
 

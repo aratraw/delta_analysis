@@ -101,6 +101,7 @@
 
 #include <Eigen/Sparse>
 #include <vector>
+#include "delta/rational/eigen_integration.h"
 #include "delta/geometry/simplicial_complex.h"
 #include "delta/geometry/dual_complex.h"
 #include "delta/core/regulative_idea.h"

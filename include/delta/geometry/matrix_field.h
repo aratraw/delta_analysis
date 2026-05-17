@@ -62,6 +62,7 @@
 
 #include "delta/geometry/tensor_field.h"
 #include "delta/core/rational.h"
+#include "delta/rational/eigen_integration.h"
 #include <Eigen/Dense>
 #include <stdexcept>
 #include <type_traits>

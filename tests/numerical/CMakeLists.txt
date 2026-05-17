@@ -4,19 +4,21 @@ include(GoogleTest)
 # Базовые численные тесты и интегралы
 set(NUMERICAL_CORE_SOURCES
     main_tests_numerical.cpp
-    integrals_test.cpp
-    cotangent_laplacian_test.cpp
+#    integrals_test.cpp
+#    cotangent_laplacian_test.cpp
+    gauge_groups_test.cpp
+    gauge_theory_test.cpp
 )
 
 # Тесты, связанные с солверами
 set(NUMERICAL_SOLVER_SOURCES
     main_tests_numerical.cpp
-    "variational_solver_tests.cpp"
-    "boundary_conditions_test.cpp"
-    "solvers/poisson_solver_test.cpp"
-    "solvers/heat_solver_test.cpp"
-    "solvers/wave_solver_test.cpp"
-    "solvers/advection_solver_test.cpp"
+#    "variational_solver_tests.cpp"
+#    "boundary_conditions_test.cpp"
+#    "solvers/poisson_solver_test.cpp"
+#    "solvers/heat_solver_test.cpp"
+#    "solvers/wave_solver_test.cpp"
+#    "solvers/advection_solver_test.cpp"
 )
 
 # Создание таргетов

@@ -165,7 +165,10 @@ namespace delta {
 
         return GaussQi(real_part, imag_part);
     }
-
+    // Integer literal: 42_qi → GaussQi(42, 0)
+    inline GaussQi operator""_qi(unsigned long long num) {
+        return GaussQi(Rational(num), Rational(0));
+    }
 } // namespace delta
 
 namespace delta::literals {
