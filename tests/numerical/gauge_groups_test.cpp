@@ -32,7 +32,7 @@ namespace delta::testing {
     // =========================================================================
     // U(1) = SO(2) – exact rational group axioms
     // =========================================================================
-    TEST(GaugeGroupsTest, U1RationalGroupAxioms) {
+    TEST_F(GaugeGroupsTest, U1RationalGroupAxioms) {
         using Scalar = Rational;
         using Matrix2 = Eigen::Matrix<Scalar, 2, 2>;
 
@@ -66,7 +66,7 @@ namespace delta::testing {
     // =========================================================================
     // U(1) = SO(2) – exponential and logarithm with Rational
     // =========================================================================
-    TEST(GaugeGroupsTest, U1RationalExponentialLogarithm) {
+    TEST_F(GaugeGroupsTest, U1RationalExponentialLogarithm) {
         using Scalar = Rational;
         using Algebra = U1<Scalar>::algebra_type;   // 2x2 skew‑symmetric
         using Matrix2 = Eigen::Matrix<Scalar, 2, 2>;
@@ -99,7 +99,7 @@ namespace delta::testing {
     // =========================================================================
     // SU(2) – exact rational group axioms (no transcendental operations)
     // =========================================================================
-    TEST(GaugeGroupsTest, SU2RationalGroupAxioms) {
+    TEST_F(GaugeGroupsTest, SU2RationalGroupAxioms) {
         using Scalar = Rational;
         using Complex = GaussQi;
         using Matrix2c = SU2<Scalar>::matrix_type;   // Eigen::Matrix<GaussQi, 2, 2>
@@ -141,7 +141,7 @@ namespace delta::testing {
     // =========================================================================
     // SU(2) – exponential and logarithm (Rational)
     // =========================================================================
-    TEST(GaugeGroupsTest, SU2RationalExponentialLogarithm) {
+    TEST_F(GaugeGroupsTest, SU2RationalExponentialLogarithm) {
         using Scalar = Rational;
         using Complex = GaussQi;
         using Algebra = SU2<Scalar>::algebra_type;   // 2x2
@@ -188,7 +188,7 @@ namespace delta::testing {
     // =========================================================================
     // SU(3) – exact rational group axioms
     // =========================================================================
-    TEST(GaugeGroupsTest, SU3RationalGroupAxioms) {
+    TEST_F(GaugeGroupsTest, SU3RationalGroupAxioms) {
         using Scalar = Rational;
         using Complex = GaussQi;
         using Matrix3c = SU3<Scalar>::matrix_type;   // Eigen::Matrix<GaussQi, 3, 3>
@@ -229,7 +229,7 @@ namespace delta::testing {
     // =========================================================================
     // SU(3) – exponential and logarithm (Rational)
     // =========================================================================
-    TEST(GaugeGroupsTest, SU3RationalExponentialLogarithm) {
+    TEST_F(GaugeGroupsTest, SU3RationalExponentialLogarithm) {
         using Scalar = Rational;
         using Complex = GaussQi;
         using Algebra = SU3<Scalar>::algebra_type;   // 3x3
@@ -272,5 +272,35 @@ namespace delta::testing {
                 EXPECT_RATIONAL_NEAR(A2(i, j).imag(), A(i, j).imag(), Scalar(1, 1000000000000));
             }
     }
+    // =========================================================================
+  // U(1) – from_angle_pi and to_angle_pi (exact rational multiples of π)
+  // =========================================================================
+    TEST_F(GaugeGroupsTest, U1FromAnglePi) {
+        using U1 = U1<Rational>;
+        using Matrix = U1::matrix_type;
+        const Rational tol = delta::default_eps() * 10;
 
+        // θ = 1/2  → π/2
+        Matrix R = U1::from_angle_pi(Rational(1, 2));
+        EXPECT_EQ(R(0, 0), 0_r);
+        EXPECT_EQ(R(0, 1), -1_r);
+        EXPECT_EQ(R(1, 0), 1_r);
+        EXPECT_EQ(R(1, 1), 0_r);
+
+        // θ = 1  → π
+        R = U1::from_angle_pi(1_r);
+        EXPECT_EQ(R(0, 0), -1_r);
+        EXPECT_EQ(R(0, 1), 0_r);
+        EXPECT_EQ(R(1, 0), 0_r);
+        EXPECT_EQ(R(1, 1), -1_r);
+
+        // θ = 0  → identity
+        R = U1::from_angle_pi(0_r);
+        EXPECT_EQ(R, U1::identity());
+
+        // Round‑trip: from_angle_pi → to_angle_pi
+        R = U1::from_angle_pi(Rational(1, 3));  // 60°
+        Rational theta_pi = U1::to_angle_pi(R);
+        EXPECT_RATIONAL_NEAR(theta_pi, Rational(1, 3), tol);
+    }
 } // namespace delta::testing
